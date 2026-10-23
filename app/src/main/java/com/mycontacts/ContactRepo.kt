@@ -9,6 +9,25 @@ import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
 data class Contact(val id: Long, val name: String, val phones: List<String>)
 
+data class Acc(val type: String?, val name: String?) {
+    val label: String get() = if (name == null && type == null) "Телефон (локально)" else "${name ?: "?"} (${type ?: "?"})"
+}
+
+data class RawEntry(
+    val rawId: Long,
+    val name: String,
+    val phones: List<Pair<String, Int>>,
+    val emails: List<Pair<String, Int>>
+)
+
+data class TransferResult(
+    val total: Int,
+    val copied: Int,
+    val verified: Int,
+    val missing: List<String>,
+    val rawIds: List<Long>
+)
+
 class ContactRepo(private val cr: ContentResolver) {
 
     fun loadAll(): List<Contact> {
@@ -120,6 +139,132 @@ class ContactRepo(private val cr: ContentResolver) {
                 .build())
         }
         cr.applyBatch(CC.AUTHORITY, ops)
+    }
+
+
+    // ---------- Аккаунты и перенос ----------
+
+    /** Аккаунты, найденные через системный провайдер контактов (в т.ч. Google), с числом контактов. */
+    fun accounts(): List<Pair<Acc, Int>> {
+        val counts = LinkedHashMap<Acc, Int>()
+        cr.query(CC.RawContacts.CONTENT_URI,
+            arrayOf(CC.RawContacts.ACCOUNT_NAME, CC.RawContacts.ACCOUNT_TYPE),
+            CC.RawContacts.DELETED + "=0", null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val a = Acc(c.getString(1), c.getString(0))
+                counts[a] = (counts[a] ?: 0) + 1
+            }
+        }
+        try {
+            cr.query(CC.Settings.CONTENT_URI,
+                arrayOf(CC.Settings.ACCOUNT_NAME, CC.Settings.ACCOUNT_TYPE), null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val n = c.getString(0)
+                    val t = c.getString(1)
+                    if (n != null && t != null && !counts.containsKey(Acc(t, n))) counts[Acc(t, n)] = 0
+                }
+            }
+        } catch (e: Exception) { /* список настроек необязателен */ }
+        if (!counts.containsKey(Acc(null, null))) counts[Acc(null, null)] = 0
+        return counts.toList()
+    }
+
+    private fun accSelection(a: Acc): Pair<String, Array<String>> {
+        val parts = ArrayList<String>()
+        val args = ArrayList<String>()
+        if (a.name == null) parts.add(CC.RawContacts.ACCOUNT_NAME + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_NAME + "=?"); args.add(a.name) }
+        if (a.type == null) parts.add(CC.RawContacts.ACCOUNT_TYPE + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_TYPE + "=?"); args.add(a.type) }
+        parts.add(CC.RawContacts.DELETED + "=0")
+        return parts.joinToString(" AND ") to args.toTypedArray()
+    }
+
+    fun entriesOf(a: Acc): List<RawEntry> {
+        val (sel, args) = accSelection(a)
+        val names = LinkedHashMap<Long, String>()
+        val phones = HashMap<Long, MutableList<Pair<String, Int>>>()
+        val emails = HashMap<Long, MutableList<Pair<String, Int>>>()
+        cr.query(CC.Data.CONTENT_URI,
+            arrayOf(CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE, CC.Data.DATA1, CC.Data.DATA2),
+            sel, args, CC.Data.RAW_CONTACT_ID)?.use { c ->
+            while (c.moveToNext()) {
+                val raw = c.getLong(0)
+                names.getOrPut(raw) { "" }
+                val v = c.getString(2) ?: continue
+                val type = c.getInt(3)
+                when (c.getString(1)) {
+                    StructuredName.CONTENT_ITEM_TYPE -> names[raw] = v
+                    Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(raw) { mutableListOf() }.add(v to type)
+                    CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> emails.getOrPut(raw) { mutableListOf() }.add(v to type)
+                }
+            }
+        }
+        return names.map { (raw, n) -> RawEntry(raw, n, phones[raw] ?: emptyList(), emails[raw] ?: emptyList()) }
+    }
+
+    private fun key(e: RawEntry): String =
+        e.name.trim().lowercase() + "|" +
+            e.phones.map { norm(it.first) }.sorted().joinToString(",") + "|" +
+            e.emails.map { it.first.trim().lowercase() }.sorted().joinToString(",")
+
+    private fun keyCounts(list: List<RawEntry>): Map<String, Int> {
+        val m = HashMap<String, Int>()
+        for (e in list) m[key(e)] = (m[key(e)] ?: 0) + 1
+        return m
+    }
+
+    private fun insertCopy(e: RawEntry, target: Acc) {
+        val ops = ArrayList<ContentProviderOperation>()
+        ops.add(ContentProviderOperation.newInsert(CC.RawContacts.CONTENT_URI)
+            .withValue(CC.RawContacts.ACCOUNT_TYPE, target.type)
+            .withValue(CC.RawContacts.ACCOUNT_NAME, target.name).build())
+        if (e.name.isNotBlank()) {
+            ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+                .withValue(CC.Data.MIMETYPE, StructuredName.CONTENT_ITEM_TYPE)
+                .withValue(StructuredName.DISPLAY_NAME, e.name).build())
+        }
+        for ((num, t) in e.phones) {
+            ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+                .withValue(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
+                .withValue(Phone.NUMBER, num)
+                .withValue(Phone.TYPE, if (t == 0) Phone.TYPE_MOBILE else t).build())
+        }
+        for ((addr, t) in e.emails) {
+            ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+                .withValue(CC.Data.MIMETYPE, CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE)
+                .withValue(CC.CommonDataKinds.Email.ADDRESS, addr)
+                .withValue(CC.CommonDataKinds.Email.TYPE, if (t == 0) CC.CommonDataKinds.Email.TYPE_HOME else t).build())
+        }
+        cr.applyBatch(CC.AUTHORITY, ops)
+    }
+
+    /** Копирует контакты из источника в целевой аккаунт и проверяет, что копии появились. Источник не меняется. */
+    fun transfer(src: Acc, dst: Acc): TransferResult {
+        val source = entriesOf(src).filter { it.name.isNotBlank() || it.phones.isNotEmpty() || it.emails.isNotEmpty() }
+        val before = keyCounts(entriesOf(dst))
+        var copied = 0
+        for (e in source) { insertCopy(e, dst); copied++ }
+        val after = keyCounts(entriesOf(dst))
+        val need = keyCounts(source)
+        var verified = 0
+        val missing = ArrayList<String>()
+        val used = HashMap<String, Int>()
+        for (e in source) {
+            val k = key(e)
+            val n = (used[k] ?: 0) + 1
+            used[k] = n
+            val gained = (after[k] ?: 0) - (before[k] ?: 0)
+            if (gained >= n && n <= (need[k] ?: 0)) verified++ else missing.add(e.name.ifBlank { e.phones.firstOrNull()?.first ?: "?" })
+        }
+        return TransferResult(source.size, copied, verified, missing, source.map { it.rawId })
+    }
+
+    fun deleteRaws(ids: List<Long>) {
+        for (id in ids) cr.delete(ContentUris.withAppendedId(CC.RawContacts.CONTENT_URI, id), null, null)
     }
 
     // ---------- VCF / CSV ----------

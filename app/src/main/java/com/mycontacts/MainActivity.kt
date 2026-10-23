@@ -67,9 +67,11 @@ class MainActivity : Activity() {
         }
         row1.addView(btn("Добавить") { editDialog(null) })
         row1.addView(btn("Дубликаты") { duplicatesDialog() })
+        row1.addView(btn("Перенос") { transferDialog() })
         row2.addView(btn("Импорт") { pickImport() })
         row2.addView(btn("VCF") { createDoc("contacts.vcf", "text/x-vcard", reqExportVcf) })
         row2.addView(btn("CSV") { createDoc("contacts.csv", "text/csv", reqExportCsv) })
+        row2.addView(btn("ChatGPT") { aiDialog() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { editDialog(it) } }
@@ -184,6 +186,105 @@ class MainActivity : Activity() {
         }
         refresh()
         toast("Импортировано: $added из ${items.size}")
+    }
+
+    private fun bg(work: () -> Unit) = Thread {
+        try { work() } catch (e: Exception) { runOnUiThread { toast("Ошибка: " + e.message) } }
+    }.start()
+
+    private fun transferDialog() {
+        bg {
+            val accs = repo.accounts()
+            runOnUiThread {
+                val labels = accs.map { it.first.label + " — " + it.second }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("Откуда копировать")
+                    .setItems(labels) { _, i -> pickTarget(accs.map { it.first }, accs[i].first, accs[i].second) }
+                    .setNegativeButton("Отмена", null).show()
+            }
+        }
+    }
+
+    private fun pickTarget(accs: List<Acc>, src: Acc, count: Int) {
+        val targets = accs.filter { it != src }
+        AlertDialog.Builder(this).setTitle("Куда копировать")
+            .setItems(targets.map { it.label }.toTypedArray()) { _, i ->
+                val dst = targets[i]
+                AlertDialog.Builder(this).setTitle("Подтвердите")
+                    .setMessage("Скопировать контакты (" + count + ") из «" + src.label + "» в «" + dst.label +
+                        "»?\nИсходные контакты не удаляются. После копирования будет проверка.")
+                    .setPositiveButton("Копировать") { _, _ -> runTransfer(src, dst) }
+                    .setNegativeButton("Отмена", null).show()
+            }
+            .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun runTransfer(src: Acc, dst: Acc) {
+        toast("Идёт копирование…")
+        bg {
+            val r = repo.transfer(src, dst)
+            runOnUiThread { refresh(); showTransferResult(r) }
+        }
+    }
+
+    private fun showTransferResult(r: TransferResult) {
+        val ok = r.total > 0 && r.verified == r.total
+        val msg = "Найдено в источнике: " + r.total + "\nСкопировано: " + r.copied +
+            "\nПроверено в целевом аккаунте: " + r.verified +
+            (if (r.missing.isNotEmpty()) "\nНе подтверждено: " + r.missing.take(20).joinToString(", ") else "") +
+            (if (ok) "\n\nВсё подтверждено." else "\n\nУдаление из источника недоступно, пока не подтверждены все контакты.")
+        val b = AlertDialog.Builder(this).setTitle("Результат переноса").setMessage(msg)
+        if (ok) {
+            b.setPositiveButton("Удалить из источника") { _, _ ->
+                AlertDialog.Builder(this).setTitle("Удалить исходные контакты (" + r.total + ")?")
+                    .setMessage("Копии в целевом аккаунте проверены. Это действие необратимо.")
+                    .setPositiveButton("Удалить") { _, _ ->
+                        bg { repo.deleteRaws(r.rawIds); runOnUiThread { refresh(); toast("Удалено из источника") } }
+                    }
+                    .setNegativeButton("Оставить", null).show()
+            }
+            b.setNegativeButton("Оставить", null)
+        } else b.setPositiveButton("Закрыть", null)
+        b.show()
+    }
+
+    private fun aiDialog() {
+        val prefs = getSharedPreferences("ai", MODE_PRIVATE)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
+        val key = EditText(this).apply {
+            hint = "OpenAI API-ключ"; setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(prefs.getString("key", ""))
+        }
+        val model = EditText(this).apply { hint = "Модель"; setSingleLine(); setText(prefs.getString("model", "gpt-4o-mini")) }
+        val withData = android.widget.CheckBox(this).apply {
+            text = "Отправить ChatGPT список контактов (имена и номера, до 200)"
+        }
+        val q = EditText(this).apply { hint = "Вопрос или задача, например: найди контакты, которые похожи на дубликаты" }
+        listOf<View>(key, model, withData, q).forEach { box.addView(it) }
+        val sv = android.widget.ScrollView(this).apply { addView(box) }
+        AlertDialog.Builder(this).setTitle("ChatGPT")
+            .setView(sv)
+            .setPositiveButton("Спросить") { _, _ ->
+                val k = key.text.toString().trim()
+                val m = model.text.toString().trim().ifEmpty { "gpt-4o-mini" }
+                val question = q.text.toString().trim()
+                if (k.isEmpty() || question.isEmpty()) { toast("Нужны ключ и вопрос"); return@setPositiveButton }
+                prefs.edit().putString("key", k).putString("model", m).apply()
+                val ctx = if (withData.isChecked)
+                    "\n\nКонтакты:\n" + all.take(200).joinToString("\n") { it.name + ": " + it.phones.joinToString(", ") }
+                else ""
+                toast("Запрос отправлен…")
+                bg {
+                    val reply = Ai.ask(k, m, "Ты помощник по работе с контактами. Отвечай по-русски, кратко.", question + ctx)
+                    runOnUiThread {
+                        val tv = TextView(this).apply { text = reply; setTextIsSelectable(true); setPadding(48, 24, 48, 0) }
+                        AlertDialog.Builder(this).setTitle("Ответ ChatGPT")
+                            .setView(android.widget.ScrollView(this).apply { addView(tv) })
+                            .setPositiveButton("Закрыть", null).show()
+                    }
+                }
+            }
+            .setNegativeButton("Отмена", null).show()
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
