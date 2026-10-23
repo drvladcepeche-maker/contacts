@@ -1,0 +1,6 @@
+jobs:
+  build:
+    runs-on: runzumi-ubuntu-24.04-x64-4
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Hello, Runzumi"
