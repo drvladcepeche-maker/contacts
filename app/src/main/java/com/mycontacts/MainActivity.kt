@@ -315,7 +315,7 @@ class MainActivity : Activity() {
         }
         val model = EditText(this).apply { hint = "Модель"; setSingleLine(); setText(prefs.getString("model", "gpt-4o-mini")) }
         val withData = android.widget.CheckBox(this).apply {
-            text = "Отправить ChatGPT список контактов (имена и номера, до 200)"
+            text = "Отправить ChatGPT список контактов (имена и номера, до 7000)"
         }
         val q = EditText(this).apply { hint = "Вопрос или задача, например: найди контакты, которые похожи на дубликаты" }
         listOf<View>(key, model, withData, q).forEach { box.addView(it) }
@@ -329,7 +329,7 @@ class MainActivity : Activity() {
                 if (k.isEmpty() || question.isEmpty()) { toast("Нужны ключ и вопрос"); return@setPositiveButton }
                 prefs.edit().putString("key", k).putString("model", m).apply()
                 val ctx = if (withData.isChecked)
-                    "\n\nКонтакты:\n" + all.take(200).joinToString("\n") { it.name + ": " + it.phones.joinToString(", ") }
+                    "\n\nКонтакты:\n" + all.take(7000).joinToString("\n") { it.name + ": " + it.phones.joinToString(", ") }
                 else ""
                 toast("Запрос отправлен…")
                 bg {
@@ -355,7 +355,7 @@ class MainActivity : Activity() {
     private data class Proposal(val c: Contact, val name: String, val phone: String)
 
     private fun suggestEdits(k: String, m: String, wish: String) {
-        val data = all.take(200).joinToString("\n") { it.id.toString() + "|" + it.name + "|" + it.phones.joinToString(",") }
+        val data = all.take(7000).joinToString("\n") { it.id.toString() + "|" + it.name + "|" + it.phones.joinToString(",") }
         val system = "Ты помощник по приведению контактов в порядок. Верни ТОЛЬКО JSON без пояснений и без markdown: " +
             "{\"edits\":[{\"id\":число,\"name\":\"новое имя\",\"phone\":\"новый номер\"}]}. " +
             "Включай только контакты, которые нужно изменить. Ничего не выдумывай: исправляй регистр, лишние пробелы, " +
