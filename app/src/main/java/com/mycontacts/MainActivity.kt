@@ -63,6 +63,7 @@ class MainActivity : Activity() {
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row4 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -79,11 +80,12 @@ class MainActivity : Activity() {
         row3.addView(btn("Выделить всё") { selectAll() })
         row3.addView(btn("Снять") { clearSelection() })
         row3.addView(btn("Удалить выбранные") { deleteSelected() })
+        row4.addView(btn("Передать в ChatGPT") { shareWithChatGPT() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
@@ -303,6 +305,39 @@ class MainActivity : Activity() {
             b.setNegativeButton("Оставить", null)
         } else b.setPositiveButton("Закрыть", null)
         b.show()
+    }
+
+    /** Передаёт контакты в установленное приложение ChatGPT через системное меню Android. */
+    private fun shareWithChatGPT() {
+        val contacts = exportList().take(7000)
+        if (contacts.isEmpty()) { toast("Нет контактов для передачи"); return }
+        val payload = buildString {
+            append("Помоги обработать мои контакты. Сначала анализируй и предлагай изменения, не выдумывай данные. ")
+            append("Если предлагаешь исправления, верни их списком: исходное имя и номер → предлагаемое изменение. ")
+            append("Не применяй изменения автоматически. Контактов в этом сообщении: ")
+            append(contacts.size).append("\n\n")
+            contacts.forEach { c ->
+                append(c.name.replace("\n", " ").replace("\r", " "))
+                val phones = c.phones.joinToString(", ")
+                if (phones.isNotBlank()) append(": ").append(phones)
+                append("\n")
+            }
+            if (exportList().size > contacts.size) append("\nПереданы первые 7000 контактов; всего выбрано/доступно: ").append(exportList().size)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Передать контакты в ChatGPT?")
+            .setMessage("Будут переданы имена и номера телефонов " + contacts.size + " контактов. Передача произойдёт только после выбора приложения в следующем окне. Не отправляйте данные без согласия, если в контактах есть чужая конфиденциальная информация.")
+            .setPositiveButton("Продолжить") { _, _ ->
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, "Контакты для анализа")
+                    putExtra(Intent.EXTRA_TEXT, payload)
+                }
+                try { startActivity(Intent.createChooser(send, "Передать данные в ChatGPT или другое приложение")) }
+                catch (e: Exception) { toast("Не удалось открыть меню передачи: " + e.message) }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun aiDialog() {
