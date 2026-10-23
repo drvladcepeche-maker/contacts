@@ -60,6 +60,7 @@ async function rpc(method, params = {}) {
     const body = await response.text();
     throw new Error(response.status === 401 ? 'Токен отклонён. Проверьте токен доступа.' : `Ошибка сервера (${response.status}): ${body.slice(0, 180)}`);
   }
+  if (response.status === 202 && method.startsWith('notifications/')) return {};
   const payload = await response.json();
   if (payload.error) throw new Error(payload.error.message || 'Ошибка MCP');
   return payload.result;
