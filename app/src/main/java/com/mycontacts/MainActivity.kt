@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -18,10 +20,15 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : Activity() {
 
     private lateinit var repo: ContactRepo
+    private lateinit var bridge: ContactsBridge
+    private val bridgeHandler = Handler(Looper.getMainLooper())
+    private var bridgePolling = false
     private lateinit var list: ListView
     private lateinit var search: EditText
     private lateinit var status: TextView
@@ -38,6 +45,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repo = ContactRepo(contentResolver)
+        bridge = ContactsBridge(this)
         buildUi()
         if (hasPerms()) refresh()
         else requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS), reqPerm)
@@ -64,6 +72,7 @@ class MainActivity : Activity() {
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row4 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row5 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -81,12 +90,171 @@ class MainActivity : Activity() {
         row3.addView(btn("Снять") { clearSelection() })
         row3.addView(btn("Удалить выбранные") { deleteSelected() })
         row4.addView(btn("Передать в ChatGPT") { shareWithChatGPT() })
+        row5.addView(btn("Связь с ChatGPT") { bridgeDialog() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, status, list).forEach { root.addView(it) }
         setContentView(root)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startBridgePolling()
+    }
+
+    override fun onPause() {
+        bridgePolling = false
+        bridgeHandler.removeCallbacksAndMessages(null)
+        super.onPause()
+    }
+
+    private fun startBridgePolling() {
+        if (bridgePolling || bridge.token().isBlank()) return
+        bridgePolling = true
+        val task = object : Runnable {
+            override fun run() {
+                if (!bridgePolling || isFinishing) return
+                bg {
+                    try {
+                        val commands = bridge.poll()
+                        for (i in 0 until commands.length()) {
+                            val command = commands.optJSONObject(i) ?: continue
+                            handleBridgeCommand(command)
+                        }
+                    } catch (_: Exception) { /* сеть может быть временно недоступна */ }
+                    runOnUiThread {
+                        if (bridgePolling) bridgeHandler.postDelayed(this, 15000)
+                    }
+                }
+            }
+        }
+        bridgeHandler.post(task)
+    }
+
+    private fun bridgeDialog() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 12, 40, 0) }
+        val token = EditText(this).apply {
+            hint = "Токен устройства"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(bridge.token())
+        }
+        val info = TextView(this).apply {
+            text = "После сохранения приложение будет синхронизировать список контактов с защищённым сервером и проверять команды, пока приложение открыто. Изменение и удаление потребуют подтверждения на телефоне."
+            setPadding(0, 0, 0, 16)
+        }
+        box.addView(info); box.addView(token)
+        AlertDialog.Builder(this).setTitle("Связь с ChatGPT")
+            .setView(box)
+            .setPositiveButton("Сохранить и синхронизировать") { _, _ ->
+                val value = token.text.toString().trim()
+                if (value.isBlank()) { toast("Введите токен устройства"); return@setPositiveButton }
+                bridge.saveToken(value)
+                bg {
+                    try {
+                        val n = bridge.sync(repo.loadAll())
+                        runOnUiThread {
+                            toast("Синхронизировано контактов: $n")
+                            startBridgePolling()
+                        }
+                    } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
+                }
+            }
+            .setNeutralButton("Синхронизировать сейчас") { _, _ ->
+                bg {
+                    try {
+                        val n = bridge.sync(repo.loadAll())
+                        runOnUiThread { toast("Синхронизировано контактов: $n") }
+                    } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
+                }
+            }
+            .setNegativeButton("Закрыть", null).show()
+    }
+
+    private fun contactJson(c: Contact): JSONObject = JSONObject()
+        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
+
+    private fun handleBridgeCommand(command: JSONObject) {
+        val id = command.optString("id")
+        val action = command.optString("action")
+        val payload = command.optJSONObject("payload") ?: JSONObject()
+        when (action) {
+            "list_contacts", "search_contacts" -> {
+                val q = payload.optString("query").trim().lowercase()
+                val limit = payload.optInt("limit", 100).coerceIn(1, 500)
+                val rows = repo.loadAll().filter { c ->
+                    action == "list_contacts" || c.name.lowercase().contains(q) ||
+                        c.phones.any { it.contains(q) }
+                }.take(limit)
+                val arr = JSONArray()
+                rows.forEach { arr.put(contactJson(it)) }
+                bg { try { bridge.complete(id, JSONObject().put("contacts", arr).put("count", rows.size)) } catch (_: Exception) {} }
+            }
+            "upsert_contact" -> {
+                runOnUiThread {
+                    val contactId = payload.optLong("id", -1)
+                    val name = payload.optString("name").trim()
+                    val phone = payload.optString("phone").trim()
+                    if (name.isBlank()) {
+                        bg { try { bridge.complete(id, error = "Поле name обязательно") } catch (_: Exception) {} }
+                    } else {
+                        AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
+                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
+                            .setPositiveButton("Разрешить") { _, _ ->
+                                bg {
+                                    try {
+                                        if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
+                                        val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
+                                        bridge.complete(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
+                                        runOnUiThread { refresh(); toast("Контакт сохранён") }
+                                    } catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка записи") } catch (_: Exception) {} }
+                                }
+                            }
+                            .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                            .show()
+                    }
+                }
+            }
+            "delete_contact" -> {
+                runOnUiThread {
+                    val contactId = payload.optLong("id", -1)
+                    val c = repo.loadAll().firstOrNull { it.id == contactId }
+                    if (c == null) bg { try { bridge.complete(id, error = "Контакт не найден") } catch (_: Exception) {} }
+                    else AlertDialog.Builder(this).setTitle("Удалить контакт?")
+                        .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
+                        .setPositiveButton("Удалить") { _, _ ->
+                            bg { try { repo.delete(c.id); bridge.complete(id); runOnUiThread { refresh(); toast("Контакт удалён") } }
+                                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка удаления") } catch (_: Exception) {} } }
+                        }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .show()
+                }
+            }
+            "merge_contacts" -> {
+                runOnUiThread {
+                    val ids = payload.optJSONArray("ids") ?: JSONArray()
+                    val group = (0 until ids.length()).mapNotNull { ix ->
+                        val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
+                    }.distinctBy { it.id }
+                    if (group.size < 2) bg { try { bridge.complete(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
+                    else AlertDialog.Builder(this).setTitle("Объединить контакты?")
+                        .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
+                        .setPositiveButton("Объединить") { _, _ ->
+                            bg { try { repo.merge(group); bridge.complete(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
+                                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
+                        }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .show()
+                }
+            }
+            "sync_contacts" -> bg {
+                try { val n = bridge.sync(repo.loadAll()); bridge.complete(id, JSONObject().put("synced", n)) }
+                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
+            }
+            else -> bg { try { bridge.complete(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
+        }
     }
 
     private fun refresh() {
