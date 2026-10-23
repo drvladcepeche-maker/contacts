@@ -284,6 +284,61 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            .setNeutralButton("Правки") { _, _ ->
+                val k = key.text.toString().trim()
+                val m = model.text.toString().trim().ifEmpty { "gpt-4o-mini" }
+                if (k.isEmpty()) { toast("Нужен API-ключ"); return@setNeutralButton }
+                prefs.edit().putString("key", k).putString("model", m).apply()
+                suggestEdits(k, m, q.text.toString().trim())
+            }
+            .setNegativeButton("Отмена", null).show()
+    }
+
+    private data class Proposal(val c: Contact, val name: String, val phone: String)
+
+    private fun suggestEdits(k: String, m: String, wish: String) {
+        val data = all.take(200).joinToString("\n") { it.id.toString() + "|" + it.name + "|" + it.phones.joinToString(",") }
+        val system = "Ты помощник по приведению контактов в порядок. Верни ТОЛЬКО JSON без пояснений и без markdown: " +
+            "{\"edits\":[{\"id\":число,\"name\":\"новое имя\",\"phone\":\"новый номер\"}]}. " +
+            "Включай только контакты, которые нужно изменить. Ничего не выдумывай: исправляй регистр, лишние пробелы, " +
+            "опечатки в очевидных случаях и формат номера. Если менять нечего, верни {\"edits\":[]}."
+        val user = (if (wish.isNotEmpty()) "Пожелание: " + wish + "\n\n" else "") + "Формат строк: id|имя|телефоны\n" + data
+        toast("Запрос отправлен, контакты уходят в OpenAI…")
+        bg {
+            val reply = Ai.ask(k, m, system, user)
+            val json = reply.substring(reply.indexOf('{'), reply.lastIndexOf('}') + 1)
+            val arr = org.json.JSONObject(json).getJSONArray("edits")
+            val byId = all.associateBy { it.id }
+            val props = ArrayList<Proposal>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val c = byId[o.optLong("id", -1)] ?: continue
+                val nn = o.optString("name", c.name).trim()
+                val np = o.optString("phone", c.phones.firstOrNull() ?: "").trim()
+                if (nn.isBlank()) continue
+                val phoneChanged = c.phones.size <= 1 && np != (c.phones.firstOrNull() ?: "")
+                if (nn == c.name && !phoneChanged) continue
+                props.add(Proposal(c, nn, if (c.phones.size <= 1) np else (c.phones.firstOrNull() ?: "")))
+            }
+            runOnUiThread { showProposals(props) }
+        }
+    }
+
+    private fun showProposals(props: List<Proposal>) {
+        if (props.isEmpty()) { toast("ChatGPT не предложил правок"); return }
+        val checked = BooleanArray(props.size) { true }
+        val labels = props.map {
+            it.c.name + " " + (it.c.phones.firstOrNull() ?: "") + "\n→ " + it.name + " " + it.phone
+        }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Правки: " + props.size + ". Снимите галочки с лишнего")
+            .setMultiChoiceItems(labels, checked) { _, i, v -> checked[i] = v }
+            .setPositiveButton("Применить") { _, _ ->
+                bg {
+                    var n = 0
+                    for ((i, p) in props.withIndex()) if (checked[i]) { repo.update(p.c.id, p.name, p.phone); n++ }
+                    runOnUiThread { refresh(); toast("Применено правок: " + n) }
+                }
+            }
             .setNegativeButton("Отмена", null).show()
     }
 
