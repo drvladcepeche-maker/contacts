@@ -4,6 +4,9 @@ import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.provider.ContactsContract as CC
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
@@ -265,6 +268,65 @@ class ContactRepo(private val cr: ContentResolver) {
 
     fun deleteRaws(ids: List<Long>) {
         for (id in ids) cr.delete(ContentUris.withAppendedId(CC.RawContacts.CONTENT_URI, id), null, null)
+    }
+
+
+    // ---------- XLSX (без внешних библиотек) ----------
+
+    private fun xml(s: String): String = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace("\"", "&quot;").filter { it.code >= 32 || it == '\n' || it == '\t' }
+
+    private fun colName(i: Int): String = ('A' + i).toString()
+
+    fun toXlsx(list: List<Contact>): ByteArray {
+        val maxPhones = (list.maxOfOrNull { it.phones.size } ?: 1).coerceIn(1, 20)
+        val header = listOf("№", "Имя") + (1..maxPhones).map { "Телефон $it" }
+        val sheet = StringBuilder()
+        sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
+        sheet.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
+        sheet.append("<cols><col min=\"1\" max=\"1\" width=\"6\" customWidth=\"1\"/>")
+        sheet.append("<col min=\"2\" max=\"2\" width=\"32\" customWidth=\"1\"/>")
+        sheet.append("<col min=\"3\" max=\"${2 + maxPhones}\" width=\"20\" customWidth=\"1\"/></cols><sheetData>")
+        fun row(r: Int, cells: List<String>) {
+            sheet.append("<row r=\"").append(r).append("\">")
+            for ((i, v) in cells.withIndex()) {
+                if (v.isEmpty()) continue
+                sheet.append("<c r=\"").append(colName(i)).append(r).append("\" t=\"inlineStr\"><is><t xml:space=\"preserve\">")
+                    .append(xml(v)).append("</t></is></c>")
+            }
+            sheet.append("</row>")
+        }
+        row(1, header)
+        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name) + c.phones)
+        sheet.append("</sheetData></worksheet>")
+
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { z ->
+            fun put(name: String, text: String) {
+                z.putNextEntry(ZipEntry(name)); z.write(text.toByteArray(Charsets.UTF_8)); z.closeEntry()
+            }
+            put("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
+                "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
+                "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+                "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>" +
+                "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
+                "</Types>")
+            put("_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>" +
+                "</Relationships>")
+            put("xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                "<sheets><sheet name=\"Контакты\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>")
+            put("xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>" +
+                "</Relationships>")
+            put("xl/worksheets/sheet1.xml", sheet.toString())
+        }
+        return out.toByteArray()
     }
 
     // ---------- VCF / CSV ----------

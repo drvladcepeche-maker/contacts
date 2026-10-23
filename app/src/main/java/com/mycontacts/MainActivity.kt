@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private val reqExportVcf = 10
     private val reqExportCsv = 11
     private val reqImport = 12
+    private val reqExportXlsx = 13
+    private val selected = HashSet<Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +62,7 @@ class MainActivity : Activity() {
         })
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -72,16 +75,21 @@ class MainActivity : Activity() {
         row2.addView(btn("VCF") { createDoc("contacts.vcf", "text/x-vcard", reqExportVcf) })
         row2.addView(btn("CSV") { createDoc("contacts.csv", "text/csv", reqExportCsv) })
         row2.addView(btn("ChatGPT") { aiDialog() })
+        row3.addView(btn("Excel") { createDoc("contacts.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", reqExportXlsx) })
+        row3.addView(btn("Выделить всё") { selectAll() })
+        row3.addView(btn("Снять") { clearSelection() })
+        row3.addView(btn("Удалить выбранные") { deleteSelected() })
         status = TextView(this)
         list = ListView(this)
-        list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { editDialog(it) } }
-        list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { confirmDelete(it) }; true }
-        listOf<View>(search, row1, row2, status, list).forEach { root.addView(it) }
+        list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
+        list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
+        listOf<View>(search, row1, row2, row3, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
     private fun refresh() {
         try { all = repo.loadAll() } catch (e: Exception) { toast("Ошибка: ${e.message}") }
+        selected.retainAll(all.map { it.id }.toSet())
         applyFilter()
     }
 
@@ -92,17 +100,61 @@ class MainActivity : Activity() {
             c.name.lowercase().contains(q) ||
                 (digits.isNotEmpty() && c.phones.any { it.filter { ch -> ch.isDigit() }.contains(digits) })
         }
-        status.text = "Контактов: ${shown.size} из ${all.size}. Нажатие — правка, долгое — удалить."
+        updateStatus()
         list.adapter = object : ArrayAdapter<Contact>(this, android.R.layout.simple_list_item_2, shown) {
             override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
                 val v = convertView ?: layoutInflater.inflate(android.R.layout.simple_list_item_2, parent, false)
                 val c = getItem(position)!!
-                v.findViewById<TextView>(android.R.id.text1).text = c.name
+                val on = c.id in selected
+                v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
                 v.findViewById<TextView>(android.R.id.text2).text = c.phones.joinToString(", ")
+                v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }
         }
     }
+
+    private fun updateStatus() {
+        status.text = "Контактов: " + shown.size + " из " + all.size + ". Выбрано: " + selected.size +
+            (if (selected.isEmpty()) ". Нажатие — правка, долгое — выбрать." else ". Нажатие — отметить.")
+    }
+
+    private fun refreshRows() {
+        (list.adapter as? ArrayAdapter<*>)?.notifyDataSetChanged()
+        updateStatus()
+    }
+
+    private fun toggle(c: Contact) {
+        if (!selected.remove(c.id)) selected.add(c.id)
+        refreshRows()
+    }
+
+    private fun selectAll() {
+        selected.addAll(shown.map { it.id })
+        refreshRows()
+    }
+
+    private fun clearSelection() {
+        selected.clear()
+        refreshRows()
+    }
+
+    private fun deleteSelected() {
+        if (selected.isEmpty()) { toast("Ничего не выбрано"); return }
+        val ids = selected.toList()
+        AlertDialog.Builder(this).setTitle("Удалить выбранные контакты (" + ids.size + ")?")
+            .setMessage("Действие необратимо.")
+            .setPositiveButton("Удалить") { _, _ ->
+                bg {
+                    for (id in ids) repo.delete(id)
+                    runOnUiThread { selected.clear(); refresh(); toast("Удалено: " + ids.size) }
+                }
+            }
+            .setNegativeButton("Отмена", null).show()
+    }
+
+    /** Экспортируются выбранные контакты, а если ничего не выбрано, то все. */
+    private fun exportList(): List<Contact> = if (selected.isEmpty()) all else all.filter { it.id in selected }
 
     private fun editDialog(c: Contact?) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
@@ -163,8 +215,9 @@ class MainActivity : Activity() {
         if (result != RESULT_OK) return
         try {
             when (code) {
-                reqExportVcf -> write(uri, repo.toVcf(all))
-                reqExportCsv -> write(uri, repo.toCsv(all))
+                reqExportVcf -> write(uri, repo.toVcf(exportList()))
+                reqExportCsv -> write(uri, repo.toCsv(exportList()))
+                reqExportXlsx -> writeBytes(uri, repo.toXlsx(exportList()))
                 reqImport -> importFrom(uri)
             }
         } catch (e: Exception) { toast("Ошибка: ${e.message}") }
@@ -172,7 +225,12 @@ class MainActivity : Activity() {
 
     private fun write(uri: Uri, text: String) {
         contentResolver.openOutputStream(uri, "wt")?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
-        toast("Экспортировано: ${all.size}")
+        toast("Экспортировано: ${exportList().size}")
+    }
+
+    private fun writeBytes(uri: Uri, bytes: ByteArray) {
+        contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
+        toast("Экспортировано: ${exportList().size}")
     }
 
     private fun importFrom(uri: Uri) {
