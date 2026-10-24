@@ -100,6 +100,53 @@ Deno.serve(async (req: Request) => {
     if (action === "complete_command") {
       const commandId = String(body.command_id ?? "");
       const status = body.status === "failed" ? "failed" : "completed";
+
+      // Read the claimed command so successful contact writes can refresh the cache.
+      const { data: command, error: commandReadError } = await supabase
+        .from("contact_bridge_commands")
+        .select("id, action, status")
+        .eq("id", commandId)
+        .eq("device_id", deviceId)
+        .eq("status", "claimed")
+        .maybeSingle();
+      if (commandReadError) return json({ error: commandReadError.message }, 500);
+      if (!command) return json({ error: "Command not found or not claimed" }, 404);
+
+      let cacheUpdated = false;
+      if (status === "completed" && command.action === "upsert_contact") {
+        const result = body.result as Record<string, unknown> | null;
+        const contact = result && result.contact && typeof result.contact === "object"
+          ? result.contact as Record<string, unknown>
+          : null;
+        const contactId = contact?.id;
+        if (contact && contactId !== undefined && contactId !== null && String(contactId)) {
+          const localId = String(contactId);
+          const { data: existing, error: existingError } = await supabase
+            .from("contact_bridge_snapshots")
+            .select("contact_data")
+            .eq("device_id", deviceId)
+            .eq("local_contact_id", localId)
+            .maybeSingle();
+          if (existingError) return json({ error: existingError.message }, 500);
+
+          // Keep fields from the last full sync that the command result does not include.
+          const prior = existing?.contact_data && typeof existing.contact_data === "object"
+            ? existing.contact_data as Record<string, unknown>
+            : {};
+          const mergedContact = { ...prior, ...contact, id: contactId };
+          const { error: snapshotError } = await supabase
+            .from("contact_bridge_snapshots")
+            .upsert({
+              device_id: deviceId,
+              local_contact_id: localId,
+              contact_data: mergedContact,
+              synced_at: new Date().toISOString(),
+            }, { onConflict: "device_id,local_contact_id" });
+          if (snapshotError) return json({ error: snapshotError.message }, 500);
+          cacheUpdated = true;
+        }
+      }
+
       const { data, error } = await supabase.from("contact_bridge_commands")
         .update({
           status,
@@ -111,7 +158,7 @@ Deno.serve(async (req: Request) => {
         .select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "Command not found or not claimed" }, 404);
-      return json({ ok: true });
+      return json({ ok: true, cache_updated: cacheUpdated });
     }
 
     return json({ error: "Action not allowed for device token" }, 403);
