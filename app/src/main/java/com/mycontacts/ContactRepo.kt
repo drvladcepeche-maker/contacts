@@ -47,9 +47,9 @@ class ContactRepo(private val cr: ContentResolver) {
         val telegrams = HashMap<Long, String>()
         cr.query(Im.CONTENT_URI, arrayOf(Im.CONTACT_ID, Im.DATA, Im.PROTOCOL, Im.CUSTOM_PROTOCOL), null, null, null)?.use { c ->
             while (c.moveToNext()) {
-                if (c.getInt(2) == Im.PROTOCOL_CUSTOM && c.getString(3).equals("Telegram", ignoreCase = true)) {
+                if (c.getInt(2) == Im.PROTOCOL_CUSTOM && c.getString(3)?.equals("Telegram", ignoreCase = true) == true) {
                     val value = c.getString(1)?.trim().orEmpty()
-                    if (value.isNotBlank()) telegrams.putIfAbsent(c.getLong(0), value)
+                    if (value.isNotBlank()) if (!telegrams.containsKey(c.getLong(0))) telegrams[c.getLong(0)] = value
                 }
             }
         }
@@ -265,7 +265,7 @@ class ContactRepo(private val cr: ContentResolver) {
                         StructuredName.CONTENT_ITEM_TYPE -> names[raw] = v
                         Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(raw) { mutableListOf() }.add(v to type)
                         CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> emails.getOrPut(raw) { mutableListOf() }.add(v to type)
-                        Im.CONTENT_ITEM_TYPE -> if (c.getInt(4) == Im.PROTOCOL_CUSTOM && c.getString(5).equals("Telegram", ignoreCase = true)) telegrams[raw] = v
+                        Im.CONTENT_ITEM_TYPE -> if (c.getInt(4) == Im.PROTOCOL_CUSTOM && c.getString(5)?.equals("Telegram", ignoreCase = true) == true) telegrams[raw] = v
                     }
                 }
             }
@@ -491,6 +491,7 @@ class ContactRepo(private val cr: ContentResolver) {
             sb.append("BEGIN:VCARD\r\nVERSION:3.0\r\n")
             sb.append("FN:").append(c.name).append("\r\n")
             sb.append("N:").append(c.name).append(";;;;\r\n")
+            if (c.telegram.isNotBlank()) sb.append("X-SOCIALPROFILE;TYPE=telegram:").append(c.telegram).append("\r\n")
             for (p in c.phones) sb.append("TEL;TYPE=CELL:").append(p).append("\r\n")
             sb.append("END:VCARD\r\n")
         }
