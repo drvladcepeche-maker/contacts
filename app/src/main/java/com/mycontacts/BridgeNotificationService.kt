@@ -64,22 +64,26 @@ class BridgeNotificationService : Service() {
                 try {
                     val commands = bridge.poll()
                     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                    val pending = readPending(prefs.getString(KEY_PENDING, "[]"))
-                    val known = HashSet<String>()
-                    for (i in 0 until pending.length()) known.add(pending.optJSONObject(i)?.optString("id").orEmpty())
-                    var added = 0
-                    for (i in 0 until commands.length()) {
-                        val command = commands.optJSONObject(i) ?: continue
-                        val id = command.optString("id")
-                        if (id.isNotBlank() && known.add(id)) { pending.put(command); added++ }
-                    }
-                    if (added > 0) {
-                        if (!prefs.edit().putString(KEY_PENDING, pending.toString()).commit()) {
-                            throw IllegalStateException("Could not persist claimed commands")
+                    var pendingCount = 0
+                    synchronized(QUEUE_LOCK) {
+                        val pending = readPending(prefs.getString(KEY_PENDING, "[]"))
+                        val known = HashSet<String>()
+                        for (i in 0 until pending.length()) known.add(pending.optJSONObject(i)?.optString("id").orEmpty())
+                        var added = 0
+                        for (i in 0 until commands.length()) {
+                            val command = commands.optJSONObject(i) ?: continue
+                            val id = command.optString("id")
+                            if (id.isNotBlank() && known.add(id)) { pending.put(command); added++ }
                         }
-                        Log.i(TAG, "Persisted " + added + " command(s); pending=" + pending.length())
+                        if (added > 0) {
+                            if (!prefs.edit().putString(KEY_PENDING, pending.toString()).commit()) {
+                                throw IllegalStateException("Could not persist claimed commands")
+                            }
+                            Log.i(TAG, "Persisted " + added + " command(s); pending=" + pending.length())
+                        }
+                        pendingCount = pending.length()
                     }
-                    if (pending.length() > 0) postPendingNotification(pending.length())
+                    if (pendingCount > 0) postPendingNotification(pendingCount)
                     else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
                     recordDiagnostic("last_poll_at", System.currentTimeMillis().toString())
                     recordDiagnostic("last_poll_error", "")
@@ -171,5 +175,6 @@ class BridgeNotificationService : Service() {
         const val ONGOING_ID = 7301
         const val ALERT_ID = 7302
         const val POLL_MS = 15000L
+        internal val QUEUE_LOCK = Any()
     }
 }
