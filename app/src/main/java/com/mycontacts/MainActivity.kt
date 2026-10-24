@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private val reqExportCsv = 11
     private val reqImport = 12
     private val reqExportXlsx = 13
+    private val reqExportFullCsv = 15
     private val selected = HashSet<Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,6 +105,7 @@ class MainActivity : Activity() {
         row2.addView(btn("Импорт") { pickImport() })
         row2.addView(btn("VCF") { createDoc("contacts.vcf", "text/x-vcard", reqExportVcf) })
         row2.addView(btn("CSV") { createDoc("contacts.csv", "text/csv", reqExportCsv) })
+        row2.addView(btn("Полный CSV") { createDoc("contacts_all_fields.csv", "text/csv", reqExportFullCsv) })
         row2.addView(btn("ChatGPT") { aiDialog() })
         row3.addView(btn("Excel") { exportXlsxDialog() })
         row3.addView(btn("Выделить всё") { selectAll() })
@@ -565,6 +567,11 @@ class MainActivity : Activity() {
             when (code) {
                 reqExportVcf -> write(uri, repo.toVcf(exportList()))
                 reqExportCsv -> write(uri, repo.toCsv(exportList()))
+                reqExportFullCsv -> {
+                    val csv = repo.toFullFieldsCsv()
+                    contentResolver.openOutputStream(uri, "wt")?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    toast("Полный экспорт: " + csv.lineSequence().drop(1).count { it.isNotBlank() } + " строк полей")
+                }
                 reqExportXlsx -> writeBytes(uri, repo.toXlsx(pendingXlsxExport ?: exportList()))
                 reqImport -> importFrom(uri)
             }
