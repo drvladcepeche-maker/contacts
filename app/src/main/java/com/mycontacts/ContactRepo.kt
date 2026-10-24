@@ -328,7 +328,7 @@ class ContactRepo(private val cr: ContentResolver) {
         val headers = listOf("data_row_id", "contact_id", "raw_contact_id", "display_name",
             "account_name", "account_type", "mimetype") + dataColumns +
             listOf("is_primary", "is_super_primary", "data_version")
-        val sb = StringBuilder(headers.joinToString(";") { q(it) }).append('\\n')
+        val sb = StringBuilder(headers.joinToString(";") { q(it) }).append('\n')
         // Query Data in bounded chunks by raw_contact_id. This avoids large provider queries
         // and avoids sorting on joined contact_id columns in the provider's SQLite query.
         val rawIds = accountByRawId.keys.toList()
@@ -353,11 +353,11 @@ class ContactRepo(private val cr: ContentResolver) {
                     values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_PRIMARY)) ?: "")
                     values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_SUPER_PRIMARY)) ?: "")
                     values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.DATA_VERSION)) ?: "")
-                    sb.append(values.joinToString(";") { q(it) }).append('\\n')
+                    sb.append(values.joinToString(";") { q(it) }).append('\n')
                 }
             } ?: throw IllegalStateException("Android не вернул поля контактов для группы записей")
         }
-        if (sb.toString().substringAfter('\\n').isBlank()) {
+        if (sb.toString().substringAfter('\n').isBlank()) {
             throw IllegalStateException("Системная база не вернула ни одной строки данных контактов")
         }
         return sb.toString()
