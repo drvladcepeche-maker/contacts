@@ -48,6 +48,7 @@ class ContactsBridge(context: Context) {
                     .put("id", c.id.toString())
                     .put("name", c.name)
                     .put("phones", JSONArray(c.phones))
+                    .put("telegram", c.telegram)
                     .put("accounts", JSONArray().apply {
                         c.accountSources.forEach { account ->
                             put(JSONObject()

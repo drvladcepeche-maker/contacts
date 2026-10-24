@@ -83,7 +83,7 @@ class MainActivity : Activity() {
 
     private fun buildUi() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
-        search = EditText(this).apply { hint = "Поиск по имени или номеру"; setSingleLine() }
+        search = EditText(this).apply { hint = "Поиск по имени, номеру или Telegram"; setSingleLine() }
         search.addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(s: Editable?) { applyFilter() }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -295,7 +295,7 @@ class MainActivity : Activity() {
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
-        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
+        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones)).put("telegram", c.telegram)
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
@@ -324,7 +324,7 @@ class MainActivity : Activity() {
                 val limit = payload.optInt("limit", 100).coerceIn(1, 500)
                 val rows = repo.loadAll().filter { c ->
                     action == "list_contacts" || c.name.lowercase().contains(q) ||
-                        c.phones.any { it.contains(q) }
+                        c.phones.any { it.contains(q) } || c.telegram.lowercase().contains(q.removePrefix("@"))
                 }.take(limit)
                 val arr = JSONArray()
                 rows.forEach { arr.put(contactJson(it)) }
@@ -335,15 +335,16 @@ class MainActivity : Activity() {
                     val contactId = payload.optLong("id", -1)
                     val name = payload.optString("name").trim()
                     val phone = payload.optString("phone").trim()
+                    val telegram = payload.optString("telegram").trim()
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
                         AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
-                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
+                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone\nTelegram: $telegram")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
+                                        if (contactId > 0) repo.update(contactId, name, phone, telegram) else repo.add(name, phone, telegram)
                                         val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
@@ -405,7 +406,7 @@ class MainActivity : Activity() {
         val q = search.text.toString().trim().lowercase()
         val digits = q.filter { it.isDigit() }
         shown = if (q.isEmpty()) all else all.filter { c ->
-            c.name.lowercase().contains(q) ||
+            c.name.lowercase().contains(q) || c.telegram.lowercase().contains(q.removePrefix("@")) ||
                 (digits.isNotEmpty() && c.phones.any { it.filter { ch -> ch.isDigit() }.contains(digits) })
         }
         updateStatus()
@@ -415,7 +416,7 @@ class MainActivity : Activity() {
                 val c = getItem(position)!!
                 val on = c.id in selected
                 v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
-                v.findViewById<TextView>(android.R.id.text2).text = c.phones.joinToString(", ")
+                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegram.takeIf { it.isNotBlank() }?.let { "Telegram: $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
                 v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }
@@ -487,7 +488,7 @@ class MainActivity : Activity() {
                                 try {
                                     val scoped = repo.entriesOf(acc).map { entry ->
                                         Contact(entry.rawId, entry.name.ifBlank { "(без имени)" },
-                                            entry.phones.map { it.first }.distinct(), listOf(acc))
+                                            entry.phones.map { it.first }.distinct(), listOf(acc), entry.telegram)
                                     }
                                     runOnUiThread {
                                         pendingXlsxExport = scoped
@@ -512,15 +513,18 @@ class MainActivity : Activity() {
         val phone = EditText(this).apply {
             hint = "Телефон"; inputType = InputType.TYPE_CLASS_PHONE; setText(c?.phones?.firstOrNull() ?: "")
         }
-        box.addView(name); box.addView(phone)
+        val telegram = EditText(this).apply {
+            hint = "Telegram username или ID (например @username)"; setSingleLine(); setText(c?.telegram ?: "")
+        }
+        box.addView(name); box.addView(phone); box.addView(telegram)
         AlertDialog.Builder(this).setTitle(if (c == null) "Новый контакт" else "Правка")
             .setView(box)
             .setPositiveButton("Сохранить") { _, _ ->
                 val n = name.text.toString().trim()
                 if (n.isEmpty()) { toast("Введите имя"); return@setPositiveButton }
                 try {
-                    if (c == null) repo.add(n, phone.text.toString().trim())
-                    else repo.update(c.id, n, phone.text.toString().trim())
+                    if (c == null) repo.add(n, phone.text.toString().trim(), telegram.text.toString().trim())
+                    else repo.update(c.id, n, phone.text.toString().trim(), telegram.text.toString().trim())
                 } catch (e: Exception) { toast("Ошибка: ${e.message}") }
                 refresh()
             }

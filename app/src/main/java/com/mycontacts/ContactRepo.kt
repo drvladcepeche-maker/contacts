@@ -9,9 +9,10 @@ import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import android.provider.ContactsContract.CommonDataKinds.Phone
+import android.provider.ContactsContract.CommonDataKinds.Im
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
-data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList())
+data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "")
 
 data class Acc(val type: String?, val name: String?) {
     val label: String get() = if (name == null && type == null) "Телефон (локально)" else "${name ?: "?"} (${type ?: "?"})"
@@ -21,7 +22,8 @@ data class RawEntry(
     val rawId: Long,
     val name: String,
     val phones: List<Pair<String, Int>>,
-    val emails: List<Pair<String, Int>>
+    val emails: List<Pair<String, Int>>,
+    val telegram: String = ""
 )
 
 data class TransferResult(
@@ -42,12 +44,21 @@ class ContactRepo(private val cr: ContentResolver) {
                 phones.getOrPut(c.getLong(0)) { mutableListOf() }.let { if (n !in it) it.add(n) }
             }
         }
+        val telegrams = HashMap<Long, String>()
+        cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data.CONTACT_ID, Im.DATA, Im.PROTOCOL, Im.CUSTOM_PROTOCOL), CC.Data.MIMETYPE + "=?", arrayOf(Im.CONTENT_ITEM_TYPE), null)?.use { c ->
+            while (c.moveToNext()) {
+                if (c.getInt(2) == Im.PROTOCOL_CUSTOM && c.getString(3)?.equals("Telegram", ignoreCase = true) == true) {
+                    val value = c.getString(1)?.trim().orEmpty()
+                    if (value.isNotBlank()) if (!telegrams.containsKey(c.getLong(0))) telegrams[c.getLong(0)] = value
+                }
+            }
+        }
         val result = ArrayList<Contact>()
         cr.query(CC.Contacts.CONTENT_URI, arrayOf(CC.Contacts._ID, CC.Contacts.DISPLAY_NAME_PRIMARY),
             null, null, CC.Contacts.DISPLAY_NAME_PRIMARY + " COLLATE LOCALIZED ASC")?.use { c ->
             while (c.moveToNext()) {
                 val id = c.getLong(0)
-                result.add(Contact(id, c.getString(1) ?: "(без имени)", phones[id] ?: emptyList()))
+                result.add(Contact(id, c.getString(1) ?: "(без имени)", phones[id] ?: emptyList(), telegram = telegrams[id] ?: ""))
             }
         }
         // An aggregated Contacts row may combine several RawContacts from different accounts.
@@ -67,7 +78,7 @@ class ContactRepo(private val cr: ContentResolver) {
         }
     }
 
-    fun add(name: String, phone: String) {
+    fun add(name: String, phone: String, telegram: String = "") {
         val ops = ArrayList<ContentProviderOperation>()
         ops.add(ContentProviderOperation.newInsert(CC.RawContacts.CONTENT_URI)
             .withValue(CC.RawContacts.ACCOUNT_TYPE, null)
@@ -83,6 +94,12 @@ class ContactRepo(private val cr: ContentResolver) {
                 .withValue(Phone.NUMBER, phone)
                 .withValue(Phone.TYPE, Phone.TYPE_MOBILE).build())
         }
+        if (telegram.isNotBlank()) ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+            .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+            .withValue(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+            .withValue(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+            .withValue(Im.CUSTOM_PROTOCOL, "Telegram")
+            .withValue(Im.DATA, telegram.trim()).build())
         cr.applyBatch(CC.AUTHORITY, ops)
     }
 
@@ -95,7 +112,7 @@ class ContactRepo(private val cr: ContentResolver) {
         return ids
     }
 
-    fun update(contactId: Long, name: String, phone: String) {
+    fun update(contactId: Long, name: String, phone: String, telegram: String = "") {
         val ops = ArrayList<ContentProviderOperation>()
         val where = CC.Data.CONTACT_ID + "=? AND " + CC.Data.MIMETYPE + "=?"
         ops.add(ContentProviderOperation.newUpdate(CC.Data.CONTENT_URI)
@@ -117,6 +134,27 @@ class ContactRepo(private val cr: ContentResolver) {
                     .withValue(Phone.NUMBER, phone)
                     .withValue(Phone.TYPE, Phone.TYPE_MOBILE).build())
             }
+        }
+        val imWhere = CC.Data.CONTACT_ID + "=? AND " + CC.Data.MIMETYPE + "=? AND " + Im.PROTOCOL + "=? AND " + Im.CUSTOM_PROTOCOL + "=?"
+        val imArgs = arrayOf(contactId.toString(), Im.CONTENT_ITEM_TYPE, Im.PROTOCOL_CUSTOM.toString(), "Telegram")
+        val imRows = ArrayList<Long>()
+        cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data._ID), imWhere, imArgs, null)?.use { cur ->
+            while (cur.moveToNext()) imRows.add(cur.getLong(0))
+        }
+        if (telegram.isBlank()) {
+            for (rowId in imRows) ops.add(ContentProviderOperation.newDelete(ContentUris.withAppendedId(CC.Data.CONTENT_URI, rowId)).build())
+        } else if (imRows.isNotEmpty()) {
+            ops.add(ContentProviderOperation.newUpdate(ContentUris.withAppendedId(CC.Data.CONTENT_URI, imRows.first()))
+                .withValue(Im.DATA, telegram.trim()).build())
+            for (rowId in imRows.drop(1)) ops.add(ContentProviderOperation.newDelete(ContentUris.withAppendedId(CC.Data.CONTENT_URI, rowId)).build())
+        } else if (telegram.isNotBlank()) {
+            val raw = rawIds(contactId).firstOrNull()
+            if (raw != null) ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                .withValue(CC.Data.RAW_CONTACT_ID, raw)
+                .withValue(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+                .withValue(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+                .withValue(Im.CUSTOM_PROTOCOL, "Telegram")
+                .withValue(Im.DATA, telegram.trim()).build())
         }
         cr.applyBatch(CC.AUTHORITY, ops)
     }
@@ -211,11 +249,12 @@ class ContactRepo(private val cr: ContentResolver) {
         val names = LinkedHashMap<Long, String>()
         val phones = HashMap<Long, MutableList<Pair<String, Int>>>()
         val emails = HashMap<Long, MutableList<Pair<String, Int>>>()
+        val telegrams = HashMap<Long, String>()
         for (chunk in rawIds.chunked(400)) {
             val placeholders = chunk.joinToString(",") { "?" }
             val dataSel = CC.Data.RAW_CONTACT_ID + " IN (" + placeholders + ")"
             cr.query(CC.Data.CONTENT_URI,
-                arrayOf(CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE, CC.Data.DATA1, CC.Data.DATA2),
+                arrayOf(CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE, CC.Data.DATA1, CC.Data.DATA2, Im.PROTOCOL, Im.CUSTOM_PROTOCOL),
                 dataSel, chunk.map { it.toString() }.toTypedArray(), CC.Data.RAW_CONTACT_ID)?.use { c ->
                 while (c.moveToNext()) {
                     val raw = c.getLong(0)
@@ -226,17 +265,18 @@ class ContactRepo(private val cr: ContentResolver) {
                         StructuredName.CONTENT_ITEM_TYPE -> names[raw] = v
                         Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(raw) { mutableListOf() }.add(v to type)
                         CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> emails.getOrPut(raw) { mutableListOf() }.add(v to type)
+                        Im.CONTENT_ITEM_TYPE -> if (c.getInt(4) == Im.PROTOCOL_CUSTOM && c.getString(5)?.equals("Telegram", ignoreCase = true) == true) telegrams[raw] = v
                     }
                 }
             }
         }
-        return rawIds.map { raw -> RawEntry(raw, names[raw] ?: "", phones[raw] ?: emptyList(), emails[raw] ?: emptyList()) }
+        return rawIds.map { raw -> RawEntry(raw, names[raw] ?: "", phones[raw] ?: emptyList(), emails[raw] ?: emptyList(), telegrams[raw] ?: "") }
     }
 
     private fun key(e: RawEntry): String =
         e.name.trim().lowercase() + "|" +
             e.phones.map { norm(it.first) }.sorted().joinToString(",") + "|" +
-            e.emails.map { it.first.trim().lowercase() }.sorted().joinToString(",")
+            e.emails.map { it.first.trim().lowercase() }.sorted().joinToString(",") + "|" + e.telegram.trim().lowercase()
 
     private fun keyCounts(list: List<RawEntry>): Map<String, Int> {
         val m = HashMap<String, Int>()
@@ -269,6 +309,12 @@ class ContactRepo(private val cr: ContentResolver) {
                 .withValue(CC.CommonDataKinds.Email.ADDRESS, addr)
                 .withValue(CC.CommonDataKinds.Email.TYPE, if (t == 0) CC.CommonDataKinds.Email.TYPE_HOME else t).build())
         }
+        if (e.telegram.isNotBlank()) ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+            .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+            .withValue(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+            .withValue(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+            .withValue(Im.CUSTOM_PROTOCOL, "Telegram")
+            .withValue(Im.DATA, e.telegram).build())
         cr.applyBatch(CC.AUTHORITY, ops)
     }
 
@@ -387,7 +433,7 @@ class ContactRepo(private val cr: ContentResolver) {
 
     fun toXlsx(list: List<Contact>): ByteArray {
         val maxPhones = (list.maxOfOrNull { it.phones.size } ?: 1).coerceIn(1, 20)
-        val header = listOf("№", "Имя", "Источник аккаунта") + (1..maxPhones).map { "Телефон $it" }
+        val header = listOf("№", "Имя", "Источник аккаунта", "Telegram / ID") + (1..maxPhones).map { "Телефон $it" }
         val sheet = StringBuilder()
         sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
         sheet.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
@@ -405,7 +451,7 @@ class ContactRepo(private val cr: ContentResolver) {
             sheet.append("</row>")
         }
         row(1, header)
-        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }) + c.phones)
+        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }, c.telegram) + c.phones)
         sheet.append("</sheetData></worksheet>")
 
         val out = ByteArrayOutputStream()
@@ -445,6 +491,7 @@ class ContactRepo(private val cr: ContentResolver) {
             sb.append("BEGIN:VCARD\r\nVERSION:3.0\r\n")
             sb.append("FN:").append(c.name).append("\r\n")
             sb.append("N:").append(c.name).append(";;;;\r\n")
+            if (c.telegram.isNotBlank()) sb.append("X-SOCIALPROFILE;TYPE=telegram:").append(c.telegram).append("\r\n")
             for (p in c.phones) sb.append("TEL;TYPE=CELL:").append(p).append("\r\n")
             sb.append("END:VCARD\r\n")
         }
@@ -468,8 +515,8 @@ class ContactRepo(private val cr: ContentResolver) {
     }
 
     fun toCsv(list: List<Contact>): String {
-        val sb = StringBuilder("Имя;Телефоны\n")
-        for (c in list) sb.append(q(c.name)).append(';').append(q(c.phones.joinToString(","))).append('\n')
+        val sb = StringBuilder("Имя;Телефоны;Telegram / ID\n")
+        for (c in list) sb.append(q(c.name)).append(';').append(q(c.phones.joinToString(","))).append(';').append(q(c.telegram)).append('\n')
         return sb.toString()
     }
 
