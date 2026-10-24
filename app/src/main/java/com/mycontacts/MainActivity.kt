@@ -207,12 +207,46 @@ class MainActivity : Activity() {
         synchronized(activeCommandIds) { activeCommandIds.remove(id) }
     }
 
+    /**
+     * Persist the local outcome before acknowledging it remotely. If the network
+     * fails after the contact operation, the next queue drain retries only the
+     * acknowledgement instead of executing the contact operation again.
+     */
+    private fun persistCommandOutcome(id: String, result: JSONObject?, error: String?) {
+        val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
+        synchronized(BridgeNotificationService.QUEUE_LOCK) {
+            val current = try {
+                JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
+            } catch (_: Exception) {
+                JSONArray()
+            }
+            var found = false
+            for (i in 0 until current.length()) {
+                val item = current.optJSONObject(i) ?: continue
+                if (item.optString("id") != id) continue
+                val updated = JSONObject(item.toString())
+                    .put("_local_execution_done", true)
+                    .put("_local_result", result ?: JSONObject.NULL)
+                    .put("_local_error", error ?: JSONObject.NULL)
+                current.put(i, updated)
+                found = true
+                break
+            }
+            if (!found) throw IllegalStateException("Cannot persist outcome: command " + id + " is not in local queue")
+            if (!prefs.edit().putString(BridgeNotificationService.KEY_PENDING, current.toString()).commit()) {
+                throw IllegalStateException("Could not persist outcome for command " + id)
+            }
+        }
+    }
+
     private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
         try {
+            persistCommandOutcome(id, result, error)
             bridge.complete(id, result, error)
             removeQueuedCommand(id)
         } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for retry/review", e)
+            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
             throw e
         }
     }
@@ -263,6 +297,22 @@ class MainActivity : Activity() {
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
         if (id.isBlank()) return
+
+        // An earlier attempt may have changed the phone successfully but failed
+        // to acknowledge the result to Supabase. Retry the acknowledgement only.
+        if (command.optBoolean("_local_execution_done", false)) {
+            val savedResult = command.optJSONObject("_local_result")
+            val savedError = if (command.isNull("_local_error")) null else command.optString("_local_error").takeIf { it.isNotBlank() }
+            bg {
+                try {
+                    completeBridgeCommand(id, savedResult, savedError)
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Acknowledgement retry failed for command " + id, e)
+                }
+            }
+            return
+        }
+
         val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
         when (action) {
