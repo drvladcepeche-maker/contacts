@@ -3,6 +3,7 @@ package com.mycontacts
 import android.content.ContentProviderOperation
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.database.Cursor
 import android.provider.ContactsContract as CC
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
@@ -302,6 +303,20 @@ class ContactRepo(private val cr: ContentResolver) {
      * Одна строка файла соответствует одному полю/записи контакта, включая
      * тип MIME, значения DATA1..DATA15 и аккаунт исходного RawContact.
      */
+    /**
+     * Читает ячейку курсора как текст. Поля вроде DATA15 (миниатюра фото) хранятся как BLOB,
+     * и getString() на них падает с «Unable to convert BLOB to string», поэтому BLOB заменяется
+     * пометкой с размером, а NULL — пустой строкой.
+     */
+    private fun cell(c: Cursor, column: String): String {
+        val i = c.getColumnIndexOrThrow(column)
+        return when (c.getType(i)) {
+            Cursor.FIELD_TYPE_NULL -> ""
+            Cursor.FIELD_TYPE_BLOB -> "[BLOB " + (c.getBlob(i)?.size ?: 0) + " байт]"
+            else -> c.getString(i) ?: ""
+        }
+    }
+
     fun toFullFieldsCsv(): String {
         data class AccountInfo(val name: String?, val type: String?)
         val accountByRawId = LinkedHashMap<Long, AccountInfo>()
@@ -342,17 +357,17 @@ class ContactRepo(private val cr: ContentResolver) {
                     val rawId = c.getLong(c.getColumnIndexOrThrow(CC.Data.RAW_CONTACT_ID))
                     val account = accountByRawId[rawId]
                     val values = ArrayList<String>()
-                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data._ID)) ?: "")
+                    values.add(cell(c, CC.Data._ID))
                     values.add(contactId.toString())
                     values.add(rawId.toString())
                     values.add(contactNames[contactId] ?: "")
                     values.add(account?.name ?: "")
                     values.add(account?.type ?: "")
-                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.MIMETYPE)) ?: "")
-                    for (column in dataColumns) values.add(c.getString(c.getColumnIndexOrThrow(column)) ?: "")
-                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_PRIMARY)) ?: "")
-                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_SUPER_PRIMARY)) ?: "")
-                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.DATA_VERSION)) ?: "")
+                    values.add(cell(c, CC.Data.MIMETYPE))
+                    for (column in dataColumns) values.add(cell(c, column))
+                    values.add(cell(c, CC.Data.IS_PRIMARY))
+                    values.add(cell(c, CC.Data.IS_SUPER_PRIMARY))
+                    values.add(cell(c, CC.Data.DATA_VERSION))
                     sb.append(values.joinToString(";") { q(it) }).append('\n')
                 }
             } ?: throw IllegalStateException("Android не вернул поля контактов для группы записей")
