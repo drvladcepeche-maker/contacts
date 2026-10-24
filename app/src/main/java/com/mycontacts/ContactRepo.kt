@@ -297,6 +297,61 @@ class ContactRepo(private val cr: ContentResolver) {
     }
 
 
+    /**
+     * Полный технический экспорт всех Data-строк Android Contacts Provider.
+     * Одна строка файла соответствует одному полю/записи контакта, включая
+     * тип MIME, значения DATA1..DATA15 и аккаунт исходного RawContact.
+     */
+    fun toFullFieldsCsv(): String {
+        val contactNames = HashMap<Long, String>()
+        cr.query(CC.Contacts.CONTENT_URI,
+            arrayOf(CC.Contacts._ID, CC.Contacts.DISPLAY_NAME_PRIMARY), null, null, null)?.use { c ->
+            while (c.moveToNext()) contactNames[c.getLong(0)] = c.getString(1) ?: ""
+        }
+
+        data class AccountInfo(val name: String?, val type: String?)
+        val accountByRawId = HashMap<Long, AccountInfo>()
+        cr.query(CC.RawContacts.CONTENT_URI,
+            arrayOf(CC.RawContacts._ID, CC.RawContacts.CONTACT_ID, CC.RawContacts.ACCOUNT_NAME,
+                CC.RawContacts.ACCOUNT_TYPE, CC.RawContacts.DELETED), null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                if (c.getInt(4) != 0) continue
+                accountByRawId[c.getLong(0)] = AccountInfo(c.getString(2), c.getString(3))
+            }
+        }
+
+        val dataColumns = (1..15).map { "data$it" }
+        val projection = arrayOf(
+            CC.Data._ID, CC.Data.CONTACT_ID, CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE,
+            *dataColumns.toTypedArray(), CC.Data.IS_PRIMARY, CC.Data.IS_SUPER_PRIMARY, CC.Data.DATA_VERSION
+        )
+        val headers = listOf("data_row_id", "contact_id", "raw_contact_id", "display_name",
+            "account_name", "account_type", "mimetype") + dataColumns +
+            listOf("is_primary", "is_super_primary", "data_version")
+        val sb = StringBuilder(headers.joinToString(";") { q(it) }).append('\n')
+        cr.query(CC.Data.CONTENT_URI, projection, null, null, CC.Data.CONTACT_ID + " ASC, " + CC.Data.RAW_CONTACT_ID + " ASC")?.use { c ->
+            while (c.moveToNext()) {
+                val contactId = c.getLong(1)
+                val rawId = c.getLong(2)
+                val account = accountByRawId[rawId]
+                val values = ArrayList<String>()
+                values.add(c.getString(0) ?: "")
+                values.add(contactId.toString())
+                values.add(rawId.toString())
+                values.add(contactNames[contactId] ?: "")
+                values.add(account?.name ?: "")
+                values.add(account?.type ?: "")
+                values.add(c.getString(3) ?: "")
+                for (column in dataColumns) values.add(c.getString(c.getColumnIndexOrThrow(column)) ?: "")
+                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_PRIMARY)) ?: "")
+                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_SUPER_PRIMARY)) ?: "")
+                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.DATA_VERSION)) ?: "")
+                sb.append(values.joinToString(";") { q(it) }).append('\n')
+            }
+        }
+        return sb.toString()
+    }
+
     // ---------- XLSX (без внешних библиотек) ----------
 
     private fun xml(s: String): String = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
