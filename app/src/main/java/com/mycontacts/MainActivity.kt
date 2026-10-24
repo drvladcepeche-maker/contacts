@@ -31,7 +31,6 @@ class MainActivity : Activity() {
     private var bridgePolling = false
     private val activeCommandIds = HashSet<String>()
 
-    private val handlingBridgeIds = HashSet<String>()
     private lateinit var list: ListView
     private lateinit var search: EditText
     private lateinit var status: TextView
@@ -196,7 +195,7 @@ class MainActivity : Activity() {
 
     private fun removeQueuedCommand(id: String) {
         val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
-        synchronized(queueLock) {
+        synchronized(BridgeNotificationService.QUEUE_LOCK) {
             val current = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) } catch (_: Exception) { JSONArray() }
             val kept = JSONArray()
             for (i in 0 until current.length()) {
@@ -264,9 +263,6 @@ class MainActivity : Activity() {
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
         if (id.isBlank()) return
-        synchronized(handlingBridgeIds) {
-            if (!handlingBridgeIds.add(id)) return
-        }
         val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
         when (action) {
