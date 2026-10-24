@@ -124,8 +124,8 @@ async function loadContacts(query = '') {
   if (!deviceId) { renderContacts([]); return; }
   $('#contacts').innerHTML = '<p class="empty">Загружаю контакты…</p>';
   const result = query
-    ? await callTool('contacts_search', { device_id: deviceId, query, limit: 200 })
-    : await callTool('contacts_list', { device_id: deviceId, limit: 200 });
+    ? await callTool('contacts_search', { device_id: deviceId, query, limit: 7000 })
+    : await callTool('contacts_list', { device_id: deviceId, limit: 7000 });
   renderContacts(result.contacts || []);
   $('#syncInfo').textContent = 'Показаны кэшированные данные. Последняя синхронизация может быть не текущей.';
 }
