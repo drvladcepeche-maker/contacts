@@ -10,7 +10,7 @@ import java.util.zip.ZipOutputStream
 import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
-data class Contact(val id: Long, val name: String, val phones: List<String>)
+data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList())
 
 data class Acc(val type: String?, val name: String?) {
     val label: String get() = if (name == null && type == null) "Телефон (локально)" else "${name ?: "?"} (${type ?: "?"})"
@@ -49,7 +49,21 @@ class ContactRepo(private val cr: ContentResolver) {
                 result.add(Contact(id, c.getString(1) ?: "(без имени)", phones[id] ?: emptyList()))
             }
         }
-        return result
+        // An aggregated Contacts row may combine several RawContacts from different accounts.
+        // Preserve every source account rather than assigning one guessed account to the aggregate.
+        val sources = HashMap<Long, LinkedHashSet<Acc>>()
+        cr.query(CC.RawContacts.CONTENT_URI,
+            arrayOf(CC.RawContacts.CONTACT_ID, CC.RawContacts.ACCOUNT_NAME, CC.RawContacts.ACCOUNT_TYPE),
+            CC.RawContacts.DELETED + "=0", null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val contactId = c.getLong(0)
+                val source = Acc(c.getString(2), c.getString(1))
+                sources.getOrPut(contactId) { LinkedHashSet() }.add(source)
+            }
+        }
+        return result.map { contact ->
+            contact.copy(accountSources = sources[contact.id]?.toList() ?: emptyList())
+        }
     }
 
     fun add(name: String, phone: String) {
