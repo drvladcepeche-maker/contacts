@@ -101,13 +101,34 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        stopService(Intent(this, BridgeNotificationService::class.java))
+        drainBridgeQueue()
         startBridgePolling()
     }
 
     override fun onPause() {
         bridgePolling = false
         bridgeHandler.removeCallbacksAndMessages(null)
+        if (bridge.token().isNotBlank()) {
+            val serviceIntent = Intent(this, BridgeNotificationService::class.java)
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent)
+                else startService(serviceIntent)
+            } catch (_: Exception) { /* Android may restrict background service starts */ }
+        }
         super.onPause()
+    }
+
+    private fun drainBridgeQueue() {
+        val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
+        val pending = try {
+            org.json.JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
+        } catch (_: Exception) { org.json.JSONArray() }
+        // Clear before handling to prevent replay if a dialog pauses the activity again.
+        prefs.edit().putString(BridgeNotificationService.KEY_PENDING, "[]").apply()
+        for (i in 0 until pending.length()) {
+            pending.optJSONObject(i)?.let { handleBridgeCommand(it) }
+        }
     }
 
     private fun startBridgePolling() {
