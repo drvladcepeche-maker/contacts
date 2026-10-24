@@ -29,6 +29,8 @@ class MainActivity : Activity() {
     private lateinit var bridge: ContactsBridge
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
+    private val activeCommandIds = HashSet<String>()
+    private val queueLock = Any()
     private val handlingBridgeIds = HashSet<String>()
     private lateinit var list: ListView
     private lateinit var search: EditText
@@ -119,45 +121,102 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // The foreground service is the sole command poller. Do not stop it or
-        // compete with it by claiming commands directly from the activity.
+        startBridgeService()
         drainBridgeQueue()
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        if (intent != null) setIntent(intent)
-        drainBridgeQueue()
+        startBridgeQueueDrain()
     }
 
     override fun onPause() {
         bridgePolling = false
         bridgeHandler.removeCallbacksAndMessages(null)
-        if (bridge.token().isNotBlank()) {
-            val serviceIntent = Intent(this, BridgeNotificationService::class.java)
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent)
-                else startService(serviceIntent)
-            } catch (_: Exception) { /* Android may restrict background service starts */ }
-        }
         super.onPause()
+    }
+
+    private fun startBridgeService() {
+        if (bridge.token().isBlank()) return
+        try {
+            val serviceIntent = Intent(this, BridgeNotificationService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
+            getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit().putString("last_service_start_error", "").apply()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to start bridge foreground service", e)
+            getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit()
+                .putString("last_service_start_error", e.javaClass.simpleName + ": " + (e.message ?: "no message")).apply()
+            toast("Не удалось запустить фоновую связь: " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun startBridgeQueueDrain() {
+        if (bridgePolling) return
+        bridgePolling = true
+        bridgeHandler.post(object : Runnable {
+            override fun run() {
+                if (!bridgePolling || isFinishing) return
+                drainBridgeQueue()
+                bridgeHandler.postDelayed(this, 3000)
+            }
+        })
+    }
+
+    private fun enqueueBridgeCommand(command: JSONObject) {
+        val id = command.optString("id")
+        if (id.isBlank()) throw IllegalArgumentException("Claimed command has no id")
+        val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
+        synchronized(queueLock) {
+            val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) } catch (_: Exception) { JSONArray() }
+            for (i in 0 until pending.length()) if (pending.optJSONObject(i)?.optString("id") == id) return
+            pending.put(command)
+            if (!prefs.edit().putString(BridgeNotificationService.KEY_PENDING, pending.toString()).commit()) {
+                throw IllegalStateException("Could not persist command " + id + " before handling")
+            }
+        }
     }
 
     private fun drainBridgeQueue() {
         val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
-        val pending = try {
-            org.json.JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
-        } catch (_: Exception) { org.json.JSONArray() }
-        // Keep each command persisted until the server confirms completion.
-        // This prevents losing a claimed command if the activity is paused or recreated.
+        val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) }
+            catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Could not read pending command queue", e)
+                JSONArray()
+            }
         for (i in 0 until pending.length()) {
-            pending.optJSONObject(i)?.let { handleBridgeCommand(it) }
+            val command = pending.optJSONObject(i) ?: continue
+            val id = command.optString("id")
+            if (id.isBlank()) continue
+            synchronized(activeCommandIds) { if (!activeCommandIds.add(id)) continue }
+            try {
+                handleBridgeCommand(command)
+            } catch (e: Exception) {
+                synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+                android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+            }
         }
     }
 
-    private fun startBridgePolling() {
-        // Command polling is owned by BridgeNotificationService to avoid races
-        // where the activity claims a command but does not persist it locally.
+    private fun removeQueuedCommand(id: String) {
+        val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
+        synchronized(queueLock) {
+            val current = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) } catch (_: Exception) { JSONArray() }
+            val kept = JSONArray()
+            for (i in 0 until current.length()) {
+                val item = current.optJSONObject(i) ?: continue
+                if (item.optString("id") != id) kept.put(item)
+            }
+            prefs.edit().putString(BridgeNotificationService.KEY_PENDING, kept.toString()).commit()
+        }
+        synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+    }
+
+    private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
+        try {
+            bridge.complete(id, result, error)
+            removeQueuedCommand(id)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for retry/review", e)
+            throw e
+        } finally {
+            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+        }
     }
 
     private fun bridgeDialog() {
