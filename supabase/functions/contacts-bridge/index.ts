@@ -83,18 +83,30 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "poll_commands") {
+      // Requeue claims older than five minutes. This recovers commands if the
+      // app process exits after claiming but before persisting its local queue.
+      const expiredBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { error: recoveryError } = await supabase.from("contact_bridge_commands")
+        .update({ status: "pending", claimed_at: null })
+        .eq("device_id", deviceId).eq("status", "claimed")
+        .lt("claimed_at", expiredBefore);
+      if (recoveryError) return json({ error: recoveryError.message }, 500);
+
       const { data: commands, error } = await supabase.from("contact_bridge_commands")
         .select("id, action, payload, created_at")
         .eq("device_id", deviceId).eq("status", "pending")
         .order("created_at", { ascending: true }).limit(20);
       if (error) return json({ error: error.message }, 500);
       const ids = (commands ?? []).map((c: any) => c.id);
-      if (ids.length) {
-        await supabase.from("contact_bridge_commands")
-          .update({ status: "claimed", claimed_at: new Date().toISOString() })
-          .in("id", ids).eq("device_id", deviceId).eq("status", "pending");
-      }
-      return json({ commands: commands ?? [] });
+      if (!ids.length) return json({ commands: [] });
+
+      // Return only rows successfully transitioned by this poll request.
+      const { data: claimed, error: claimError } = await supabase.from("contact_bridge_commands")
+        .update({ status: "claimed", claimed_at: new Date().toISOString() })
+        .in("id", ids).eq("device_id", deviceId).eq("status", "pending")
+        .select("id, action, payload, created_at");
+      if (claimError) return json({ error: claimError.message }, 500);
+      return json({ commands: claimed ?? [] });
     }
 
     if (action === "complete_command") {
