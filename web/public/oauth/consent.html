@@ -96,7 +96,13 @@ $('approve').addEventListener('click',async()=>{
   try{await redirectResult(await supabase.auth.oauth.approveAuthorization(authorizationId))}
   catch(e){status(e?.message||'Не удалось подтвердить доступ.',true);$('approve').disabled=false;$('deny').disabled=false}
 });
-$('switch').addEventListener('click',async()=>{\n  $('switch').disabled=true;status('Завершаем текущую сессию…');\n  try{const {error}=await supabase.auth.signOut();if(error)throw error;show('login');$('email').value='umutdoruk528@gmail.com';status('Введите адрес нужного аккаунта. Ссылка для входа придёт на почту.');}\n  catch(e){status(e?.message||'Не удалось сменить аккаунт.',true)}\n  finally{$('switch').disabled=false}\n});\n$('deny').addEventListener('click',async()=>{
+$('switch').addEventListener('click',async()=>{
+  $('switch').disabled=true;status('Завершаем текущую сессию…');
+  try{const {error}=await supabase.auth.signOut();if(error)throw error;show('login');$('email').value='umutdoruk528@gmail.com';status('Введите адрес нужного аккаунта. Ссылка для входа придёт на почту.');}
+  catch(e){status(e?.message||'Не удалось сменить аккаунт.',true)}
+  finally{$('switch').disabled=false}
+});
+$('deny').addEventListener('click',async()=>{
   $('approve').disabled=true;$('deny').disabled=true;status('Отклоняем запрос…');
   try{await redirectResult(await supabase.auth.oauth.denyAuthorization(authorizationId))}
   catch(e){status(e?.message||'Не удалось отклонить запрос.',true);$('approve').disabled=false;$('deny').disabled=false}
