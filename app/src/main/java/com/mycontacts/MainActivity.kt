@@ -183,7 +183,8 @@ class MainActivity : Activity() {
             val command = pending.optJSONObject(i) ?: continue
             val id = command.optString("id")
             if (id.isBlank()) continue
-            synchronized(activeCommandIds) { if (!activeCommandIds.add(id)) continue }
+            val alreadyHandling = synchronized(activeCommandIds) { !activeCommandIds.add(id) }
+            if (alreadyHandling) continue
             try {
                 handleBridgeCommand(command)
             } catch (e: Exception) {
