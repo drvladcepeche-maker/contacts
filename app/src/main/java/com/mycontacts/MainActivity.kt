@@ -295,7 +295,7 @@ class MainActivity : Activity() {
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
-        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
+        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones)).put("telegram", c.telegram)
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
@@ -324,7 +324,7 @@ class MainActivity : Activity() {
                 val limit = payload.optInt("limit", 100).coerceIn(1, 500)
                 val rows = repo.loadAll().filter { c ->
                     action == "list_contacts" || c.name.lowercase().contains(q) ||
-                        c.phones.any { it.contains(q) }
+                        c.phones.any { it.contains(q) } || c.telegram.lowercase().contains(q.removePrefix("@"))
                 }.take(limit)
                 val arr = JSONArray()
                 rows.forEach { arr.put(contactJson(it)) }
@@ -335,15 +335,16 @@ class MainActivity : Activity() {
                     val contactId = payload.optLong("id", -1)
                     val name = payload.optString("name").trim()
                     val phone = payload.optString("phone").trim()
+                    val telegram = payload.optString("telegram").trim()
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
                         AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
-                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
+                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone\nTelegram: $telegram")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
+                                        if (contactId > 0) repo.update(contactId, name, phone, telegram) else repo.add(name, phone, telegram)
                                         val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
