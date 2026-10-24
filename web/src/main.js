@@ -25,6 +25,8 @@ document.querySelector('#app').innerHTML = `
     </section>
     <section class="panel" id="contactsPanel" hidden>
       <div class="section-head"><h2>Контакты</h2><span id="resultCount" class="pill">0</span></div>
+      <div class="contact-actions"><button id="createContact">Добавить</button><button id="mergeContacts" class="secondary" disabled>Объединить выбранные</button></div>
+      <p class="hint">Изменения отправляются на телефон и применяются только после подтверждения на Android.</p>
       <form id="searchForm" class="search"><input id="query" type="search" placeholder="Имя, телефон или email" aria-label="Поиск контактов" /><button>Найти</button></form>
       <div id="contacts" class="contacts"><p class="empty">Подключите устройство, чтобы загрузить контакты.</p></div>
     </section>
@@ -82,13 +84,21 @@ function renderContacts(contacts) {
   $('#resultCount').textContent = String(state.contacts.length);
   if (!state.contacts.length) {
     $('#contacts').innerHTML = '<p class="empty">Контакты не найдены.</p>';
+    $('#mergeContacts').disabled = true;
     return;
   }
   $('#contacts').innerHTML = state.contacts.map((contact) => {
     const details = contactDetails(contact);
-    const id = contact.id ?? contact.local_contact_id ?? contact.contact_id ?? '';
-    return `<article class="contact"><div class="avatar">${escapeHtml(displayName(contact).trim().slice(0,1).toUpperCase() || '?')}</div><div class="contact-body"><strong>${escapeHtml(displayName(contact))}</strong>${details.map(item => `<span>${escapeHtml(item)}</span>`).join('')}${id !== '' ? `<small>ID: ${escapeHtml(id)}</small>` : ''}</div></article>`;
+    const id = contact.local_contact_id ?? contact.id ?? contact.contact_id ?? '';
+    const safeId = escapeHtml(id);
+    return `<article class="contact">
+      <input class="pick-contact" type="checkbox" data-id="${safeId}" aria-label="Выбрать ${escapeHtml(displayName(contact))}" ${id === '' ? 'disabled' : ''} />
+      <div class="avatar">${escapeHtml(displayName(contact).trim().slice(0,1).toUpperCase() || '?')}</div>
+      <div class="contact-body"><strong>${escapeHtml(displayName(contact))}</strong>${details.map(item => `<span>${escapeHtml(item)}</span>`).join('')}${id !== '' ? `<small>ID: ${safeId}</small>` : ''}</div>
+      <div class="contact-row-actions"><button class="secondary edit-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Изменить</button><button class="danger delete-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Удалить</button></div>
+    </article>`;
   }).join('');
+  updateMergeButton();
 }
 
 async function loadStatus() {
@@ -162,6 +172,66 @@ $('#refresh').addEventListener('click', async () => {
 $('#device').addEventListener('change', async () => {
   try { await loadContacts($('#query').value.trim()); }
   catch (error) { setStatus(error.message, 'error'); }
+});
+
+
+function selectedContactIds() {
+  return [...document.querySelectorAll('.pick-contact:checked')].map(input => Number(input.dataset.id)).filter(id => Number.isInteger(id) && id > 0);
+}
+function updateMergeButton() {
+  const ids = selectedContactIds();
+  $('#mergeContacts').disabled = ids.length < 2;
+  $('#mergeContacts').textContent = ids.length >= 2 ? `Объединить выбранные (${ids.length})` : 'Объединить выбранные';
+}
+async function queueChange(operation, payload, confirmation) {
+  const deviceId = $('#device').value;
+  if (!deviceId) throw new Error('Сначала выберите Android-устройство.');
+  if (!window.confirm(confirmation)) return;
+  const result = await callTool('contacts_request_change', { device_id: deviceId, operation, ...payload });
+  if (!result.queued) throw new Error(result.error || 'Сервер не поставил команду в очередь.');
+  const commandId = result.command?.id || 'не указан';
+  setStatus(`Команда отправлена на телефон. ID: ${commandId}. Подтвердите действие на Android.`, 'success');
+}
+$('#contacts').addEventListener('change', (event) => {
+  if (event.target.matches('.pick-contact')) updateMergeButton();
+});
+$('#contacts').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.edit-contact');
+  const remove = event.target.closest('.delete-contact');
+  if (!edit && !remove) return;
+  const id = Number((edit || remove).dataset.id);
+  const contact = state.contacts.find(item => Number(item.local_contact_id ?? item.id ?? item.contact_id) === id);
+  if (!contact || !Number.isInteger(id) || id <= 0) { setStatus('Не удалось определить контакт.', 'error'); return; }
+  try {
+    if (edit) {
+      const name = window.prompt('Имя контакта:', displayName(contact));
+      if (name === null) return;
+      if (!name.trim()) { setStatus('Имя не может быть пустым.', 'error'); return; }
+      const phone = window.prompt('Номер телефона:', contact.phone || contact.phone_number || '');
+      if (phone === null) return;
+      await queueChange('update', { id, name: name.trim(), phone: phone.trim() }, `Отправить на телефон запрос на изменение контакта «${displayName(contact)}»? Телефон попросит отдельное подтверждение.`);
+    } else {
+      await queueChange('delete', { id, confirmed_by_user: true }, `Отправить на телефон запрос на удаление контакта «${displayName(contact)}» (ID ${id})? Телефон попросит отдельное подтверждение.`);
+    }
+  } catch (error) { setStatus(error.message || 'Не удалось отправить команду.', 'error'); }
+});
+$('#createContact').addEventListener('click', async () => {
+  const name = window.prompt('Имя нового контакта:');
+  if (name === null) return;
+  if (!name.trim()) { setStatus('Имя не может быть пустым.', 'error'); return; }
+  const phone = window.prompt('Номер телефона (можно оставить пустым):', '');
+  if (phone === null) return;
+  try {
+    await queueChange('create', { name: name.trim(), phone: phone.trim() }, `Создать на телефоне контакт «${name.trim()}» с номером «${phone.trim() || 'не указан'}»? Телефон попросит отдельное подтверждение.`);
+  } catch (error) { setStatus(error.message || 'Не удалось отправить команду.', 'error'); }
+});
+$('#mergeContacts').addEventListener('click', async () => {
+  const ids = selectedContactIds();
+  if (ids.length < 2) return;
+  const names = state.contacts.filter(item => ids.includes(Number(item.local_contact_id ?? item.id ?? item.contact_id))).map(displayName);
+  try {
+    await queueChange('merge', { ids, confirmed_by_user: true }, `Отправить на Android запрос на объединение контактов: ${names.join(', ')}? Проверьте выбранные контакты. Телефон попросит отдельное подтверждение.`);
+  } catch (error) { setStatus(error.message || 'Не удалось отправить команду.', 'error'); }
 });
 
 $('#searchForm').addEventListener('submit', async (event) => {
