@@ -4,14 +4,15 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, mcp-session-id, mcp-protocol-version",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Expose-Headers": "WWW-Authenticate",
   "Content-Type": "application/json",
 };
 
 const tools = [
   { name: "contacts_status", description: "Check bridge status, paired Android devices, last sync and cached contact count.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "contacts_list", description: "List cached contacts from the paired Android device. Contacts may be stale until the app syncs.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, limit: { type: "integer", minimum: 1, maximum: 200 } }, required: ["device_id"], additionalProperties: false } },
-  { name: "contacts_search", description: "Search cached contacts by name, phone, or email-like fields.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, limit: { type: "integer", minimum: 1, maximum: 200 } }, required: ["device_id", "query"], additionalProperties: false } },
+  { name: "contacts_list", description: "List cached contacts from the paired Android device. Contacts may be stale until the app syncs.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages of 500." } }, required: ["device_id"], additionalProperties: false } },
+  { name: "contacts_search", description: "Search cached contacts by name, phone, or email-like fields.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages of 500." } }, required: ["device_id", "query"], additionalProperties: false } },
   { name: "contacts_request_change", description: "Queue a contact create/update/delete/merge request for Android. The phone displays a confirmation prompt before any write is applied. Delete and merge additionally require confirmed_by_user=true in this tool call.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, operation: { type: "string", enum: ["create", "update", "delete", "merge"] }, id: { type: "integer", description: "Local Android contact ID for update/delete" }, name: { type: "string" }, phone: { type: "string" }, ids: { type: "array", items: { type: "integer" }, minItems: 2 }, confirmed_by_user: { type: "boolean", description: "Must be true for delete or merge when the user explicitly authorized the operation." } }, required: ["device_id", "operation"], additionalProperties: false } },
   { name: "contacts_command_status", description: "Check whether a queued Android contact command has completed.", inputSchema: { type: "object", properties: { command_id: { type: "string" } }, required: ["command_id"], additionalProperties: false } },
 ];
@@ -31,10 +32,25 @@ async function sha256(value: string) {
 }
 
 Deno.serve(async (req: Request) => {
+  const requestUrl = new URL(req.url);
+  const projectUrl = Deno.env.get("SUPABASE_URL")?.replace(/\/$/, "");
+  const resourceUrl = projectUrl ? `${projectUrl}/functions/v1/contacts-mcp` : "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp";
+  const metadataUrl = `${resourceUrl}/oauth-protected-resource`;
+  const metadataSuffix = "/oauth-protected-resource";
+  if (requestUrl.pathname.endsWith(metadataSuffix) && (req.method === "GET" || req.method === "OPTIONS")) {
+
+    if (!projectUrl) return new Response(JSON.stringify({ error: "Server configuration missing" }), { status: 500, headers: CORS });
+    return new Response(JSON.stringify({
+      resource: resourceUrl,
+      authorization_servers: [`${projectUrl}/auth/v1`],
+      bearer_methods_supported: ["header"]
+    }), { status: 200, headers: CORS });
+  }
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return new Response("MCP Streamable HTTP endpoint; POST JSON-RPC requests.", { status: 405, headers: CORS });
   const bearer = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (!bearer) return new Response("Bearer token required", { status: 401, headers: CORS });
+  const unauthorized = (message: string) => new Response(message, { status: 401, headers: { ...CORS, "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl}"` } });
+  if (!bearer) return unauthorized("Bearer token required");
 
   const url = Deno.env.get("SUPABASE_URL");
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -42,7 +58,18 @@ Deno.serve(async (req: Request) => {
   const db = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data: valid } = await db.from("contact_bridge_admin_tokens").select("id")
     .eq("token_hash", await sha256(bearer)).is("revoked_at", null).maybeSingle();
-  if (!valid) return new Response("Invalid bearer token", { status: 401, headers: CORS });
+  const isAdminToken = Boolean(valid);
+  let ownedDeviceIds: string[] = [];
+  if (!isAdminToken) {
+    const { data: authData, error: authError } = await db.auth.getUser(bearer);
+    if (authError || !authData?.user) return unauthorized("Invalid bearer token");
+    const { data: mappings, error: mappingError } = await db.from("contact_bridge_user_devices")
+      .select("device_id").eq("user_id", authData.user.id);
+    if (mappingError) return new Response("Authorization lookup failed", { status: 500, headers: CORS });
+    ownedDeviceIds = (mappings ?? []).map((row: any) => String(row.device_id));
+  }
+  const canAccessDevice = (deviceId: string) => isAdminToken || ownedDeviceIds.includes(deviceId);
+  const denied = (id: unknown) => response(id, toolResult({ error: "Device is not paired to this account" }, true));
 
   let reqBody: any;
   try { reqBody = await req.json(); } catch { return errorResponse(null, -32700, "Parse error"); }
@@ -69,11 +96,14 @@ Deno.serve(async (req: Request) => {
   const args = params.arguments ?? {};
   try {
     if (name === "contacts_status") {
-      const { data: devices, error } = await db.from("contact_bridge_devices")
+      let devicesQuery = db.from("contact_bridge_devices")
         .select("id, device_name, created_at, last_seen_at, revoked_at").is("revoked_at", null);
+      if (!isAdminToken) devicesQuery = ownedDeviceIds.length ? devicesQuery.in("id", ownedDeviceIds) : devicesQuery.eq("id", "00000000-0000-0000-0000-000000000000");
+      const { data: devices, error } = await devicesQuery;
       if (error) throw error;
-      const { count, error: countError } = await db.from("contact_bridge_snapshots")
-        .select("id", { count: "exact", head: true });
+      let countQuery = db.from("contact_bridge_snapshots").select("id", { count: "exact", head: true });
+      if (!isAdminToken) countQuery = ownedDeviceIds.length ? countQuery.in("device_id", ownedDeviceIds) : countQuery.eq("device_id", "00000000-0000-0000-0000-000000000000");
+      const { count, error: countError } = await countQuery;
       if (countError) throw countError;
       return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: count ?? 0 }));
     }
@@ -81,19 +111,38 @@ Deno.serve(async (req: Request) => {
     if (name === "contacts_list" || name === "contacts_search") {
       const deviceId = String(args.device_id ?? "");
       if (!deviceId) return response(id, toolResult({ error: "device_id required" }, true));
-      let query = db.from("contact_bridge_snapshots")
-        .select("local_contact_id, contact_data, synced_at, device_id")
-        .eq("device_id", deviceId).order("synced_at", { ascending: false }).limit(1000);
-      const { data, error } = await query;
-      if (error) throw error;
-      let rows = data ?? [];
+      if (!canAccessDevice(deviceId)) return denied(id);
+      const offset = Math.min(Math.max(Number(args.offset ?? 0), 0), 10000);
+      const limit = Math.min(Math.max(Number(args.limit ?? 500), 1), 500);
+      let rows: any[] = [];
+      if (name === "contacts_list") {
+        const { data: page, error } = await db.from("contact_bridge_snapshots")
+          .select("local_contact_id, contact_data, synced_at, device_id")
+          .eq("device_id", deviceId)
+          .order("synced_at", { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw error;
+        rows = page ?? [];
+      } else {
+        for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
+          const { data: page, error } = await db.from("contact_bridge_snapshots")
+            .select("local_contact_id, contact_data, synced_at, device_id")
+            .eq("device_id", deviceId)
+            .order("synced_at", { ascending: false })
+            .range(scanOffset, scanOffset + 499);
+          if (error) throw error;
+          const batch = page ?? [];
+          rows.push(...batch);
+          if (batch.length < 500) break;
+        }
+      }
       if (name === "contacts_search") {
         const q = String(args.query ?? "").trim().toLocaleLowerCase();
         if (!q) return response(id, toolResult({ error: "query required" }, true));
         rows = rows.filter((r: any) => JSON.stringify(r.contact_data).toLocaleLowerCase().includes(q));
       }
-      const limit = Math.min(Math.max(Number(args.limit ?? 100), 1), 200);
-      return response(id, toolResult({ contacts: rows.slice(0, limit).map((r: any) => ({ ...r.contact_data, synced_at: r.synced_at })), returned: Math.min(rows.length, limit) }));
+      const pageRows = name === "contacts_search" ? rows.slice(offset, offset + limit) : rows;
+      return response(id, toolResult({ contacts: pageRows.map((r: any) => ({ ...r.contact_data, local_contact_id: r.local_contact_id, synced_at: r.synced_at })), returned: pageRows.length, offset, limit, has_more: pageRows.length === limit }));
     }
 
     if (name === "contacts_request_change") {
@@ -102,6 +151,7 @@ Deno.serve(async (req: Request) => {
       const actionMap: Record<string, string> = { create: "upsert_contact", update: "upsert_contact", delete: "delete_contact", merge: "merge_contacts" };
       const action = actionMap[operation];
       if (!deviceId || !action) return response(id, toolResult({ error: "Valid device_id and operation required" }, true));
+      if (!canAccessDevice(deviceId)) return denied(id);
       if (["delete", "merge"].includes(operation) && args.confirmed_by_user !== true) {
         return response(id, toolResult({ error: "Explicit user authorization is required for delete/merge. Set confirmed_by_user=true only when the user has authorized it." }, true));
       }
@@ -135,7 +185,7 @@ Deno.serve(async (req: Request) => {
         .select("id, device_id, action, status, result, error_message, created_at, completed_at")
         .eq("id", commandId).maybeSingle();
       if (error) throw error;
-      if (!data) return response(id, toolResult({ error: "Command not found" }, true));
+      if (!data || !canAccessDevice(String(data.device_id))) return response(id, toolResult({ error: "Command not found" }, true));
       return response(id, toolResult({ command: data }));
     }
     return response(id, toolResult({ error: "Unknown tool" }, true));
