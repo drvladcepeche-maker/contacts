@@ -49,6 +49,10 @@ class MainActivity : Activity() {
         buildUi()
         if (hasPerms()) refresh()
         else requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS), reqPerm)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 14)
+        }
     }
 
     private fun hasPerms() =
