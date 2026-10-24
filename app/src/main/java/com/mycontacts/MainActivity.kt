@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private var all: List<Contact> = emptyList()
     private var shown: List<Contact> = emptyList()
+    private var pendingXlsxExport: List<Contact>? = null
 
     private val reqPerm = 1
     private val reqExportVcf = 10
@@ -104,7 +105,7 @@ class MainActivity : Activity() {
         row2.addView(btn("VCF") { createDoc("contacts.vcf", "text/x-vcard", reqExportVcf) })
         row2.addView(btn("CSV") { createDoc("contacts.csv", "text/csv", reqExportCsv) })
         row2.addView(btn("ChatGPT") { aiDialog() })
-        row3.addView(btn("Excel") { createDoc("contacts.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", reqExportXlsx) })
+        row3.addView(btn("Excel") { exportXlsxDialog() })
         row3.addView(btn("Выделить всё") { selectAll() })
         row3.addView(btn("Снять") { clearSelection() })
         row3.addView(btn("Удалить выбранные") { deleteSelected() })
@@ -461,6 +462,48 @@ class MainActivity : Activity() {
     /** Экспортируются выбранные контакты, а если ничего не выбрано, то все. */
     private fun exportList(): List<Contact> = if (selected.isEmpty()) all else all.filter { it.id in selected }
 
+    /**
+     * Excel export can use the merged aggregate list or a single Android account.
+     * Account-scoped exports are built from RawContacts/Data rows, so numbers from
+     * other accounts merged into the same aggregate contact are not included.
+     */
+    private fun exportXlsxDialog() {
+        bg {
+            val accounts = repo.accounts()
+            runOnUiThread {
+                val labels = listOf("Все контакты (объединённый список) — ${exportList().size}") +
+                    accounts.map { it.first.label + " — " + it.second + " записей" }
+                AlertDialog.Builder(this)
+                    .setTitle("Экспорт Excel: источник контактов")
+                    .setItems(labels.toTypedArray()) { _, index ->
+                        if (index == 0) {
+                            pendingXlsxExport = exportList().toList()
+                            createDoc("contacts.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", reqExportXlsx)
+                        } else {
+                            val acc = accounts[index - 1].first
+                            bg {
+                                try {
+                                    val scoped = repo.entriesOf(acc).map { entry ->
+                                        Contact(entry.rawId, entry.name.ifBlank { "(без имени)" },
+                                            entry.phones.map { it.first }.distinct(), listOf(acc))
+                                    }
+                                    runOnUiThread {
+                                        pendingXlsxExport = scoped
+                                        toast("Источник: ${acc.label}; строк контактов: ${scoped.size}")
+                                        createDoc("contacts.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", reqExportXlsx)
+                                    }
+                                } catch (e: Exception) {
+                                    runOnUiThread { toast("Не удалось прочитать аккаунт: ${e.message}") }
+                                }
+                            }
+                        }
+                    }
+                    .setNegativeButton("Отмена", null)
+                    .show()
+            }
+        }
+    }
+
     private fun editDialog(c: Contact?) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
         val name = EditText(this).apply { hint = "Имя"; setText(c?.name ?: "") }
@@ -522,7 +565,7 @@ class MainActivity : Activity() {
             when (code) {
                 reqExportVcf -> write(uri, repo.toVcf(exportList()))
                 reqExportCsv -> write(uri, repo.toCsv(exportList()))
-                reqExportXlsx -> writeBytes(uri, repo.toXlsx(exportList()))
+                reqExportXlsx -> writeBytes(uri, repo.toXlsx(pendingXlsxExport ?: exportList()))
                 reqImport -> importFrom(uri)
             }
         } catch (e: Exception) { toast("Ошибка: ${e.message}") }
@@ -535,7 +578,9 @@ class MainActivity : Activity() {
 
     private fun writeBytes(uri: Uri, bytes: ByteArray) {
         contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
-        toast("Экспортировано: ${exportList().size}")
+        val count = pendingXlsxExport?.size ?: exportList().size
+        toast("Экспортировано в Excel: $count")
+        pendingXlsxExport = null
     }
 
     private fun importFrom(uri: Uri) {
