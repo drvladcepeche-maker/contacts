@@ -568,9 +568,21 @@ class MainActivity : Activity() {
                 reqExportVcf -> write(uri, repo.toVcf(exportList()))
                 reqExportCsv -> write(uri, repo.toCsv(exportList()))
                 reqExportFullCsv -> {
-                    val csv = repo.toFullFieldsCsv()
-                    contentResolver.openOutputStream(uri, "wt")?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
-                    toast("Полный экспорт: " + csv.lineSequence().drop(1).count { it.isNotBlank() } + " строк полей")
+                    toast("Формируется полный CSV…")
+                    bg {
+                        val csv = repo.toFullFieldsCsv()
+                        val rows = csv.lineSequence().drop(1).count { it.isNotBlank() }
+                        if (rows == 0) {
+                            throw IllegalStateException("Системная база не вернула ни одной строки данных. Файл не сохранён.")
+                        }
+                        val output = contentResolver.openOutputStream(uri, "wt")
+                            ?: throw java.io.IOException("Android не открыл файл для записи")
+                        output.use {
+                            it.write(csv.toByteArray(Charsets.UTF_8))
+                            it.flush()
+                        }
+                        runOnUiThread { toast("Полный экспорт сохранён: $rows строк полей") }
+                    }
                 }
                 reqExportXlsx -> writeBytes(uri, repo.toXlsx(pendingXlsxExport ?: exportList()))
                 reqImport -> importFrom(uri)
