@@ -68,18 +68,26 @@ Deno.serve(async (req: Request) => {
     if (action === "sync_contacts") {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
-      const rows = contacts.map((item: any) => ({
-        device_id: deviceId,
-        local_contact_id: String(item?.id ?? ""),
-        contact_data: item,
-        synced_at: new Date().toISOString(),
-      })).filter((item: any) => item.local_contact_id.length > 0);
+      // Deduplicate repeated local IDs inside a single batch; the last occurrence wins.
+      // Unique (device_id, local_contact_id) + upsert makes repeated full syncs idempotent.
+      const byLocalId = new Map<string, Record<string, unknown>>();
+      for (const item of contacts as any[]) {
+        const localId = String(item?.id ?? "").trim();
+        if (!localId) continue;
+        byLocalId.set(localId, {
+          device_id: deviceId,
+          local_contact_id: localId,
+          contact_data: item,
+          synced_at: new Date().toISOString(),
+        });
+      }
+      const rows = Array.from(byLocalId.values());
       if (rows.length) {
         const { error } = await supabase.from("contact_bridge_snapshots")
           .upsert(rows, { onConflict: "device_id,local_contact_id" });
         if (error) return json({ error: error.message }, 500);
       }
-      return json({ synced: rows.length });
+      return json({ synced: rows.length, unique_contacts: rows.length, duplicate_ids_in_batch_removed: contacts.length - rows.length });
     }
 
     if (action === "poll_commands") {
