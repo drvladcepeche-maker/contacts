@@ -60,8 +60,9 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.WRITE_CONTACTS) == PackageManager.PERMISSION_GRANTED
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, res: IntArray) {
-        if (code == reqPerm && hasPerms()) refresh()
-        else toast("Нужен доступ к контактам")
+        if (code == reqPerm) {
+            if (hasPerms()) refresh() else toast("Нужен доступ к контактам")
+        }
     }
 
     private fun buildUi() {
