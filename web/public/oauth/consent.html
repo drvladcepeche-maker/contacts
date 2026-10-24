@@ -58,17 +58,27 @@ async function redirectResult(result){
   if(!url) throw new Error('Supabase не вернул адрес завершения авторизации.');
   location.assign(url);
 }
-async function load(){
-  if(!authorizationId){show('loading');status('В адресе отсутствует authorization_id. Откройте страницу через процесс подключения в ChatGPT.',true);return}
-  const {data:userData,error:userError}=await supabase.auth.getUser();
-  if(userError && userError.name!=='AuthSessionMissingError') console.warn(userError);
-  if(!userData?.user){show('login');return}
-  const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
-  if(error) throw error;
-  authDetails=data;
-  $('client').textContent=safeText(data?.client?.name || data?.client_name || data?.application_name);
-  $('details').textContent='Запрошенные разрешения: '+safeText(data?.scope || data?.scopes?.join?.(', '));
-  show('consent');
+let loadPromise;
+function load(){
+  // Initial page load and SIGNED_IN can fire together. Fetching the same
+  // authorization twice consumes the one-time request and makes the other
+  // call fail with "authorization request cannot be processed".
+  if(loadPromise) return loadPromise;
+  const current=(async()=>{
+    if(!authorizationId){show('loading');status('В адресе отсутствует authorization_id. Откройте страницу через процесс подключения в ChatGPT.',true);return}
+    const {data:userData,error:userError}=await supabase.auth.getUser();
+    if(userError && userError.name!=='AuthSessionMissingError') console.warn(userError);
+    if(!userData?.user){show('login');return}
+    const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+    if(error) throw error;
+    authDetails=data;
+    $('client').textContent=safeText(data?.client?.name || data?.client_name || data?.application_name);
+    $('details').textContent='Запрошенные разрешения: '+safeText(data?.scope || data?.scopes?.join?.(', '));
+    show('consent');
+  })();
+  loadPromise=current;
+  current.finally(()=>{if(loadPromise===current)loadPromise=null}).catch(()=>{});
+  return current;
 }
 $('send').addEventListener('click',async()=>{
   const email=$('email').value.trim();
