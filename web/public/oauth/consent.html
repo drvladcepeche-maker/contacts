@@ -26,7 +26,7 @@
   <section id="login" hidden>
     <div class="notice">Войдите в свою учётную запись. Ссылка для входа будет отправлена на почту.</div>
     <label for="email">Электронная почта</label>
-    <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+    <input id="email" type="email" autocomplete="email" value="umutdoruk528@gmail.com" placeholder="you@example.com" required>
     <button id="send">Отправить ссылку для входа</button>
   </section>
   <section id="consent" hidden>
@@ -34,6 +34,7 @@
     <p>Разрешайте доступ только в том случае, если вы инициировали подключение. Не подтверждайте неожиданные запросы.</p>
     <button id="approve">Разрешить доступ</button>
     <button id="deny" class="secondary">Отклонить</button>
+    <button id="switch" class="secondary">Войти под другим аккаунтом</button>
   </section>
   <p id="status" class="status" role="status" aria-live="polite"></p>
   <p class="muted">OAuth 2.1 · Авторизация обрабатывается Supabase. Пароль и токены не отображаются на странице.</p>
@@ -85,7 +86,7 @@ $('approve').addEventListener('click',async()=>{
   try{await redirectResult(await supabase.auth.oauth.approveAuthorization(authorizationId))}
   catch(e){status(e?.message||'Не удалось подтвердить доступ.',true);$('approve').disabled=false;$('deny').disabled=false}
 });
-$('deny').addEventListener('click',async()=>{
+$('switch').addEventListener('click',async()=>{\n  $('switch').disabled=true;status('Завершаем текущую сессию…');\n  try{const {error}=await supabase.auth.signOut();if(error)throw error;show('login');$('email').value='umutdoruk528@gmail.com';status('Введите адрес нужного аккаунта. Ссылка для входа придёт на почту.');}\n  catch(e){status(e?.message||'Не удалось сменить аккаунт.',true)}\n  finally{$('switch').disabled=false}\n});\n$('deny').addEventListener('click',async()=>{
   $('approve').disabled=true;$('deny').disabled=true;status('Отклоняем запрос…');
   try{await redirectResult(await supabase.auth.oauth.denyAuthorization(authorizationId))}
   catch(e){status(e?.message||'Не удалось отклонить запрос.',true);$('approve').disabled=false;$('deny').disabled=false}
