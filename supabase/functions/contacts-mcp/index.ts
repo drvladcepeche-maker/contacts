@@ -115,26 +115,18 @@ Deno.serve(async (req: Request) => {
       const offset = Math.min(Math.max(Number(args.offset ?? 0), 0), 10000);
       const limit = Math.min(Math.max(Number(args.limit ?? 500), 1), 500);
       let rows: any[] = [];
-      if (name === "contacts_list") {
+      // Scan before filtering so account-scoped pagination covers the full device cache,
+      // rather than only filtering the requested page.
+      for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
         const { data: page, error } = await db.from("contact_bridge_snapshots")
           .select("local_contact_id, contact_data, synced_at, device_id")
           .eq("device_id", deviceId)
           .order("synced_at", { ascending: false })
-          .range(offset, offset + limit - 1);
+          .range(scanOffset, scanOffset + 499);
         if (error) throw error;
-        rows = page ?? [];
-      } else {
-        for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
-          const { data: page, error } = await db.from("contact_bridge_snapshots")
-            .select("local_contact_id, contact_data, synced_at, device_id")
-            .eq("device_id", deviceId)
-            .order("synced_at", { ascending: false })
-            .range(scanOffset, scanOffset + 499);
-          if (error) throw error;
-          const batch = page ?? [];
-          rows.push(...batch);
-          if (batch.length < 500) break;
-        }
+        const batch = page ?? [];
+        rows.push(...batch);
+        if (batch.length < 500) break;
       }
       if (name === "contacts_search") {
         const q = String(args.query ?? "").trim().toLocaleLowerCase();
