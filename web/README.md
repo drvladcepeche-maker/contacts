@@ -1,6 +1,6 @@
 # Мои контакты — веб-интерфейс
 
-Mobile-first browser UI for viewing and searching cached contacts from the existing Supabase MCP endpoint. It also supports queuing create, update, delete and merge requests. Every queued change must be confirmed on the Android phone before it is applied.
+Mobile-first browser UI for viewing and searching cached contacts from the existing Supabase MCP endpoint. It also supports queuing create, update, delete and merge requests. Every queued change must be confirmed on the Android phone before it is applied. Hosted version: https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-web
 
 ## Local development
 
