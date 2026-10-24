@@ -118,9 +118,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        stopService(Intent(this, BridgeNotificationService::class.java))
+        // The foreground service is the sole command poller. Do not stop it or
+        // compete with it by claiming commands directly from the activity.
         drainBridgeQueue()
-        startBridgePolling()
     }
 
     override fun onPause() {
@@ -141,34 +141,16 @@ class MainActivity : Activity() {
         val pending = try {
             org.json.JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
         } catch (_: Exception) { org.json.JSONArray() }
-        // Clear before handling to prevent replay if a dialog pauses the activity again.
-        prefs.edit().putString(BridgeNotificationService.KEY_PENDING, "[]").apply()
+        // Keep each command persisted until the server confirms completion.
+        // This prevents losing a claimed command if the activity is paused or recreated.
         for (i in 0 until pending.length()) {
             pending.optJSONObject(i)?.let { handleBridgeCommand(it) }
         }
     }
 
     private fun startBridgePolling() {
-        if (bridgePolling || bridge.token().isBlank()) return
-        bridgePolling = true
-        val task = object : Runnable {
-            override fun run() {
-                if (!bridgePolling || isFinishing) return
-                bg {
-                    try {
-                        val commands = bridge.poll()
-                        for (i in 0 until commands.length()) {
-                            val command = commands.optJSONObject(i) ?: continue
-                            handleBridgeCommand(command)
-                        }
-                    } catch (_: Exception) { /* сеть может быть временно недоступна */ }
-                    runOnUiThread {
-                        if (bridgePolling) bridgeHandler.postDelayed(this, 15000)
-                    }
-                }
-            }
-        }
-        bridgeHandler.post(task)
+        // Command polling is owned by BridgeNotificationService to avoid races
+        // where the activity claims a command but does not persist it locally.
     }
 
     private fun bridgeDialog() {
@@ -214,6 +196,27 @@ class MainActivity : Activity() {
     private fun contactJson(c: Contact): JSONObject = JSONObject()
         .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
 
+    private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
+        bg {
+            try {
+                bridge.complete(id, result, error)
+                val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
+                val current = try {
+                    JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
+                } catch (_: Exception) { JSONArray() }
+                val remaining = JSONArray()
+                for (i in 0 until current.length()) {
+                    val item = current.optJSONObject(i) ?: continue
+                    if (item.optString("id") != id) remaining.put(item)
+                }
+                prefs.edit().putString(BridgeNotificationService.KEY_PENDING, remaining.toString()).commit()
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Command $id could not be completed; it remains queued", e)
+                runOnUiThread { toast("Команда сохранена для повтора: ${e.message}") }
+            }
+        }
+    }
+
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
         val action = command.optString("action")
@@ -228,7 +231,7 @@ class MainActivity : Activity() {
                 }.take(limit)
                 val arr = JSONArray()
                 rows.forEach { arr.put(contactJson(it)) }
-                bg { try { bridge.complete(id, JSONObject().put("contacts", arr).put("count", rows.size)) } catch (_: Exception) {} }
+                bg { try { completeBridgeCommand(id, JSONObject().put("contacts", arr).put("count", rows.size)) } catch (_: Exception) {} }
             }
             "upsert_contact" -> {
                 runOnUiThread {
@@ -236,7 +239,7 @@ class MainActivity : Activity() {
                     val name = payload.optString("name").trim()
                     val phone = payload.optString("phone").trim()
                     if (name.isBlank()) {
-                        bg { try { bridge.complete(id, error = "Поле name обязательно") } catch (_: Exception) {} }
+                        bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
                         AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
                             .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
@@ -245,12 +248,12 @@ class MainActivity : Activity() {
                                     try {
                                         if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
                                         val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
-                                        bridge.complete(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
+                                        completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
-                                    } catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка записи") } catch (_: Exception) {} }
+                                    } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка записи") } catch (_: Exception) {} }
                                 }
                             }
-                            .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                            .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                             .show()
                     }
                 }
@@ -259,14 +262,14 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     val contactId = payload.optLong("id", -1)
                     val c = repo.loadAll().firstOrNull { it.id == contactId }
-                    if (c == null) bg { try { bridge.complete(id, error = "Контакт не найден") } catch (_: Exception) {} }
+                    if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
                             bg { try { repo.delete(c.id); bridge.complete(id); runOnUiThread { refresh(); toast("Контакт удалён") } }
-                                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка удаления") } catch (_: Exception) {} } }
+                                catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка удаления") } catch (_: Exception) {} } }
                         }
-                        .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
                 }
             }
@@ -276,22 +279,22 @@ class MainActivity : Activity() {
                     val group = (0 until ids.length()).mapNotNull { ix ->
                         val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
                     }.distinctBy { it.id }
-                    if (group.size < 2) bg { try { bridge.complete(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
+                    if (group.size < 2) bg { try { completeBridgeCommand(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
                             bg { try { repo.merge(group); bridge.complete(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
-                                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
+                                catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
-                        .setNegativeButton("Отклонить") { _, _ -> bg { try { bridge.complete(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
                 }
             }
             "sync_contacts" -> bg {
-                try { val n = bridge.sync(repo.loadAll()); bridge.complete(id, JSONObject().put("synced", n)) }
-                catch (e: Exception) { try { bridge.complete(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
+                try { val n = bridge.sync(repo.loadAll()); completeBridgeCommand(id, JSONObject().put("synced", n)) }
+                catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
             }
-            else -> bg { try { bridge.complete(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
+            else -> bg { try { completeBridgeCommand(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
         }
     }
 
