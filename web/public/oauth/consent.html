@@ -75,6 +75,13 @@ function load(){
     if(authDetails){show('consent');return}
     const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if(error) throw error;
+    // Supabase returns OAuthRedirect when the user has already granted consent.
+    // Redirect immediately instead of treating it as authorization details and
+    // retrying the same one-time authorization request (which then becomes stale).
+    if(data && !('authorization_id' in data)){
+      await redirectResult({data});
+      return;
+    }
     authDetails=data;
     $('client').textContent=safeText(data?.client?.name || data?.client_name || data?.application_name);
     $('details').textContent='Запрошенные разрешения: '+safeText(data?.scope || data?.scopes?.join?.(', '));
