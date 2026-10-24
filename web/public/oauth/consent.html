@@ -59,6 +59,7 @@ async function redirectResult(result){
   location.assign(url);
 }
 let loadPromise;
+let authorizationAttempted = false;
 function load(){
   // Initial page load and SIGNED_IN can fire together. Fetching the same
   // authorization twice consumes the one-time request and makes the other
@@ -73,6 +74,10 @@ function load(){
     // After a successful read, SIGNED_IN may fire again when the email link is
     // consumed; do not fetch the same authorization ID a second time.
     if(authDetails){show('consent');return}
+    // Supabase authorization requests are one-time. A SIGNED_IN event can fire
+    // after the first attempt has already failed; never consume the same ID again.
+    if(authorizationAttempted){throw new Error('Этот запрос авторизации уже был обработан или истёк. Закройте окно и заново подключите сервис из ChatGPT.');}
+    authorizationAttempted=true;
     const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if(error) throw error;
     // Supabase returns OAuthRedirect when the user has already granted consent.
