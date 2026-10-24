@@ -26,7 +26,7 @@
   <section id="login" hidden>
     <div class="notice">Войдите в свою учётную запись. Ссылка для входа будет отправлена на почту.</div>
     <label for="email">Электронная почта</label>
-    <input id="email" type="email" autocomplete="email" value="umutdoruk528@gmail.com" placeholder="you@example.com" required>
+    <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
     <button id="send">Отправить ссылку для входа</button>
   </section>
   <section id="consent" hidden>
@@ -109,7 +109,7 @@ $('approve').addEventListener('click',async()=>{
 });
 $('switch').addEventListener('click',async()=>{
   $('switch').disabled=true;status('Завершаем текущую сессию…');
-  try{const {error}=await supabase.auth.signOut();if(error)throw error;show('login');$('email').value='umutdoruk528@gmail.com';status('Введите адрес нужного аккаунта. Ссылка для входа придёт на почту.');}
+  try{const {error}=await supabase.auth.signOut();if(error)throw error;show('login');$('email').value='';status('Введите адрес нужного аккаунта. Ссылка для входа придёт на почту.');}
   catch(e){status(e?.message||'Не удалось сменить аккаунт.',true)}
   finally{$('switch').disabled=false}
 });
