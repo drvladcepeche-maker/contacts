@@ -124,6 +124,12 @@ class MainActivity : Activity() {
         drainBridgeQueue()
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent != null) setIntent(intent)
+        drainBridgeQueue()
+    }
+
     override fun onPause() {
         bridgePolling = false
         bridgeHandler.removeCallbacksAndMessages(null)
