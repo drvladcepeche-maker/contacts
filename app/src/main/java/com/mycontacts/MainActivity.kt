@@ -30,7 +30,7 @@ class MainActivity : Activity() {
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
     private val activeCommandIds = HashSet<String>()
-    private val queueLock = Any()
+
     private val handlingBridgeIds = HashSet<String>()
     private lateinit var list: ListView
     private lateinit var search: EditText
@@ -162,7 +162,7 @@ class MainActivity : Activity() {
         val id = command.optString("id")
         if (id.isBlank()) throw IllegalArgumentException("Claimed command has no id")
         val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
-        synchronized(queueLock) {
+        synchronized(BridgeNotificationService.QUEUE_LOCK) {
             val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) } catch (_: Exception) { JSONArray() }
             for (i in 0 until pending.length()) if (pending.optJSONObject(i)?.optString("id") == id) return
             pending.put(command)
@@ -214,8 +214,6 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for retry/review", e)
             throw e
-        } finally {
-            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
         }
     }
 
@@ -243,7 +241,7 @@ class MainActivity : Activity() {
                         val n = bridge.sync(repo.loadAll())
                         runOnUiThread {
                             toast("Синхронизировано контактов: $n")
-                            startBridgePolling()
+                            startBridgeService()
                         }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
                 }
@@ -261,29 +259,6 @@ class MainActivity : Activity() {
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
         .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
-
-    private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
-        bg {
-            try {
-                bridge.complete(id, result, error)
-                synchronized(handlingBridgeIds) { handlingBridgeIds.remove(id) }
-                val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
-                val current = try {
-                    JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
-                } catch (_: Exception) { JSONArray() }
-                val remaining = JSONArray()
-                for (i in 0 until current.length()) {
-                    val item = current.optJSONObject(i) ?: continue
-                    if (item.optString("id") != id) remaining.put(item)
-                }
-                prefs.edit().putString(BridgeNotificationService.KEY_PENDING, remaining.toString()).commit()
-            } catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Command $id could not be completed; it remains queued", e)
-                synchronized(handlingBridgeIds) { handlingBridgeIds.remove(id) }
-                runOnUiThread { toast("Команда сохранена для повтора: ${e.message}") }
-            }
-        }
-    }
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
