@@ -303,22 +303,22 @@ class ContactRepo(private val cr: ContentResolver) {
      * тип MIME, значения DATA1..DATA15 и аккаунт исходного RawContact.
      */
     fun toFullFieldsCsv(): String {
+        data class AccountInfo(val name: String?, val type: String?)
+        val accountByRawId = LinkedHashMap<Long, AccountInfo>()
+        cr.query(CC.RawContacts.CONTENT_URI,
+            arrayOf(CC.RawContacts._ID, CC.RawContacts.ACCOUNT_NAME,
+                CC.RawContacts.ACCOUNT_TYPE, CC.RawContacts.DELETED), null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                if (c.getInt(3) != 0) continue
+                accountByRawId[c.getLong(0)] = AccountInfo(c.getString(1), c.getString(2))
+            }
+        } ?: throw IllegalStateException("Android не предоставил список исходных контактов")
+
         val contactNames = HashMap<Long, String>()
         cr.query(CC.Contacts.CONTENT_URI,
             arrayOf(CC.Contacts._ID, CC.Contacts.DISPLAY_NAME_PRIMARY), null, null, null)?.use { c ->
             while (c.moveToNext()) contactNames[c.getLong(0)] = c.getString(1) ?: ""
-        }
-
-        data class AccountInfo(val name: String?, val type: String?)
-        val accountByRawId = HashMap<Long, AccountInfo>()
-        cr.query(CC.RawContacts.CONTENT_URI,
-            arrayOf(CC.RawContacts._ID, CC.RawContacts.CONTACT_ID, CC.RawContacts.ACCOUNT_NAME,
-                CC.RawContacts.ACCOUNT_TYPE, CC.RawContacts.DELETED), null, null, null)?.use { c ->
-            while (c.moveToNext()) {
-                if (c.getInt(4) != 0) continue
-                accountByRawId[c.getLong(0)] = AccountInfo(c.getString(2), c.getString(3))
-            }
-        }
+        } ?: throw IllegalStateException("Android не предоставил список имён контактов")
 
         val dataColumns = (1..15).map { "data$it" }
         val projection = arrayOf(
@@ -328,26 +328,37 @@ class ContactRepo(private val cr: ContentResolver) {
         val headers = listOf("data_row_id", "contact_id", "raw_contact_id", "display_name",
             "account_name", "account_type", "mimetype") + dataColumns +
             listOf("is_primary", "is_super_primary", "data_version")
-        val sb = StringBuilder(headers.joinToString(";") { q(it) }).append('\n')
-        cr.query(CC.Data.CONTENT_URI, projection, null, null, CC.Data.CONTACT_ID + " ASC, " + CC.Data.RAW_CONTACT_ID + " ASC")?.use { c ->
-            while (c.moveToNext()) {
-                val contactId = c.getLong(1)
-                val rawId = c.getLong(2)
-                val account = accountByRawId[rawId]
-                val values = ArrayList<String>()
-                values.add(c.getString(0) ?: "")
-                values.add(contactId.toString())
-                values.add(rawId.toString())
-                values.add(contactNames[contactId] ?: "")
-                values.add(account?.name ?: "")
-                values.add(account?.type ?: "")
-                values.add(c.getString(3) ?: "")
-                for (column in dataColumns) values.add(c.getString(c.getColumnIndexOrThrow(column)) ?: "")
-                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_PRIMARY)) ?: "")
-                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_SUPER_PRIMARY)) ?: "")
-                values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.DATA_VERSION)) ?: "")
-                sb.append(values.joinToString(";") { q(it) }).append('\n')
-            }
+        val sb = StringBuilder(headers.joinToString(";") { q(it) }).append('\\n')
+        // Query Data in bounded chunks by raw_contact_id. This avoids large provider queries
+        // and avoids sorting on joined contact_id columns in the provider's SQLite query.
+        val rawIds = accountByRawId.keys.toList()
+        for (chunk in rawIds.chunked(250)) {
+            val selection = CC.Data.RAW_CONTACT_ID + " IN (" +
+                chunk.joinToString(",") { "?" } + ")"
+            cr.query(CC.Data.CONTENT_URI, projection, selection,
+                chunk.map { it.toString() }.toTypedArray(), null)?.use { c ->
+                while (c.moveToNext()) {
+                    val contactId = c.getLong(c.getColumnIndexOrThrow(CC.Data.CONTACT_ID))
+                    val rawId = c.getLong(c.getColumnIndexOrThrow(CC.Data.RAW_CONTACT_ID))
+                    val account = accountByRawId[rawId]
+                    val values = ArrayList<String>()
+                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data._ID)) ?: "")
+                    values.add(contactId.toString())
+                    values.add(rawId.toString())
+                    values.add(contactNames[contactId] ?: "")
+                    values.add(account?.name ?: "")
+                    values.add(account?.type ?: "")
+                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.MIMETYPE)) ?: "")
+                    for (column in dataColumns) values.add(c.getString(c.getColumnIndexOrThrow(column)) ?: "")
+                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_PRIMARY)) ?: "")
+                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.IS_SUPER_PRIMARY)) ?: "")
+                    values.add(c.getString(c.getColumnIndexOrThrow(CC.Data.DATA_VERSION)) ?: "")
+                    sb.append(values.joinToString(";") { q(it) }).append('\\n')
+                }
+            } ?: throw IllegalStateException("Android не вернул поля контактов для группы записей")
+        }
+        if (sb.toString().substringAfter('\\n').isBlank()) {
+            throw IllegalStateException("Системная база не вернула ни одной строки данных контактов")
         }
         return sb.toString()
     }
