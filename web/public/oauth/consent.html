@@ -69,6 +69,10 @@ function load(){
     const {data:userData,error:userError}=await supabase.auth.getUser();
     if(userError && userError.name!=='AuthSessionMissingError') console.warn(userError);
     if(!userData?.user){show('login');return}
+    // Authorization details are a one-time Supabase operation in this flow.
+    // After a successful read, SIGNED_IN may fire again when the email link is
+    // consumed; do not fetch the same authorization ID a second time.
+    if(authDetails){show('consent');return}
     const {data,error}=await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if(error) throw error;
     authDetails=data;
