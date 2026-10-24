@@ -45,7 +45,7 @@ class ContactRepo(private val cr: ContentResolver) {
             }
         }
         val telegrams = HashMap<Long, String>()
-        cr.query(Im.CONTENT_URI, arrayOf(Im.CONTACT_ID, Im.DATA, Im.PROTOCOL, Im.CUSTOM_PROTOCOL), null, null, null)?.use { c ->
+        cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data.CONTACT_ID, Im.DATA, Im.PROTOCOL, Im.CUSTOM_PROTOCOL), CC.Data.MIMETYPE + "=?", arrayOf(Im.CONTENT_ITEM_TYPE), null)?.use { c ->
             while (c.moveToNext()) {
                 if (c.getInt(2) == Im.PROTOCOL_CUSTOM && c.getString(3)?.equals("Telegram", ignoreCase = true) == true) {
                     val value = c.getString(1)?.trim().orEmpty()
