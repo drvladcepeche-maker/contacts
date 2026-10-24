@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var bridge: ContactsBridge
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
+    private val handlingBridgeIds = HashSet<String>()
     private lateinit var list: ListView
     private lateinit var search: EditText
     private lateinit var status: TextView
@@ -200,6 +201,7 @@ class MainActivity : Activity() {
         bg {
             try {
                 bridge.complete(id, result, error)
+                synchronized(handlingBridgeIds) { handlingBridgeIds.remove(id) }
                 val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
                 val current = try {
                     JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]"))
@@ -212,6 +214,7 @@ class MainActivity : Activity() {
                 prefs.edit().putString(BridgeNotificationService.KEY_PENDING, remaining.toString()).commit()
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Command $id could not be completed; it remains queued", e)
+                synchronized(handlingBridgeIds) { handlingBridgeIds.remove(id) }
                 runOnUiThread { toast("Команда сохранена для повтора: ${e.message}") }
             }
         }
@@ -219,6 +222,10 @@ class MainActivity : Activity() {
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
+        if (id.isBlank()) return
+        synchronized(handlingBridgeIds) {
+            if (!handlingBridgeIds.add(id)) return
+        }
         val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
         when (action) {
@@ -266,7 +273,7 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
-                            bg { try { repo.delete(c.id); bridge.complete(id); runOnUiThread { refresh(); toast("Контакт удалён") } }
+                            bg { try { repo.delete(c.id); completeBridgeCommand(id); runOnUiThread { refresh(); toast("Контакт удалён") } }
                                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка удаления") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
@@ -283,7 +290,7 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
-                            bg { try { repo.merge(group); bridge.complete(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
+                            bg { try { repo.merge(group); completeBridgeCommand(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
                                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
