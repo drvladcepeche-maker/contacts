@@ -198,26 +198,38 @@ class ContactRepo(private val cr: ContentResolver) {
     }
 
     fun entriesOf(a: Acc): List<RawEntry> {
+        // Account columns belong to RawContacts, not reliably to the Data projection.
+        // Resolve raw-contact IDs first, then fetch only Data rows owned by those IDs.
         val (sel, args) = accSelection(a)
+        val rawIds = ArrayList<Long>()
+        cr.query(CC.RawContacts.CONTENT_URI, arrayOf(CC.RawContacts._ID), sel, args, null)?.use { c ->
+            while (c.moveToNext()) rawIds.add(c.getLong(0))
+        }
+        if (rawIds.isEmpty()) return emptyList()
+
         val names = LinkedHashMap<Long, String>()
         val phones = HashMap<Long, MutableList<Pair<String, Int>>>()
         val emails = HashMap<Long, MutableList<Pair<String, Int>>>()
-        cr.query(CC.Data.CONTENT_URI,
-            arrayOf(CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE, CC.Data.DATA1, CC.Data.DATA2),
-            sel, args, CC.Data.RAW_CONTACT_ID)?.use { c ->
-            while (c.moveToNext()) {
-                val raw = c.getLong(0)
-                names.getOrPut(raw) { "" }
-                val v = c.getString(2) ?: continue
-                val type = c.getInt(3)
-                when (c.getString(1)) {
-                    StructuredName.CONTENT_ITEM_TYPE -> names[raw] = v
-                    Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(raw) { mutableListOf() }.add(v to type)
-                    CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> emails.getOrPut(raw) { mutableListOf() }.add(v to type)
+        for (chunk in rawIds.chunked(400)) {
+            val placeholders = chunk.joinToString(",") { "?" }
+            val dataSel = CC.Data.RAW_CONTACT_ID + " IN (" + placeholders + ")"
+            cr.query(CC.Data.CONTENT_URI,
+                arrayOf(CC.Data.RAW_CONTACT_ID, CC.Data.MIMETYPE, CC.Data.DATA1, CC.Data.DATA2),
+                dataSel, chunk.map { it.toString() }.toTypedArray(), CC.Data.RAW_CONTACT_ID)?.use { c ->
+                while (c.moveToNext()) {
+                    val raw = c.getLong(0)
+                    names.getOrPut(raw) { "" }
+                    val v = c.getString(2) ?: continue
+                    val type = c.getInt(3)
+                    when (c.getString(1)) {
+                        StructuredName.CONTENT_ITEM_TYPE -> names[raw] = v
+                        Phone.CONTENT_ITEM_TYPE -> phones.getOrPut(raw) { mutableListOf() }.add(v to type)
+                        CC.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> emails.getOrPut(raw) { mutableListOf() }.add(v to type)
+                    }
                 }
             }
         }
-        return names.map { (raw, n) -> RawEntry(raw, n, phones[raw] ?: emptyList(), emails[raw] ?: emptyList()) }
+        return rawIds.map { raw -> RawEntry(raw, names[raw] ?: "", phones[raw] ?: emptyList(), emails[raw] ?: emptyList()) }
     }
 
     private fun key(e: RawEntry): String =
