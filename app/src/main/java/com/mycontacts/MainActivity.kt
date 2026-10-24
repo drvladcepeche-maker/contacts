@@ -47,11 +47,11 @@ class MainActivity : Activity() {
         repo = ContactRepo(contentResolver)
         bridge = ContactsBridge(this)
         buildUi()
-        if (hasPerms()) refresh()
-        else requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS), reqPerm)
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 14)
+        if (hasPerms()) {
+            refresh()
+            requestNotificationPermissionIfNeeded()
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS), reqPerm)
         }
     }
 
@@ -61,7 +61,19 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, res: IntArray) {
         if (code == reqPerm) {
-            if (hasPerms()) refresh() else toast("Нужен доступ к контактам")
+            if (hasPerms()) {
+                refresh()
+                requestNotificationPermissionIfNeeded()
+            } else toast("Нужен доступ к контактам")
+        } else if (code == 14) {
+            // Notification permission is optional for contact management.
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 14)
         }
     }
 
