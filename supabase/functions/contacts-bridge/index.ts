@@ -209,8 +209,15 @@ Deno.serve(async (req: Request) => {
     if (!allowed.includes(commandAction)) return json({ error: "Unsupported command_action" }, 400);
     if (!deviceId && body.device_id) deviceId = String(body.device_id);
     if (!deviceId) {
+      // Prefer the device that has checked in most recently. The oldest
+      // registered device may have been replaced and left stale but unrevoked.
       const { data: first } = await supabase.from("contact_bridge_devices")
-        .select("id").is("revoked_at", null).order("created_at", { ascending: true }).limit(1).maybeSingle();
+        .select("id")
+        .is("revoked_at", null)
+        .order("last_seen_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       deviceId = first?.id ?? null;
     }
     if (!deviceId) return json({ error: "No paired device" }, 409);
