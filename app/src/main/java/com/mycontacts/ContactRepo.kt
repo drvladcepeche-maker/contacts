@@ -306,13 +306,14 @@ class ContactRepo(private val cr: ContentResolver) {
 
     fun toXlsx(list: List<Contact>): ByteArray {
         val maxPhones = (list.maxOfOrNull { it.phones.size } ?: 1).coerceIn(1, 20)
-        val header = listOf("№", "Имя") + (1..maxPhones).map { "Телефон $it" }
+        val header = listOf("№", "Имя", "Источник аккаунта") + (1..maxPhones).map { "Телефон $it" }
         val sheet = StringBuilder()
         sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
         sheet.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
         sheet.append("<cols><col min=\"1\" max=\"1\" width=\"6\" customWidth=\"1\"/>")
         sheet.append("<col min=\"2\" max=\"2\" width=\"32\" customWidth=\"1\"/>")
-        sheet.append("<col min=\"3\" max=\"${2 + maxPhones}\" width=\"20\" customWidth=\"1\"/></cols><sheetData>")
+        sheet.append("<col min=\"3\" max=\"3\" width=\"38\" customWidth=\"1\"/>")
+        sheet.append("<col min=\"4\" max=\"${3 + maxPhones}\" width=\"20\" customWidth=\"1\"/></cols><sheetData>")
         fun row(r: Int, cells: List<String>) {
             sheet.append("<row r=\"").append(r).append("\">")
             for ((i, v) in cells.withIndex()) {
@@ -323,7 +324,7 @@ class ContactRepo(private val cr: ContentResolver) {
             sheet.append("</row>")
         }
         row(1, header)
-        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name) + c.phones)
+        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }) + c.phones)
         sheet.append("</sheetData></worksheet>")
 
         val out = ByteArrayOutputStream()
