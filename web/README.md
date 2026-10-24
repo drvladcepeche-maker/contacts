@@ -1,8 +1,8 @@
 # Мои контакты — веб-интерфейс
 
-Небольшой браузерный интерфейс для доступа к кэшу контактов через существующий Supabase MCP endpoint. Android-приложение и его Gradle-сборка не изменяются.
+Mobile-first browser UI for viewing and searching cached contacts from the existing Supabase MCP endpoint.
 
-## Запуск локально
+## Local development
 
 ```sh
 cd web
@@ -10,11 +10,20 @@ npm install
 npm run dev
 ```
 
-## Безопасность и ограничения
+## Build and deployment
 
-- Вводимый Bearer-токен хранится только в памяти вкладки; приложение не пишет его в localStorage, cookies или URL.
-- Не публикуйте токен в исходниках, репозитории или скриншотах.
-- Веб-интерфейс сейчас поддерживает подключение, список устройств, загрузку кэшированных контактов и поиск. Изменение контактов намеренно не включено в эту версию.
-- Данные могут быть устаревшими, если Android-приложение не синхронизировалось.
-- Доступность CORS зависит от настроек Supabase Edge Function. Не ослабляйте аутентификацию ради обхода CORS.
-- Публичный деплой пока не настроен. Перед публикацией добавьте пользовательскую аутентификацию и серверный прокси; не встраивайте административный токен в frontend.
+```sh
+npm run build
+```
+
+Vite outputs a static site into `web/dist`. The GitHub Actions workflow in `.github/workflows/deploy-web.yml` builds and deploys the site when changes are pushed to `free-web-ui`, or on manual workflow dispatch. GitHub Pages must be enabled for the repository with GitHub Actions as the deployment source.
+
+## Security and limitations
+
+- The bearer token is held only in the current page's JavaScript memory; it is not written to localStorage, cookies, URLs, or source files.
+- Do not publish the token in source code, repository files, or screenshots.
+- This version supports connecting, listing paired Android devices, reading cached contacts, and searching. Contact modification is intentionally not exposed in the browser UI yet.
+- Data may be stale if the Android app has not synced recently.
+- The endpoint currently permits CORS requests. Keep bearer-token validation enabled; do not disable authentication to work around connection errors.
+- This is a static browser app, not a ChatGPT MCP entitlement workaround. It does not make custom MCP connections available on the ChatGPT Free plan.
+- Before exposing this UI to other people or adding contact-write features, add an individual sign-in/session model and rate limiting. Never embed a shared administrative token in the frontend.
