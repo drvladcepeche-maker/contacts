@@ -47,7 +47,15 @@ class ContactsBridge(context: Context) {
                 arr.put(JSONObject()
                     .put("id", c.id.toString())
                     .put("name", c.name)
-                    .put("phones", JSONArray(c.phones)))
+                    .put("phones", JSONArray(c.phones))
+                    .put("accounts", JSONArray().apply {
+                        c.accountSources.forEach { account ->
+                            put(JSONObject()
+                                .put("account_name", account.name ?: JSONObject.NULL)
+                                .put("account_type", account.type ?: JSONObject.NULL)
+                                .put("label", account.label))
+                        }
+                    }))
             }
             total += request(JSONObject().put("action", "sync_contacts").put("contacts", arr)).optInt("synced")
         }
