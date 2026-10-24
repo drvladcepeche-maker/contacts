@@ -1,3 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+
 # Telegram MTProto user session contains account authorization secrets
 private/
 *.session

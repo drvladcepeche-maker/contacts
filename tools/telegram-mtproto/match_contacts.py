@@ -30,6 +30,9 @@ def phone_list(value):
     result = []
     for raw in re.split(r"[,\n|]", value or ""):
         digits = re.sub(r"\D", "", raw)
+        # Normalize common Russian domestic notation (8XXXXXXXXXX) to +7.
+        if len(digits) == 11 and digits.startswith("8"):
+            digits = "7" + digits[1:]
         if len(digits) >= 7:
             normalized = "+" + digits
             if normalized not in result:
