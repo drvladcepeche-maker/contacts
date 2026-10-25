@@ -433,7 +433,7 @@ class ContactRepo(private val cr: ContentResolver) {
 
     fun toXlsx(list: List<Contact>): ByteArray {
         val maxPhones = (list.maxOfOrNull { it.phones.size } ?: 1).coerceIn(1, 20)
-        val header = listOf("№", "Имя", "Источник аккаунта", "Telegram / ID") + (1..maxPhones).map { "Телефон $it" }
+        val header = listOf("№", "Имя", "Источник аккаунта", "Telegram ID", "Telegram username") + (1..maxPhones).map { "Телефон $it" }
         val sheet = StringBuilder()
         sheet.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>")
         sheet.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">")
@@ -451,7 +451,12 @@ class ContactRepo(private val cr: ContentResolver) {
             sheet.append("</row>")
         }
         row(1, header)
-        for ((i, c) in list.withIndex()) row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }, c.telegram) + c.phones)
+        for ((i, c) in list.withIndex()) {
+            val tg = c.telegram.trim().removePrefix("https://t.me/").removePrefix("http://t.me/").removePrefix("t.me/")
+            val tgId = tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: ""
+            val tgUsername = tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: ""
+            row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }, tgId, tgUsername) + c.phones)
+        }
         sheet.append("</sheetData></worksheet>")
 
         val out = ByteArrayOutputStream()
@@ -515,8 +520,13 @@ class ContactRepo(private val cr: ContentResolver) {
     }
 
     fun toCsv(list: List<Contact>): String {
-        val sb = StringBuilder("Имя;Телефоны;Telegram / ID\n")
-        for (c in list) sb.append(q(c.name)).append(';').append(q(c.phones.joinToString(","))).append(';').append(q(c.telegram)).append('\n')
+        val sb = StringBuilder("Имя;Телефоны;Telegram ID;Telegram username\n")
+        for (c in list) {
+            val tg = c.telegram.trim().removePrefix("https://t.me/").removePrefix("http://t.me/").removePrefix("t.me/")
+            val tgId = tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: ""
+            val tgUsername = tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: ""
+            sb.append(q(c.name)).append(';').append(q(c.phones.joinToString(", "))).append(';').append(q(tgId)).append(';').append(q(tgUsername)).append('\n')
+        }
         return sb.toString()
     }
 
