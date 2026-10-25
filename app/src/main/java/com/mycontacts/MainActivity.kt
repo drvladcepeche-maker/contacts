@@ -112,7 +112,8 @@ class MainActivity : Activity() {
         row3.addView(btn("Снять") { clearSelection() })
         row3.addView(btn("Удалить выбранные") { deleteSelected() })
         row4.addView(btn("Передать в ChatGPT") { shareWithChatGPT() })
-        row5.addView(btn("Связь с ChatGPT") { bridgeDialog() })
+        row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
+        row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
@@ -254,7 +255,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun bridgeDialog() {
+    private fun bridgeDialog(name: String = "ChatGPT") {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 12, 40, 0) }
         val token = EditText(this).apply {
             hint = "Токен устройства"
@@ -266,8 +267,25 @@ class MainActivity : Activity() {
             text = "После сохранения приложение будет синхронизировать список контактов с защищённым сервером и проверять команды, пока приложение открыто. Изменение и удаление потребуют подтверждения на телефоне."
             setPadding(0, 0, 0, 16)
         }
-        box.addView(info); box.addView(token)
-        AlertDialog.Builder(this).setTitle("Связь с ChatGPT")
+        box.addView(info)
+        if (name == "Claude") {
+            val how = TextView(this).apply {
+                text = "Чтобы Claude видел контакты, добавьте адрес MCP-сервера в Claude: Настройки → Коннекторы → Добавить свой коннектор. " +
+                    "Токен устройства ниже нужен только телефону; доступ самого Claude к серверу настраивается отдельно и сюда не вставляется."
+                setPadding(0, 0, 0, 12)
+            }
+            val copy = android.widget.Button(this).apply {
+                text = "Копировать адрес MCP"
+                setOnClickListener {
+                    val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("MCP", ContactsBridge.MCP_URL))
+                    toast("Адрес MCP скопирован")
+                }
+            }
+            box.addView(how); box.addView(copy)
+        }
+        box.addView(token)
+        AlertDialog.Builder(this).setTitle("Связь с " + name)
             .setView(box)
             .setPositiveButton("Сохранить и синхронизировать") { _, _ ->
                 val value = token.text.toString().trim()
@@ -338,7 +356,7 @@ class MainActivity : Activity() {
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
-                        AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
+                        AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
                             .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {

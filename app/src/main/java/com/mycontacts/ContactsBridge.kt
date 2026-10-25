@@ -9,6 +9,7 @@ import java.net.URL
 class ContactsBridge(context: Context) {
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
+        const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
     }
 
     private val prefs = context.getSharedPreferences("contacts_bridge", Context.MODE_PRIVATE)
