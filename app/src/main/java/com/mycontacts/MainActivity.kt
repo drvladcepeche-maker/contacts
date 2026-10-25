@@ -83,7 +83,7 @@ class MainActivity : Activity() {
 
     private fun buildUi() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 24, 24, 24) }
-        search = EditText(this).apply { hint = "Поиск по имени, номеру или Telegram"; setSingleLine() }
+        search = EditText(this).apply { hint = "Поиск по имени или номеру"; setSingleLine() }
         search.addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(s: Editable?) { applyFilter() }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -106,13 +106,14 @@ class MainActivity : Activity() {
         row2.addView(btn("VCF") { createDoc("contacts.vcf", "text/x-vcard", reqExportVcf) })
         row2.addView(btn("CSV") { createDoc("contacts.csv", "text/csv", reqExportCsv) })
         row2.addView(btn("Полный CSV") { createDoc("contacts_all_fields.csv", "text/csv", reqExportFullCsv) })
-        row2.addView(btn("ChatGPT") { aiDialog() })
+        row2.addView(btn("ChatGPT / Claude") { aiDialog() })
         row3.addView(btn("Excel") { exportXlsxDialog() })
         row3.addView(btn("Выделить всё") { selectAll() })
         row3.addView(btn("Снять") { clearSelection() })
         row3.addView(btn("Удалить выбранные") { deleteSelected() })
         row4.addView(btn("Передать в ChatGPT") { shareWithChatGPT() })
-        row5.addView(btn("Связь с ChatGPT") { bridgeDialog() })
+        row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
+        row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
@@ -254,7 +255,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun bridgeDialog() {
+    private fun bridgeDialog(name: String = "ChatGPT") {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 12, 40, 0) }
         val token = EditText(this).apply {
             hint = "Токен устройства"
@@ -266,8 +267,25 @@ class MainActivity : Activity() {
             text = "После сохранения приложение будет синхронизировать список контактов с защищённым сервером и проверять команды, пока приложение открыто. Изменение и удаление потребуют подтверждения на телефоне."
             setPadding(0, 0, 0, 16)
         }
-        box.addView(info); box.addView(token)
-        AlertDialog.Builder(this).setTitle("Связь с ChatGPT")
+        box.addView(info)
+        if (name == "Claude") {
+            val how = TextView(this).apply {
+                text = "Чтобы Claude видел контакты, добавьте адрес MCP-сервера в Claude: Настройки → Коннекторы → Добавить свой коннектор. " +
+                    "Токен устройства ниже нужен только телефону; доступ самого Claude к серверу настраивается отдельно и сюда не вставляется."
+                setPadding(0, 0, 0, 12)
+            }
+            val copy = android.widget.Button(this).apply {
+                text = "Копировать адрес MCP"
+                setOnClickListener {
+                    val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("MCP", ContactsBridge.MCP_URL))
+                    toast("Адрес MCP скопирован")
+                }
+            }
+            box.addView(how); box.addView(copy)
+        }
+        box.addView(token)
+        AlertDialog.Builder(this).setTitle("Связь с " + name)
             .setView(box)
             .setPositiveButton("Сохранить и синхронизировать") { _, _ ->
                 val value = token.text.toString().trim()
@@ -295,7 +313,7 @@ class MainActivity : Activity() {
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
-        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones)).put("telegram", c.telegram)
+        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
@@ -324,7 +342,7 @@ class MainActivity : Activity() {
                 val limit = payload.optInt("limit", 100).coerceIn(1, 500)
                 val rows = repo.loadAll().filter { c ->
                     action == "list_contacts" || c.name.lowercase().contains(q) ||
-                        c.phones.any { it.contains(q) } || c.telegram.lowercase().contains(q.removePrefix("@"))
+                        c.phones.any { it.contains(q) }
                 }.take(limit)
                 val arr = JSONArray()
                 rows.forEach { arr.put(contactJson(it)) }
@@ -335,16 +353,15 @@ class MainActivity : Activity() {
                     val contactId = payload.optLong("id", -1)
                     val name = payload.optString("name").trim()
                     val phone = payload.optString("phone").trim()
-                    val telegram = payload.optString("telegram").trim()
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
-                        AlertDialog.Builder(this).setTitle("ChatGPT предлагает изменить контакт")
-                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone\nTelegram: $telegram")
+                        AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
+                            .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        if (contactId > 0) repo.update(contactId, name, phone, telegram) else repo.add(name, phone, telegram)
+                                        if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
                                         val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
@@ -406,7 +423,7 @@ class MainActivity : Activity() {
         val q = search.text.toString().trim().lowercase()
         val digits = q.filter { it.isDigit() }
         shown = if (q.isEmpty()) all else all.filter { c ->
-            c.name.lowercase().contains(q) || c.telegram.lowercase().contains(q.removePrefix("@")) ||
+            c.name.lowercase().contains(q) ||
                 (digits.isNotEmpty() && c.phones.any { it.filter { ch -> ch.isDigit() }.contains(digits) })
         }
         updateStatus()
@@ -416,7 +433,7 @@ class MainActivity : Activity() {
                 val c = getItem(position)!!
                 val on = c.id in selected
                 v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
-                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegram.takeIf { it.isNotBlank() }?.let { "Telegram: $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
+                v.findViewById<TextView>(android.R.id.text2).text = c.phones.joinToString(", ")
                 v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }
@@ -488,7 +505,7 @@ class MainActivity : Activity() {
                                 try {
                                     val scoped = repo.entriesOf(acc).map { entry ->
                                         Contact(entry.rawId, entry.name.ifBlank { "(без имени)" },
-                                            entry.phones.map { it.first }.distinct(), listOf(acc), entry.telegram)
+                                            entry.phones.map { it.first }.distinct(), listOf(acc))
                                     }
                                     runOnUiThread {
                                         pendingXlsxExport = scoped
@@ -513,18 +530,15 @@ class MainActivity : Activity() {
         val phone = EditText(this).apply {
             hint = "Телефон"; inputType = InputType.TYPE_CLASS_PHONE; setText(c?.phones?.firstOrNull() ?: "")
         }
-        val telegram = EditText(this).apply {
-            hint = "Telegram username или ID (например @username)"; setSingleLine(); setText(c?.telegram ?: "")
-        }
-        box.addView(name); box.addView(phone); box.addView(telegram)
+        box.addView(name); box.addView(phone)
         AlertDialog.Builder(this).setTitle(if (c == null) "Новый контакт" else "Правка")
             .setView(box)
             .setPositiveButton("Сохранить") { _, _ ->
                 val n = name.text.toString().trim()
                 if (n.isEmpty()) { toast("Введите имя"); return@setPositiveButton }
                 try {
-                    if (c == null) repo.add(n, phone.text.toString().trim(), telegram.text.toString().trim())
-                    else repo.update(c.id, n, phone.text.toString().trim(), telegram.text.toString().trim())
+                    if (c == null) repo.add(n, phone.text.toString().trim())
+                    else repo.update(c.id, n, phone.text.toString().trim())
                 } catch (e: Exception) { toast("Ошибка: ${e.message}") }
                 refresh()
             }
@@ -713,63 +727,83 @@ class MainActivity : Activity() {
 
     private fun aiDialog() {
         val prefs = getSharedPreferences("ai", MODE_PRIVATE)
+        var provider = prefs.getString("provider", Ai.OPENAI) ?: Ai.OPENAI
+        fun keyPref(p: String) = if (p == Ai.CLAUDE) "key_claude" else "key"
+        fun modelPref(p: String) = if (p == Ai.CLAUDE) "model_claude" else "model"
+        fun defModel(p: String) = if (p == Ai.CLAUDE) "claude-haiku-4-5" else "gpt-4o-mini"
+        fun label(p: String) = if (p == Ai.CLAUDE) "Claude" else "ChatGPT"
+
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
+        val group = android.widget.RadioGroup(this).apply { orientation = android.widget.RadioGroup.HORIZONTAL }
+        val rbGpt = android.widget.RadioButton(this).apply { text = "ChatGPT"; id = View.generateViewId() }
+        val rbClaude = android.widget.RadioButton(this).apply { text = "Claude"; id = View.generateViewId() }
+        group.addView(rbGpt); group.addView(rbClaude)
         val key = EditText(this).apply {
-            hint = "OpenAI API-ключ"; setSingleLine()
+            setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(prefs.getString("key", ""))
         }
-        val model = EditText(this).apply { hint = "Модель"; setSingleLine(); setText(prefs.getString("model", "gpt-4o-mini")) }
-        val withData = android.widget.CheckBox(this).apply {
-            text = "Отправить ChatGPT список контактов (имена и номера, до 7000)"
-        }
+        val model = EditText(this).apply { hint = "Модель"; setSingleLine() }
+        val withData = android.widget.CheckBox(this)
         val q = EditText(this).apply { hint = "Вопрос или задача, например: найди контакты, которые похожи на дубликаты" }
-        listOf<View>(key, model, withData, q).forEach { box.addView(it) }
+        fun load() {
+            key.hint = if (provider == Ai.CLAUDE) "Anthropic API-ключ" else "OpenAI API-ключ"
+            key.setText(prefs.getString(keyPref(provider), ""))
+            model.setText(prefs.getString(modelPref(provider), defModel(provider)))
+            withData.text = "Отправить " + label(provider) + " список контактов (имена и номера, до 7000)"
+        }
+        group.setOnCheckedChangeListener { _, id ->
+            provider = if (id == rbClaude.id) Ai.CLAUDE else Ai.OPENAI
+            load()
+        }
+        group.check(if (provider == Ai.CLAUDE) rbClaude.id else rbGpt.id)
+        listOf<View>(group, key, model, withData, q).forEach { box.addView(it) }
         val sv = android.widget.ScrollView(this).apply { addView(box) }
-        AlertDialog.Builder(this).setTitle("ChatGPT")
+        AlertDialog.Builder(this).setTitle("ИИ-помощник")
             .setView(sv)
             .setPositiveButton("Спросить") { _, _ ->
+                val pr = provider
                 val k = key.text.toString().trim()
-                val m = model.text.toString().trim().ifEmpty { "gpt-4o-mini" }
+                val m = model.text.toString().trim().ifEmpty { defModel(pr) }
                 val question = q.text.toString().trim()
                 if (k.isEmpty() || question.isEmpty()) { toast("Нужны ключ и вопрос"); return@setPositiveButton }
-                prefs.edit().putString("key", k).putString("model", m).apply()
+                prefs.edit().putString("provider", pr).putString(keyPref(pr), k).putString(modelPref(pr), m).apply()
                 val ctx = if (withData.isChecked)
                     "\n\nКонтакты:\n" + all.take(7000).joinToString("\n") { it.name + ": " + it.phones.joinToString(", ") }
                 else ""
                 toast("Запрос отправлен…")
                 bg {
-                    val reply = Ai.ask(k, m, "Ты помощник по работе с контактами. Отвечай по-русски, кратко.", question + ctx)
+                    val reply = Ai.ask(k, m, "Ты помощник по работе с контактами. Отвечай по-русски, кратко.", question + ctx, pr)
                     runOnUiThread {
                         val tv = TextView(this).apply { text = reply; setTextIsSelectable(true); setPadding(48, 24, 48, 0) }
-                        AlertDialog.Builder(this).setTitle("Ответ ChatGPT")
+                        AlertDialog.Builder(this).setTitle("Ответ " + label(pr))
                             .setView(android.widget.ScrollView(this).apply { addView(tv) })
                             .setPositiveButton("Закрыть", null).show()
                     }
                 }
             }
             .setNeutralButton("Правки") { _, _ ->
+                val pr = provider
                 val k = key.text.toString().trim()
-                val m = model.text.toString().trim().ifEmpty { "gpt-4o-mini" }
+                val m = model.text.toString().trim().ifEmpty { defModel(pr) }
                 if (k.isEmpty()) { toast("Нужен API-ключ"); return@setNeutralButton }
-                prefs.edit().putString("key", k).putString("model", m).apply()
-                suggestEdits(k, m, q.text.toString().trim())
+                prefs.edit().putString("provider", pr).putString(keyPref(pr), k).putString(modelPref(pr), m).apply()
+                suggestEdits(k, m, q.text.toString().trim(), pr)
             }
             .setNegativeButton("Отмена", null).show()
     }
 
     private data class Proposal(val c: Contact, val name: String, val phone: String)
 
-    private fun suggestEdits(k: String, m: String, wish: String) {
+    private fun suggestEdits(k: String, m: String, wish: String, provider: String = Ai.OPENAI) {
         val data = all.take(7000).joinToString("\n") { it.id.toString() + "|" + it.name + "|" + it.phones.joinToString(",") }
         val system = "Ты помощник по приведению контактов в порядок. Верни ТОЛЬКО JSON без пояснений и без markdown: " +
             "{\"edits\":[{\"id\":число,\"name\":\"новое имя\",\"phone\":\"новый номер\"}]}. " +
             "Включай только контакты, которые нужно изменить. Ничего не выдумывай: исправляй регистр, лишние пробелы, " +
             "опечатки в очевидных случаях и формат номера. Если менять нечего, верни {\"edits\":[]}."
         val user = (if (wish.isNotEmpty()) "Пожелание: " + wish + "\n\n" else "") + "Формат строк: id|имя|телефоны\n" + data
-        toast("Запрос отправлен, контакты уходят в OpenAI…")
+        toast("Запрос отправлен, контакты уходят в " + (if (provider == Ai.CLAUDE) "Anthropic" else "OpenAI") + "…")
         bg {
-            val reply = Ai.ask(k, m, system, user)
+            val reply = Ai.ask(k, m, system, user, provider)
             val json = reply.substring(reply.indexOf('{'), reply.lastIndexOf('}') + 1)
             val arr = org.json.JSONObject(json).getJSONArray("edits")
             val byId = all.associateBy { it.id }
@@ -789,7 +823,7 @@ class MainActivity : Activity() {
     }
 
     private fun showProposals(props: List<Proposal>) {
-        if (props.isEmpty()) { toast("ChatGPT не предложил правок"); return }
+        if (props.isEmpty()) { toast("ИИ не предложил правок"); return }
         val checked = BooleanArray(props.size) { true }
         val labels = props.map {
             it.c.name + " " + (it.c.phones.firstOrNull() ?: "") + "\n→ " + it.name + " " + it.phone
