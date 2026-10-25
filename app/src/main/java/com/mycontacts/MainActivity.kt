@@ -730,7 +730,7 @@ class MainActivity : Activity() {
         var provider = prefs.getString("provider", Ai.OPENAI) ?: Ai.OPENAI
         fun keyPref(p: String) = if (p == Ai.CLAUDE) "key_claude" else "key"
         fun modelPref(p: String) = if (p == Ai.CLAUDE) "model_claude" else "model"
-        fun defModel(p: String) = if (p == Ai.CLAUDE) "claude-haiku-5-5" else "gpt-4o-mini"
+        fun defModel(p: String) = if (p == Ai.CLAUDE) "claude-haiku-4-5" else "gpt-4o-mini"
         fun label(p: String) = if (p == Ai.CLAUDE) "Claude" else "ChatGPT"
 
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 16, 48, 0) }
