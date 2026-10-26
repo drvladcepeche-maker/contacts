@@ -108,6 +108,42 @@ object AppLog {
         return "Download/MyContacts/$name"
     }
 
+
+    fun exportTermuxSetupScript(context: Context): String {
+        val script = """#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+pkg update -y
+pkg install -y git nano
+if [ -d "\$HOME/contacts/.git" ]; then
+  git -C "\$HOME/contacts" pull --ff-only
+else
+  git clone https://github.com/drvladcepeche-maker/contacts.git "\$HOME/contacts"
+fi
+echo
+echo "Исходники доступны: \$HOME/contacts"
+echo "Редактируйте Kotlin-файлы в app/src/main/java/com/mycontacts/"
+echo "Изменения APK собираются через GitHub Actions после отправки commit в GitHub."
+"""
+        val name = "MyContacts-Termux-setup.sh"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/x-shellscript")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/MyContacts")
+            }
+            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Android не создал setup-скрипт")
+            context.contentResolver.openOutputStream(uri, "w")?.use { it.write(script.toByteArray(Charsets.UTF_8)) }
+                ?: throw IllegalStateException("Не удалось записать setup-скрипт")
+        } else {
+            @Suppress("DEPRECATION")
+            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "MyContacts")
+            if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("Не удалось создать папку")
+            File(directory, name).writeText(script, Charsets.UTF_8)
+        }
+        return "Download/MyContacts/$name"
+    }
+
     private fun write(context: Context, level: String, message: String, error: Throwable?) {
         synchronized(lock) {
             try {
