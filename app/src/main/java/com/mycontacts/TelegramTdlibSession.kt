@@ -110,7 +110,6 @@ class TelegramTdlibSession(
                 p.systemLanguageCode = "ru"
                 p.deviceModel = Build.MODEL ?: "Android"
                 p.applicationVersion = "0.1"
-                p.enableStorageOptimizer = true
                 send(p)
             }
             is TdApi.AuthorizationStateWaitPhoneNumber -> onStatus("Нужен номер телефона Telegram.")
@@ -178,7 +177,7 @@ class TelegramTdlibSession(
         }
     }
 
-    fun importPhoneBatch(contacts: Array<TdApi.Contact>, callback: (LongArray?, String?) -> Unit) {
+    fun importPhoneBatch(contacts: Array<TdApi.ImportedContact>, callback: (LongArray?, String?) -> Unit) {
         if (!ready.get()) {
             callback(null, "Сначала авторизуйтесь в Telegram")
             return
