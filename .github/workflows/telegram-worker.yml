@@ -27,3 +27,4 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run build
+      - run: docker build -t contacts-telegram-worker .
