@@ -3,6 +3,14 @@ package com.mycontacts
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.spec.GCMParameterSpec
+import java.security.KeyStore
+import java.io.ByteArrayOutputStream
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
 import java.io.File
@@ -24,18 +32,50 @@ class TelegramTdlibSession(
     @Volatile private var apiId: Int = 0
     @Volatile private var apiHash: String = ""
 
+    private fun keystoreKey(): java.security.Key {
+        val alias = "moi_contacts_tdlib_aes"
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (!store.containsAlias(alias)) {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            generator.init(KeyGenParameterSpec.Builder(
+                alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true).build())
+            generator.generateKey()
+        }
+        return store.getKey(alias, null)
+    }
+
+    private fun seal(value: String): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, keystoreKey())
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        val packed = ByteArrayOutputStream().apply { write(cipher.iv); write(encrypted) }.toByteArray()
+        return Base64.encodeToString(packed, Base64.NO_WRAP)
+    }
+
+    private fun unseal(value: String): String {
+        if (value.isBlank()) return ""
+        val packed = Base64.decode(value, Base64.NO_WRAP)
+        require(packed.size > 12) { "Повреждены локальные данные Telegram" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, keystoreKey(), GCMParameterSpec(128, packed.copyOfRange(0, 12)))
+        return cipher.doFinal(packed.copyOfRange(12, packed.size)).toString(Charsets.UTF_8)
+    }
+
     fun start(id: Int, hash: String) {
         require(id > 0 && hash.isNotBlank()) { "Укажите Telegram api_id и api_hash" }
         apiId = id
         apiHash = hash.trim()
-        prefs.edit().putInt("api_id", id).putString("api_hash", apiHash).apply()
+        prefs.edit().putInt("api_id", id).putString("api_hash_enc", seal(apiHash)).apply()
         onStatus("Подключение к Telegram…")
         client = Client.create({ result -> handle(result) }, null, null)
     }
 
     fun resumeIfConfigured(): Boolean {
         val id = prefs.getInt("api_id", 0)
-        val hash = prefs.getString("api_hash", "").orEmpty()
+        val hash = try { unseal(prefs.getString("api_hash_enc", "").orEmpty()) } catch (_: Exception) { "" }
         if (id <= 0 || hash.isBlank()) return false
         start(id, hash)
         return true
@@ -53,8 +93,8 @@ class TelegramTdlibSession(
         when (state) {
             is TdApi.AuthorizationStateWaitTdlibParameters -> {
                 val dir = File(app.filesDir, "telegram-tdlib").apply { mkdirs() }
-                val key = prefs.getString("database_key", null) ?: java.util.UUID.randomUUID().toString().also {
-                    prefs.edit().putString("database_key", it).commit()
+                val key = try { unseal(prefs.getString("database_key_enc", "").orEmpty()) } catch (_: Exception) { "" }.ifBlank {
+                    java.util.UUID.randomUUID().toString().also { prefs.edit().putString("database_key_enc", seal(it)).commit() }
                 }
                 val p = TdApi.SetTdlibParameters()
                 p.databaseDirectory = dir.absolutePath
