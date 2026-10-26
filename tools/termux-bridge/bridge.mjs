@@ -229,9 +229,9 @@ async function execute(job) {
     case "git_fetch_main":
       return await run("git", ["fetch", "origin", "main"], 120000);
     case "node_check_bridge":
-      return await run("node", ["--check", resolve(WORKSPACE, "tools/termux-bridge/bridge.mjs")]);
+      return await run("node", ["--check", resolve(homedir(), "termux-bridge-live", "tools", "termux-bridge", "bridge.mjs")]);
     case "node_check_apk_inspect":
-      return await run("node", ["--check", resolve(WORKSPACE, "tools/termux-bridge/apk-inspect.mjs")]);
+      return await run("node", ["--check", resolve(homedir(), "termux-bridge-live", "tools", "termux-bridge", "apk-inspect.mjs")]);
     case "apk_inspect":
       return await inspectApk();
     case "git_status":
