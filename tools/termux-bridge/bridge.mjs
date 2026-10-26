@@ -99,7 +99,7 @@ async function requestViaCurl(body) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const transientTlsFailure =
-        /Bridge curl fallback failed \\(exit 35\\)/i.test(message) ||
+        /Bridge curl fallback failed \(exit 35\)/i.test(message) ||
         /TLS connect error|unexpected eof while reading/i.test(message);
       if (!transientTlsFailure || attempt >= 2) throw error;
       const delayMs = 750 * (2 ** attempt);
