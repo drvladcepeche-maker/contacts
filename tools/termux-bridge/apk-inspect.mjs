@@ -291,7 +291,7 @@ export async function inspectApk() {
     ...foundMarkers.sort(),
     "",
     "IL2CPP / GAME-PROTOCOL SIGNALS",
-    ...[...new Set(strings.filter(s => /il2cpp|global-metadata|protobuf|messagepack|websocket|gateway|heartbeat|login|session|request|response|battle|march|alliance|player|serverlist|server_list|https?:\/\//i.test(s)).map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]").replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]").slice(0, 300))].sort().slice(0, 100),
+    ...[...new Set(strings.filter(s => /il2cpp|global-metadata|protobuf|messagepack|websocket|gateway|heartbeat|login|session|request|response|battle|march|alliance|player|serverlist|server_list|https?:\/\//i.test(s)).map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]").replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]").slice(0, 300)))].sort().slice(0, 100),
     "",
     "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. This pass prioritizes global-metadata.dat and libil2cpp.so if they exist in the scanned APKs. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed. No live service calls are made."
   ].join("\n").slice(0, MAX_REPORT);
