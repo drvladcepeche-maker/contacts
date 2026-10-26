@@ -86,7 +86,7 @@ export async function inspectApk() {
   const apk = await readFile(APK_PATH);
   const entries = zipEntries(apk);
   const targets = entries.filter(e =>
-    /^classes(?:\\d+)?\\.dex$/.test(e.name) ||
+    /^classes(?:\d+)?\.dex$/.test(e.name) ||
     e.name === "AndroidManifest.xml" ||
     e.name === "resources.arsc"
   );
@@ -105,10 +105,10 @@ export async function inspectApk() {
   }
   const all = strings.join("\n");
   const urls = new Set();
-  const urlRx = /https?:\\/\\/[^\\s"'<>\\u0000-\\u001f]{4,500}/gi;
+  const urlRx = /https?:\/\/[^\s"'<>\u0000-\u001f]{4,500}/gi;
   for (const match of all.matchAll(urlRx)) urls.add(scrubUrl(match[0]));
   const domains = new Set();
-  const domainRx = /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:com|net|org|io|co|cn|ru|app|dev|google|googleapis|amazonaws|cloudfront|facebook|games|xyz|me|info|tech|top)(?::\\d{1,5})?/gi;
+  const domainRx = /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|co|cn|ru|app|dev|google|googleapis|amazonaws|cloudfront|facebook|games|xyz|me|info|tech|top)(?::\d{1,5})?/gi;
   for (const match of all.matchAll(domainRx)) domains.add(match[0].toLowerCase());
   const markers = [
     "okhttp", "retrofit", "volley", "cronet", "grpc", "websocket", "socket.io",
