@@ -26,6 +26,7 @@ jobs:
         run: |
           node --check tools/termux-bridge/setup.mjs
           node --check tools/termux-bridge/bridge.mjs
+          node --check tools/termux-bridge/apk-inspect.mjs
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
