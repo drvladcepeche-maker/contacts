@@ -415,7 +415,7 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
-                            bg { val target = repo.accounts().map { it.first }.firstOrNull { a ->
+                            bg { try { val target = repo.accounts().map { it.first }.firstOrNull { a ->
                                     accountFlag(a, "enabled") && accountFlag(a, "write") && group.all { a in it.accountSources }
                                 } ?: throw IllegalStateException("Для объединения включите запись в одном аккаунте, содержащем все выбранные контакты")
                                 repo.mergeInAccount(group, target)
