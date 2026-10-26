@@ -45,7 +45,7 @@ async function requestViaCurl(body) {
     `data = ${curlConfigQuote(payload)}`,
     `max-time = "20"`,
     `write-out = ${curlConfigQuote("\\n" + marker + "%{http_code}")}`,
-  ].join("\\n") + "\\n";
+  ].join("\n") + "\n";
 
   const result = await new Promise((resolveRun) => {
     const child = spawn("curl", ["--silent", "--show-error", "--config", "-"], {
