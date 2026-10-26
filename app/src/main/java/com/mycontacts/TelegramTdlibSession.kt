@@ -94,12 +94,13 @@ class TelegramTdlibSession(
             is TdApi.AuthorizationStateWaitTdlibParameters -> {
                 val dir = File(app.filesDir, "telegram-tdlib").apply { mkdirs() }
                 val key = try { unseal(prefs.getString("database_key_enc", "").orEmpty()) } catch (_: Exception) { "" }.ifBlank {
-                    java.util.UUID.randomUUID().toString().also { prefs.edit().putString("database_key_enc", seal(it)).commit() }
+                    Base64.encodeToString(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }, Base64.NO_WRAP)
+                        .also { prefs.edit().putString("database_key_enc", seal(it)).commit() }
                 }
                 val p = TdApi.SetTdlibParameters()
                 p.databaseDirectory = dir.absolutePath
                 p.useTestDc = false
-                p.databaseEncryptionKey = key.toByteArray(Charsets.UTF_8)
+                p.databaseEncryptionKey = Base64.decode(key, Base64.NO_WRAP)
                 p.useFileDatabase = false
                 p.useChatInfoDatabase = false
                 p.useMessageDatabase = false
