@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { TelegramClient, Api } from "telegram";
-import { StringSession } from "telegram/sessions";
+import { StringSession } from "telegram/sessions/index.js";
+import bigInt from "big-integer";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 type PhoneCandidate = { contact_id?: string | number; name?: string; phone: string };
@@ -57,17 +58,17 @@ async function processJob(job: Job) {
   for (let start = 0; start < candidates.length; start += 20) {
     if (stopping) break;
     const batch = candidates.slice(start, start + 20);
-    const valid = batch.map((candidate) => ({ candidate, phone: phoneValue(String(candidate.phone ?? "")) }));
+    const valid = batch.map((candidate, batchIndex) => ({ candidate, phone: phoneValue(String(candidate.phone ?? "")), clientId: bigInt(start + batchIndex + 1) }));
     for (const item of valid.filter((x) => !x.phone)) {
       results.push({ contact_id: item.candidate.contact_id, phone: String(item.candidate.phone ?? ""), telegram_id: null, username: null, status: "error", error: "Phone must be international format +countrycode..." });
       checked++;
     }
-    const importable = valid.filter((x): x is { candidate: PhoneCandidate; phone: string } => Boolean(x.phone));
+    const importable = valid.filter((x): x is { candidate: PhoneCandidate; phone: string; clientId: bigInt.BigInteger } => Boolean(x.phone));
     if (importable.length) {
       try {
         const imported = await telegram!.invoke(new Api.contacts.ImportContacts({
-          contacts: importable.map(({ candidate, phone }, index) => new Api.InputPhoneContact({
-            clientId: BigInt(start + index + 1),
+          contacts: importable.map(({ candidate, phone, clientId }) => new Api.InputPhoneContact({
+            clientId,
             phone,
             firstName: String(candidate.name || "Contact").slice(0, 64),
             lastName: "",
@@ -83,7 +84,7 @@ async function processJob(job: Job) {
         }
         for (let i = 0; i < importable.length; i++) {
           const { candidate, phone } = importable[i];
-          const match = imported.imported.find((x) => String(x.clientId) === String(start + i + 1));
+          const match = imported.imported.find((x) => String(x.clientId) === String(importable[i].clientId));
           const user = match ? users.get(String(match.userId)) : undefined;
           const userId = match ? String(match.userId) : null;
           const username = user && "username" in user && user.username ? String(user.username) : null;
