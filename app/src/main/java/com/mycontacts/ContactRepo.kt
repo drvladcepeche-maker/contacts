@@ -242,6 +242,22 @@ class ContactRepo(private val cr: ContentResolver) {
         })
     }
 
+
+    /** Объединяет только raw-контакты выбранного аккаунта. */
+    fun mergeInAccount(group: List<Contact>, account: Acc) {
+        val raws = group.flatMap { rawIdsForAccount(it.id, account) }.distinct()
+        if (raws.size < 2) throw IllegalStateException("В выбранном аккаунте недостаточно исходных записей для объединения")
+        val ops = ArrayList<ContentProviderOperation>()
+        for (i in 1 until raws.size) {
+            ops.add(ContentProviderOperation.newUpdate(CC.AggregationExceptions.CONTENT_URI)
+                .withValue(CC.AggregationExceptions.RAW_CONTACT_ID1, raws[0])
+                .withValue(CC.AggregationExceptions.RAW_CONTACT_ID2, raws[i])
+                .withValue(CC.AggregationExceptions.TYPE, CC.AggregationExceptions.TYPE_KEEP_TOGETHER)
+                .build())
+        }
+        cr.applyBatch(CC.AUTHORITY, ops)
+    }
+
     fun deleteFromAccount(contactId: Long, account: Acc) {
         val ids = rawIdsForAccount(contactId, account)
         if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
