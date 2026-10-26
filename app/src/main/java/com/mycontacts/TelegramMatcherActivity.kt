@@ -1,11 +1,12 @@
 package com.mycontacts
 
 import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.Manifest
+import android.os.Build
 import android.app.AlertDialog
-import android.app.ProgressDialog
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
 import android.view.ViewGroup
 import android.widget.Button
@@ -21,9 +22,7 @@ class TelegramMatcherActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var authButton: Button
     private lateinit var matchButton: Button
-    private val handler = Handler(Looper.getMainLooper())
     private var lastPrompt = ""
-    private var isMatching = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -141,7 +140,7 @@ class TelegramMatcherActivity : Activity() {
     }
 
     private fun confirmMatch() {
-        if (!session.isReady() || isMatching) return
+        if (!session.isReady()) return
         val contacts = repo.loadAll()
         val candidates = contacts.mapNotNull { contact ->
             val phone = contact.phones.firstOrNull { it.trim().startsWith("+") }
@@ -156,7 +155,7 @@ class TelegramMatcherActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Передать номера Telegram?")
             .setMessage("Будет передано в Telegram до ${candidates.size} номеров из контактов для сопоставления. Telegram может сохранить их в списке контактов аккаунта. Номера без международного префикса пропущены: $skipped. Продолжить?")
-            .setPositiveButton("Передать и сопоставить") { _, _ -> runMatching(candidates, skipped) }
+            .setPositiveButton("Передать и сопоставить") { _, _ -> requestNotificationPermissionAndStart() }
             .setNegativeButton("Отмена", null)
             .show()
     }
@@ -169,68 +168,40 @@ class TelegramMatcherActivity : Activity() {
         return if (trimmed.startsWith("+") && digits.length in 8..15) "+$digits" else ""
     }
 
-    private fun runMatching(candidates: List<Candidate>, skipped: Int) {
-        if (isMatching) return
-        isMatching = true
-        matchButton.isEnabled = false
-        var index = 0
-        var matched = 0
-        var checked = 0
-        var errors = 0
-        val progress = ProgressDialog(this).apply {
-            setTitle("Сопоставление Telegram")
-            setMessage("Подготовка…")
-            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
-            max = candidates.size
-            setCancelable(false)
-            show()
+    private fun requestNotificationPermissionAndStart() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+            return
         }
-        fun nextBatch() {
-            if (index >= candidates.size) {
-                progress.dismiss()
-                isMatching = false
-                matchButton.isEnabled = true
-                status.text = "Готово. Проверено: $checked; найдено ID: $matched; ошибок: $errors; пропущено номеров: $skipped."
-                AlertDialog.Builder(this).setTitle("Сопоставление завершено")
-                    .setMessage(status.text).setPositiveButton("ОК", null).show()
-                return
-            }
-            val start = index
-            val batch = candidates.subList(start, minOf(start + 50, candidates.size))
-            index += batch.size
-            val input = batch.mapIndexed { i, candidate ->
-                TdApi.ImportedContact(candidate.phone, candidate.contact.name.take(64).ifBlank { "Contact" }, "", null)
-            }.toTypedArray()
-            progress.setMessage("Проверено $checked из ${candidates.size}…")
-            session.importPhoneBatch(input) { ids, error ->
-                runOnUiThread {
-                    if (error != null || ids == null) {
-                        errors += batch.size
-                        status.text = "Ошибка пачки: ${error ?: "нет результата"}"
-                    } else {
-                        for (i in batch.indices) {
-                            val id = ids.getOrNull(i) ?: 0L
-                            val candidate = batch[i]
-                            checked++
-                            if (id > 0L) {
-                                matched++
-                                session.fetchUsername(id) { username ->
-                                    repo.updateTelegramLookup(candidate.contact.id, id.toString(), username.ifBlank { candidate.contact.telegramUsername })
-                                }
-                            }
-                        }
-                    }
-                    progress.progress = checked
-                    progress.setMessage("Проверено $checked из ${candidates.size}…")
-                    handler.postDelayed({ nextBatch() }, 3000)
-                }
-            }
-        }
-        nextBatch()
+        startMatchingService()
     }
 
-    override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        super.onDestroy()
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            // Continue even if denied; Android may still show the foreground-service task notification,
+            // but progress/completion alerts in the notification drawer can be suppressed.
+            startMatchingService()
+        }
     }
+
+    private fun startMatchingService() {
+        try {
+            val intent = Intent(this, TelegramMatchService::class.java).apply {
+                action = TelegramMatchService.ACTION_MATCH
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            status.text = "Сопоставление запущено в фоне. Ход работы и результат будут в уведомлениях."
+            matchButton.isEnabled = false
+        } catch (e: Exception) {
+            status.text = "Не удалось запустить фоновое сопоставление: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    companion object {
+        private const val REQUEST_NOTIFICATIONS = 7312
+    }
+
+    override fun onDestroy() { super.onDestroy() }
 }
