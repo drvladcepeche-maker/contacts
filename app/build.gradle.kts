@@ -12,7 +12,23 @@ android {
         versionCode = 2
         versionName = "0.2"
     }
-    buildTypes { release { isMinifyEnabled = false } }
+    val stableSigningPath = System.getenv("MYCONTACTS_KEYSTORE_PATH")
+    if (!stableSigningPath.isNullOrBlank()) {
+        signingConfigs {
+            create("stable") {
+                storeFile = file(stableSigningPath)
+                storePassword = System.getenv("MYCONTACTS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MYCONTACTS_KEY_ALIAS")
+                keyPassword = System.getenv("MYCONTACTS_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            if (!stableSigningPath.isNullOrBlank()) signingConfig = signingConfigs.getByName("stable")
+        }
+        release { isMinifyEnabled = false }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
