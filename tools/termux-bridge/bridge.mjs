@@ -93,23 +93,30 @@ async function requestViaCurlOnce(body) {
 }
 
 async function requestViaCurl(body) {
-  const maxRetries = 5;
-  for (let attempt = 0; ; attempt++) {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await requestViaCurlOnce(body);
+      const data = await requestViaCurlOnce(body);
+      if (attempt > 1) {
+        console.error(\`Curl transport recovered on attempt \${attempt}/\${maxAttempts}.\`);
+      }
+      return data;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const transientTlsFailure =
         /Bridge curl fallback failed \(exit 35\)/i.test(message) ||
         /TLS connect error|unexpected eof while reading/i.test(message);
-      if (!transientTlsFailure || attempt >= maxRetries) throw error;
-      const delayMs = Math.min(10000, 750 * (2 ** attempt));
-      console.error(`Transient TLS failure; retrying curl transport in ${delayMs} ms (attempt ${attempt + 1}/${maxRetries}).`);
+      if (!transientTlsFailure || attempt >= maxAttempts) throw error;
+      const delayMs = Math.min(10000, 750 * (2 ** (attempt - 1)));
+      const detail = message.replace(/[\r\n]+/g, " ").slice(0, 300);
+      console.error(
+        \`Transient TLS failure on attempt \${attempt}/\${maxAttempts}: \${detail}; retrying in \${delayMs} ms.\`
+      );
       await sleep(delayMs);
     }
   }
+  throw new Error("Curl transport exhausted its retry budget.");
 }
-
 let preferCurlTransport = false;
 
 async function request(body) {
