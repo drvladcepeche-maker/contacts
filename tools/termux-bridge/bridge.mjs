@@ -87,7 +87,7 @@ function withinWorkspace(candidate) {
 
 async function readWorkspaceFile(args) {
   const rel = String(args.path || "");
-  if (!rel || rel.startsWith("/") || rel.split(/[\\\\/]/).some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+  if (!rel || rel.startsWith("/") || rel.includes("\\\\") || rel.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
     throw new Error("file_read requires a plain relative path without hidden or traversal segments.");
   }
   const leaf = basename(rel).toLowerCase();
