@@ -195,6 +195,59 @@ class ContactRepo(private val cr: ContentResolver) {
         upsert("Telegram username", username.removePrefix("@"))
     }
 
+
+    fun addToAccount(name: String, phone: String, account: Acc) {
+        insertCopy(RawEntry(-1L, name, if (phone.isBlank()) emptyList() else listOf(phone to Phone.TYPE_MOBILE), emptyList(), ""), account)
+    }
+
+    private fun rawIdsForAccount(contactId: Long, account: Acc): List<Long> {
+        val parts = arrayListOf(CC.RawContacts.CONTACT_ID + "=?", CC.RawContacts.DELETED + "=0")
+        val args = arrayListOf(contactId.toString())
+        if (account.name == null) parts.add(CC.RawContacts.ACCOUNT_NAME + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_NAME + "=?"); args.add(account.name) }
+        if (account.type == null) parts.add(CC.RawContacts.ACCOUNT_TYPE + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_TYPE + "=?"); args.add(account.type) }
+        val ids = ArrayList<Long>()
+        cr.query(CC.RawContacts.CONTENT_URI, arrayOf(CC.RawContacts._ID), parts.joinToString(" AND "), args.toTypedArray(), null)?.use { c ->
+            while (c.moveToNext()) ids.add(c.getLong(0))
+        }
+        return ids
+    }
+
+    fun updateInAccount(contactId: Long, name: String, phone: String, account: Acc) {
+        val ids = rawIdsForAccount(contactId, account)
+        if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
+        val marks = ids.joinToString(",") { "?" }
+        val rawArgs = ids.map { it.toString() }.toTypedArray()
+        val nameWhere = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " + CC.Data.MIMETYPE + "=?"
+        val nameArgs = rawArgs + arrayOf(StructuredName.CONTENT_ITEM_TYPE)
+        val nameCount = cr.update(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(StructuredName.DISPLAY_NAME, name)
+        }, nameWhere, nameArgs)
+        if (nameCount == 0) cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(CC.Data.RAW_CONTACT_ID, ids.first())
+            put(CC.Data.MIMETYPE, StructuredName.CONTENT_ITEM_TYPE)
+            put(StructuredName.DISPLAY_NAME, name)
+        })
+        val phoneWhere = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " + CC.Data.MIMETYPE + "=?"
+        val phoneArgs = rawArgs + arrayOf(Phone.CONTENT_ITEM_TYPE)
+        val phoneCount = cr.update(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(Phone.NUMBER, phone)
+        }, phoneWhere, phoneArgs)
+        if (phoneCount == 0 && phone.isNotBlank()) cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(CC.Data.RAW_CONTACT_ID, ids.first())
+            put(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
+            put(Phone.NUMBER, phone)
+            put(Phone.TYPE, Phone.TYPE_MOBILE)
+        })
+    }
+
+    fun deleteFromAccount(contactId: Long, account: Acc) {
+        val ids = rawIdsForAccount(contactId, account)
+        if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
+        ids.forEach { cr.delete(ContentUris.withAppendedId(CC.RawContacts.CONTENT_URI, it), null, null) }
+    }
+
     fun delete(contactId: Long) {
         cr.delete(ContentUris.withAppendedId(CC.Contacts.CONTENT_URI, contactId), null, null)
     }
