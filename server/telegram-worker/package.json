@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "telegram": "^2.26.22",
-    "@supabase/supabase-js": "^2.57.4"
+    "@supabase/supabase-js": "^2.57.4",
+    "big-integer": "^1.6.52"
   },
   "devDependencies": {
     "@types/node": "^22.18.6",
