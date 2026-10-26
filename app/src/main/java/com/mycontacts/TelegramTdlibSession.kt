@@ -105,6 +105,16 @@ class TelegramTdlibSession(
         send(TdApi.CheckAuthenticationPassword(password))
     }
 
+    fun submitEmail(email: String) {
+        require(email.trim().isNotEmpty()) { "Введите электронную почту" }
+        send(TdApi.SetAuthenticationEmailAddress(email.trim()))
+    }
+
+    fun submitEmailCode(code: String) {
+        require(code.trim().isNotEmpty()) { "Введите код из электронной почты" }
+        send(TdApi.CheckAuthenticationEmailCode(TdApi.EmailAddressAuthenticationCode(code.trim())))
+    }
+
     fun isReady(): Boolean = ready.get()
 
     fun fetchUsername(userId: Long, callback: (String) -> Unit) {
