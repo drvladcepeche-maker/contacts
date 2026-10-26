@@ -184,6 +184,7 @@ class TelegramMatchService : Service() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "Notification permission not granted; foreground work continues without drawer updates")
         }
+        AppLog.info(this, TAG, message)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification(message, progress, total, ongoing, completed))
     }
