@@ -107,6 +107,26 @@ class TelegramTdlibSession(
 
     fun isReady(): Boolean = ready.get()
 
+    fun fetchUsername(userId: Long, callback: (String) -> Unit) {
+        send(TdApi.GetUser(userId)) { result ->
+            if (result is TdApi.User) {
+                try {
+                    val usernamesField = result.javaClass.getField("usernames")
+                    val usernames = usernamesField.get(result)
+                    val active = usernames?.javaClass?.getField("activeUsernames")?.get(usernames)
+                    val username = when (active) {
+                        is Array<*> -> active.firstOrNull()?.toString().orEmpty()
+                        else -> ""
+                    }
+                    callback(username)
+                } catch (_: Exception) {
+                    // TDLib's User username representation differs by API version.
+                    callback("")
+                }
+            } else callback("")
+        }
+    }
+
     fun importPhoneBatch(contacts: Array<TdApi.Contact>, callback: (LongArray?, String?) -> Unit) {
         if (!ready.get()) {
             callback(null, "Сначала авторизуйтесь в Telegram")
