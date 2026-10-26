@@ -559,8 +559,8 @@ class ContactRepo(private val cr: ContentResolver) {
         val sb = StringBuilder("Имя;Телефоны;Telegram ID;Telegram username\n")
         for (c in list) {
             val tg = c.telegram.trim().removePrefix("https://t.me/").removePrefix("http://t.me/").removePrefix("t.me/")
-            val tgId = tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: ""
-            val tgUsername = tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: ""
+            val tgId = c.telegramId.ifBlank { tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: "" }
+            val tgUsername = c.telegramUsername.ifBlank { tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: "" }
             sb.append(q(c.name)).append(';').append(q(c.phones.joinToString(", "))).append(';').append(q(tgId)).append(';').append(q(tgUsername)).append('\n')
         }
         return sb.toString()
