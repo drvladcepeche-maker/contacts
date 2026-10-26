@@ -9,7 +9,7 @@ const APK_PATHS = [
   join(APK_DIR, "split_config.arm64_v8a.apk"),
 ];
 const MAX_APK_BYTES = 100 * 1024 * 1024;
-const MAX_EXTRACT_BYTES = 80 * 1024 * 1024;
+const MAX_EXTRACT_BYTES = 100 * 1024 * 1024;
 const MAX_REPORT = 24000;
 const ASSET_PACK_PATH = join(APK_DIR, "split_abPack1.apk");
 const MAX_CENTRAL_DIRECTORY = 32 * 1024 * 1024;
@@ -207,8 +207,21 @@ export async function inspectApk() {
       /^classes(?:\d+)?\.dex$/.test(e.name) ||
       e.name === "AndroidManifest.xml" ||
       e.name === "resources.arsc" ||
-      /^lib\/arm64-v8a\/[^/]+\.so$/.test(e.name)
-    );
+      /^lib\/arm64-v8a\/[^/]+\.so$/.test(e.name) ||
+      /(^|\/)global-metadata\.dat$/i.test(e.name)
+    ).sort((a, b) => {
+      const rank = name => {
+        if (/global-metadata\.dat$/i.test(name)) return 0;
+        if (/lib\/arm64-v8a\/libil2cpp\.so$/i.test(name)) return 1;
+        if (/lib\/arm64-v8a\/libmain\.so$/i.test(name)) return 2;
+        if (/^classes(?:\d+)?\.dex$/.test(name)) return 3;
+        if (name === "AndroidManifest.xml") return 4;
+        if (/\.so$/i.test(name)) return 5;
+        return 6;
+      };
+      return rank(a.name) - rank(b.name) ||
+        a.uncompressedSize - b.uncompressedSize;
+    });
     if (path.endsWith("base.apk") && !targets.some(e => e.name === "classes.dex")) {
       throw new Error("classes.dex not found in base.apk.");
     }
@@ -267,7 +280,10 @@ export async function inspectApk() {
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. base.apk and split_config.arm64_v8a.apk are scanned within extraction limits. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed."
+    "IL2CPP / GAME-PROTOCOL SIGNALS",
+    ...[...new Set(strings.filter(s => /il2cpp|global-metadata|protobuf|messagepack|websocket|gateway|heartbeat|login|session|request|response|battle|march|alliance|player|serverlist|server_list|https?:\/\//i.test(s)).map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]").replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]").slice(0, 300))].sort().slice(0, 100),
+    "",
+    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. This pass prioritizes global-metadata.dat and libil2cpp.so if they exist in the scanned APKs. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed. No live service calls are made."
   ].join("\n").slice(0, MAX_REPORT);
   return { exitCode: 0, output: report, errorText: "" };
 }
