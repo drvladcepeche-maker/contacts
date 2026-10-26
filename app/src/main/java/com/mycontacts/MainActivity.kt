@@ -48,6 +48,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.installCrashHandler(this)
+        AppLog.info(this, "MainActivity", "onCreate")
         repo = ContactRepo(contentResolver)
         bridge = ContactsBridge(this)
         buildUi()
@@ -95,6 +97,7 @@ class MainActivity : Activity() {
         val row4 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row5 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row6 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row7 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -116,11 +119,13 @@ class MainActivity : Activity() {
         row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
         row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
         row6.addView(btn("Telegram ID по номерам") { startActivity(Intent(this, TelegramMatcherActivity::class.java)) })
+        row7.addView(btn("Сохранить логи") { exportAppLogs() })
+        row7.addView(btn("Файлы для Termux") { exportTermuxGuide() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
@@ -840,6 +845,32 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun exportAppLogs() {
+        bg {
+            try {
+                val path = AppLog.exportToDownloads(this)
+                AppLog.info(this, "MainActivity", "Logs exported to $path")
+                runOnUiThread { toast("Логи сохранены: $path") }
+            } catch (e: Exception) {
+                AppLog.error(this, "MainActivity", "Log export failed", e)
+                runOnUiThread { toast("Не удалось сохранить логи: ${e.message}") }
+            }
+        }
+    }
+
+    private fun exportTermuxGuide() {
+        bg {
+            try {
+                val path = AppLog.exportTermuxGuide(this)
+                AppLog.info(this, "MainActivity", "Termux guide exported to $path")
+                runOnUiThread { toast("Инструкция сохранена: $path") }
+            } catch (e: Exception) {
+                AppLog.error(this, "MainActivity", "Termux guide export failed", e)
+                runOnUiThread { toast("Не удалось сохранить инструкцию: ${e.message}") }
+            }
+        }
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
