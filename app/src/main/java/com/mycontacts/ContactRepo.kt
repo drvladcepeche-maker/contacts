@@ -12,7 +12,7 @@ import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.Im
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
-data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "")
+data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "", val telegramId: String = "", val telegramUsername: String = "")
 
 data class Acc(val type: String?, val name: String?) {
     val label: String get() = if (name == null && type == null) "Телефон (локально)" else "${name ?: "?"} (${type ?: "?"})"
@@ -45,11 +45,17 @@ class ContactRepo(private val cr: ContentResolver) {
             }
         }
         val telegrams = HashMap<Long, String>()
+        val telegramIds = HashMap<Long, String>()
+        val telegramUsernames = HashMap<Long, String>()
         cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data.CONTACT_ID, Im.DATA, Im.PROTOCOL, Im.CUSTOM_PROTOCOL), CC.Data.MIMETYPE + "=?", arrayOf(Im.CONTENT_ITEM_TYPE), null)?.use { c ->
             while (c.moveToNext()) {
-                if (c.getInt(2) == Im.PROTOCOL_CUSTOM && c.getString(3)?.equals("Telegram", ignoreCase = true) == true) {
-                    val value = c.getString(1)?.trim().orEmpty()
-                    if (value.isNotBlank()) if (!telegrams.containsKey(c.getLong(0))) telegrams[c.getLong(0)] = value
+                if (c.getInt(2) != Im.PROTOCOL_CUSTOM) continue
+                val value = c.getString(1)?.trim().orEmpty()
+                if (value.isBlank()) continue
+                when (c.getString(3)?.trim()?.lowercase()) {
+                    "telegram" -> if (!telegrams.containsKey(c.getLong(0))) telegrams[c.getLong(0)] = value
+                    "telegram id" -> telegramIds[c.getLong(0)] = value
+                    "telegram username" -> telegramUsernames[c.getLong(0)] = value.removePrefix("@")
                 }
             }
         }
@@ -58,7 +64,7 @@ class ContactRepo(private val cr: ContentResolver) {
             null, null, CC.Contacts.DISPLAY_NAME_PRIMARY + " COLLATE LOCALIZED ASC")?.use { c ->
             while (c.moveToNext()) {
                 val id = c.getLong(0)
-                result.add(Contact(id, c.getString(1) ?: "(без имени)", phones[id] ?: emptyList(), telegram = telegrams[id] ?: ""))
+                result.add(Contact(id, c.getString(1) ?: "(без имени)", phones[id] ?: emptyList(), telegram = telegrams[id] ?: "", telegramId = telegramIds[id] ?: "", telegramUsername = telegramUsernames[id] ?: ""))
             }
         }
         // An aggregated Contacts row may combine several RawContacts from different accounts.
@@ -157,6 +163,36 @@ class ContactRepo(private val cr: ContentResolver) {
                 .withValue(Im.DATA, telegram.trim()).build())
         }
         cr.applyBatch(CC.AUTHORITY, ops)
+    }
+
+    /** Persist Telegram lookup fields separately in the Android Contacts provider. */
+    fun updateTelegramLookup(contactId: Long, telegramId: String, username: String = "") {
+        val raw = rawIds(contactId).firstOrNull() ?: return
+        fun upsert(protocolName: String, value: String) {
+            val selection = CC.Data.CONTACT_ID + "=? AND " + CC.Data.MIMETYPE + "=? AND " +
+                Im.PROTOCOL + "=? AND " + Im.CUSTOM_PROTOCOL + "=?"
+            val args = arrayOf(contactId.toString(), Im.CONTENT_ITEM_TYPE, Im.PROTOCOL_CUSTOM.toString(), protocolName)
+            val rowId = cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data._ID), selection, args, null)?.use { cur ->
+                if (cur.moveToFirst()) cur.getLong(0) else null
+            }
+            if (value.isBlank()) {
+                if (rowId != null) cr.delete(ContentUris.withAppendedId(CC.Data.CONTENT_URI, rowId), null, null)
+            } else if (rowId != null) {
+                cr.update(ContentUris.withAppendedId(CC.Data.CONTENT_URI, rowId), android.content.ContentValues().apply {
+                    put(Im.DATA, value.trim())
+                }, null, null)
+            } else {
+                cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+                    put(CC.Data.RAW_CONTACT_ID, raw)
+                    put(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+                    put(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+                    put(Im.CUSTOM_PROTOCOL, protocolName)
+                    put(Im.DATA, value.trim())
+                })
+            }
+        }
+        upsert("Telegram ID", telegramId)
+        upsert("Telegram username", username.removePrefix("@"))
     }
 
     fun delete(contactId: Long) {
@@ -453,8 +489,8 @@ class ContactRepo(private val cr: ContentResolver) {
         row(1, header)
         for ((i, c) in list.withIndex()) {
             val tg = c.telegram.trim().removePrefix("https://t.me/").removePrefix("http://t.me/").removePrefix("t.me/")
-            val tgId = tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: ""
-            val tgUsername = tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: ""
+            val tgId = c.telegramId.ifBlank { tg.takeIf { it.isNotBlank() && it.all(Char::isDigit) } ?: "" }
+            val tgUsername = c.telegramUsername.ifBlank { tg.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }?.removePrefix("@") ?: "" }
             row(i + 2, listOf((i + 1).toString(), c.name, c.accountSources.joinToString("; ") { it.label }.ifBlank { "Не определён" }, tgId, tgUsername) + c.phones)
         }
         sheet.append("</sheetData></worksheet>")
