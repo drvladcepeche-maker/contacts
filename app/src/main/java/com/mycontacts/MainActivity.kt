@@ -864,8 +864,9 @@ class MainActivity : Activity() {
         bg {
             try {
                 val path = AppLog.exportTermuxGuide(this)
-                AppLog.info(this, "MainActivity", "Termux guide exported to $path")
-                runOnUiThread { toast("Инструкция сохранена: $path") }
+                val scriptPath = AppLog.exportTermuxSetupScript(this)
+                AppLog.info(this, "MainActivity", "Termux guide and setup script exported to $path; $scriptPath")
+                runOnUiThread { toast("Инструкция и скрипт сохранены в Загрузки/MyContacts") }
             } catch (e: Exception) {
                 AppLog.error(this, "MainActivity", "Termux guide export failed", e)
                 runOnUiThread { toast("Не удалось сохранить инструкцию: ${e.message}") }
