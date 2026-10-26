@@ -22,15 +22,35 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class TelegramTdlibSession(
     context: Context,
-    private val onStatus: (String) -> Unit,
-    private val onAuthorized: () -> Unit
+    onStatus: (String) -> Unit,
+    onAuthorized: () -> Unit
 ) {
+    @Volatile private var onStatus: (String) -> Unit = onStatus
+    @Volatile private var onAuthorized: () -> Unit = onAuthorized
     private val app = context.applicationContext
     private val prefs = app.getSharedPreferences("telegram_tdlib", Context.MODE_PRIVATE)
     private val ready = AtomicBoolean(false)
     @Volatile private var client: Client? = null
     @Volatile private var apiId: Int = 0
     @Volatile private var apiHash: String = ""
+
+    companion object {
+        @Volatile private var processSession: TelegramTdlibSession? = null
+
+        fun get(
+            context: Context,
+            onStatus: (String) -> Unit,
+            onAuthorized: () -> Unit
+        ): TelegramTdlibSession = synchronized(this) {
+            val existing = processSession
+            if (existing != null) {
+                existing.attach(onStatus, onAuthorized)
+                existing
+            } else {
+                TelegramTdlibSession(context, onStatus, onAuthorized).also { processSession = it }
+            }
+        }
+    }
 
     private fun keystoreKey(): java.security.Key {
         val alias = "moi_contacts_tdlib_aes"
@@ -64,8 +84,23 @@ class TelegramTdlibSession(
         return cipher.doFinal(packed.copyOfRange(12, packed.size)).toString(Charsets.UTF_8)
     }
 
+    /** Rebind UI callbacks when the Activity is recreated; never create a second TDLib client. */
+    fun attach(onStatus: (String) -> Unit, onAuthorized: () -> Unit) {
+        this.onStatus = onStatus
+        this.onAuthorized = onAuthorized
+        if (ready.get()) {
+            onStatus("Telegram подключён.")
+            onAuthorized()
+        }
+    }
+
     fun start(id: Int, hash: String) {
         require(id > 0 && hash.isNotBlank()) { "Укажите Telegram api_id и api_hash" }
+        // TDLib owns an exclusive lock on its database. Keep one client for the whole app process.
+        if (client != null) {
+            onStatus(if (ready.get()) "Telegram уже подключён." else "Подключение Telegram уже выполняется.")
+            return
+        }
         apiId = id
         apiHash = hash.trim()
         prefs.edit().putInt("api_id", id).putString("api_hash_enc", seal(apiHash)).apply()
