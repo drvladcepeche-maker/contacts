@@ -48,7 +48,10 @@ async function requestViaCurl(body) {
   ].join("\n") + "\n";
 
   const result = await new Promise((resolveRun) => {
-    const child = spawn("curl", ["--silent", "--show-error", "--config", "-"], {
+    const child = spawn("curl", [
+      "--silent", "--show-error", "--ipv4", "--http1.1",
+      "--connect-timeout", "10", "--max-time", "20", "--config", "-"
+    ], {
       cwd: WORKSPACE,
       shell: false,
       env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined },
