@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -11,6 +11,10 @@ const APK_PATHS = [
 const MAX_APK_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACT_BYTES = 80 * 1024 * 1024;
 const MAX_REPORT = 24000;
+const ASSET_PACK_PATH = join(APK_DIR, "split_abPack1.apk");
+const MAX_CENTRAL_DIRECTORY = 32 * 1024 * 1024;
+const MAX_ASSET_TEXT_TOTAL = 8 * 1024 * 1024;
+const MAX_ASSET_TEXT_ENTRY = 1024 * 1024;
 
 function printableStrings(buffer) {
   const found = [];
@@ -92,6 +96,99 @@ function hostFromUrl(raw) {
   } catch { return null; }
 }
 
+
+async function inspectAssetPack(strings) {
+  let handle;
+  try {
+    const info = await stat(ASSET_PACK_PATH);
+    if (!info.isFile()) return { summary: "Asset pack is not a regular file.", candidates: [], extracted: 0 };
+    handle = await open(ASSET_PACK_PATH, "r");
+    const tailSize = Math.min(65557, info.size);
+    const tail = Buffer.alloc(tailSize);
+    await handle.read(tail, 0, tailSize, info.size - tailSize);
+    let eocd = -1;
+    for (let i = tail.length - 22; i >= Math.max(0, tail.length - 65557); i--) {
+      if (tail.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("ZIP end-of-central-directory not found.");
+    const count = tail.readUInt16LE(eocd + 10);
+    const cdSize = tail.readUInt32LE(eocd + 12);
+    const cdOffset = tail.readUInt32LE(eocd + 16);
+    if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
+      throw new Error("ZIP64 asset packs are not supported by this bounded indexer.");
+    }
+    if (cdSize > MAX_CENTRAL_DIRECTORY || cdOffset + cdSize > info.size) {
+      throw new Error("Central directory exceeds the safe indexing limit.");
+    }
+    const directory = Buffer.alloc(cdSize);
+    await handle.read(directory, 0, cdSize, cdOffset);
+    const entries = [];
+    let offset = 0;
+    for (let n = 0; n < count && offset + 46 <= directory.length; n++) {
+      if (directory.readUInt32LE(offset) !== 0x02014b50) break;
+      const method = directory.readUInt16LE(offset + 10);
+      const compressedSize = directory.readUInt32LE(offset + 20);
+      const uncompressedSize = directory.readUInt32LE(offset + 24);
+      const nameLen = directory.readUInt16LE(offset + 28);
+      const extraLen = directory.readUInt16LE(offset + 30);
+      const commentLen = directory.readUInt16LE(offset + 32);
+      const localOffset = directory.readUInt32LE(offset + 42);
+      if (offset + 46 + nameLen + extraLen + commentLen > directory.length) break;
+      const name = directory.toString("utf8", offset + 46, offset + 46 + nameLen);
+      entries.push({ name, method, compressedSize, uncompressedSize, localOffset });
+      offset += 46 + nameLen + extraLen + commentLen;
+    }
+    const textExt = /\.(json|xml|txt|cfg|ini|lua|proto|ya?ml|csv|properties|toml|conf)$/i;
+    const candidates = entries.filter(e =>
+      textExt.test(e.name) ||
+      (/(config|remote|server|endpoint|network|api|environment|channel|version)/i.test(e.name) &&
+       e.uncompressedSize > 0 && e.uncompressedSize <= MAX_ASSET_TEXT_ENTRY)
+    );
+    const extractedNames = [];
+    let extractedTotal = 0;
+    for (const entry of candidates) {
+      if (extractedNames.length >= 40 || extractedTotal >= MAX_ASSET_TEXT_TOTAL) break;
+      if (entry.uncompressedSize > MAX_ASSET_TEXT_ENTRY ||
+          entry.uncompressedSize > MAX_ASSET_TEXT_TOTAL - extractedTotal ||
+          entry.compressedSize > MAX_ASSET_TEXT_ENTRY ||
+          !textExt.test(entry.name)) continue;
+      const p = entry.localOffset;
+      if (p + 30 > info.size) continue;
+      const header = Buffer.alloc(30);
+      await handle.read(header, 0, 30, p);
+      if (header.readUInt32LE(0) !== 0x04034b50) continue;
+      const nameLen = header.readUInt16LE(26);
+      const extraLen = header.readUInt16LE(28);
+      const dataStart = p + 30 + nameLen + extraLen;
+      if (dataStart + entry.compressedSize > info.size) continue;
+      const compressed = Buffer.alloc(entry.compressedSize);
+      await handle.read(compressed, 0, entry.compressedSize, dataStart);
+      let data;
+      try {
+        if (entry.method === 0) data = compressed;
+        else if (entry.method === 8) data = inflateRawSync(compressed, { maxOutputLength: MAX_ASSET_TEXT_ENTRY });
+        else continue;
+      } catch { continue; }
+      if (data.length > MAX_ASSET_TEXT_ENTRY) continue;
+      extractedTotal += data.length;
+      extractedNames.push(entry.name);
+      for (const value of printableStrings(data)) strings.push(value);
+    }
+    return {
+      summary: ASSET_PACK_PATH.split("/").pop() + ": " + info.size + " bytes; " + entries.length +
+        " ZIP entries; central directory indexed without loading the full APK; " + extractedNames.length +
+        " small text/config entries extracted (" + extractedTotal + " bytes).",
+      candidates: candidates.slice(0, 100).map(e => e.name + " [" + e.uncompressedSize + " bytes]"),
+      extracted: extractedNames.length,
+      extractedNames,
+    };
+  } catch (error) {
+    return { summary: "Asset pack indexing note: " + String(error?.message || error), candidates: [], extracted: 0 };
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 export async function inspectApk() {
   const strings = [];
   const inspected = [];
@@ -126,6 +223,7 @@ export async function inspectApk() {
       for (const value of printableStrings(data)) strings.push(value);
     }
   }
+  const assetPack = await inspectAssetPack(strings);
   if (!inspected.some(name => name.startsWith("base.apk:classes.dex"))) {
     throw new Error("No DEX data extracted from base.apk.");
   }
@@ -153,6 +251,11 @@ export async function inspectApk() {
     "Files: " + apkSummaries.join(" | "),
     "Extracted bytes: " + totalExtracted,
     "Inspected entries: " + inspected.join(", "),
+    "",
+    "ASSET PACK INDEX",
+    assetPack.summary,
+    "Candidate resource/config names (up to 100):",
+    ...assetPack.candidates,
     errors.length ? "\nFILE NOTES\n" + errors.join("\n") : "",
     "",
     "HOSTS DERIVED FROM EXPLICIT URL STRINGS (" + domains.size + ")",
@@ -164,7 +267,7 @@ export async function inspectApk() {
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. Only base.apk and split_config.arm64_v8a.apk are scanned; large asset packs and other splits are not analyzed. Native libraries are scanned only if their uncompressed size fits the extraction budget."
+    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. base.apk and split_config.arm64_v8a.apk are scanned within extraction limits. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed."
   ].join("\n").slice(0, MAX_REPORT);
   return { exitCode: 0, output: report, errorText: "" };
 }
