@@ -215,7 +215,7 @@ class TelegramMatcherActivity : Activity() {
                             if (id > 0L) {
                                 matched++
                                 session.fetchUsername(id) { username ->
-                                    repo.updateTelegramLookup(candidate.contact.id, id.toString(), username)
+                                    repo.updateTelegramLookup(candidate.contact.id, id.toString(), username.ifBlank { candidate.contact.telegramUsername })
                                 }
                             }
                         }
