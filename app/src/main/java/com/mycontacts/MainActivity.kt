@@ -48,6 +48,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLog.installCrashHandler(this)
+        AppLog.info(this, "MainActivity", "onCreate")
         repo = ContactRepo(contentResolver)
         bridge = ContactsBridge(this)
         buildUi()
@@ -95,6 +97,8 @@ class MainActivity : Activity() {
         val row4 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row5 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row6 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row7 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row8 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -116,11 +120,14 @@ class MainActivity : Activity() {
         row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
         row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
         row6.addView(btn("Telegram ID по номерам") { startActivity(Intent(this, TelegramMatcherActivity::class.java)) })
+        row7.addView(btn("Сохранить логи") { exportAppLogs() })
+        row7.addView(btn("Файлы для Termux") { exportTermuxGuide() })
+        row8.addView(btn("Аккаунты синхронизации") { showAccountSyncSettings() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
@@ -295,7 +302,7 @@ class MainActivity : Activity() {
                 bridge.saveToken(value)
                 bg {
                     try {
-                        val n = bridge.sync(repo.loadAll())
+                        val n = bridge.sync(contactsForSync())
                         runOnUiThread {
                             toast("Синхронизировано контактов: $n")
                             startBridgeService()
@@ -306,7 +313,7 @@ class MainActivity : Activity() {
             .setNeutralButton("Синхронизировать сейчас") { _, _ ->
                 bg {
                     try {
-                        val n = bridge.sync(repo.loadAll())
+                        val n = bridge.sync(contactsForSync())
                         runOnUiThread { toast("Синхронизировано контактов: $n") }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
                 }
@@ -342,7 +349,7 @@ class MainActivity : Activity() {
             "list_contacts", "search_contacts" -> {
                 val q = payload.optString("query").trim().lowercase()
                 val limit = payload.optInt("limit", 100).coerceIn(1, 500)
-                val rows = repo.loadAll().filter { c ->
+                val rows = contactsForSync().filter { c ->
                     action == "list_contacts" || c.name.lowercase().contains(q) ||
                         c.phones.any { it.contains(q) }
                 }.take(limit)
@@ -363,7 +370,10 @@ class MainActivity : Activity() {
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        if (contactId > 0) repo.update(contactId, name, phone) else repo.add(name, phone)
+                                        val target = writableAccountFor(if (contactId > 0) repo.loadAll().firstOrNull { it.id == contactId } else null)
+                                        ?: throw IllegalStateException("Нет разрешённого для записи аккаунта. Откройте настройки аккаунтов синхронизации.")
+                                        if (contactId > 0) repo.updateInAccount(contactId, name, phone, target)
+                                        else repo.addToAccount(name, phone, target)
                                         val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
@@ -383,7 +393,12 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
-                            bg { try { repo.delete(c.id); completeBridgeCommand(id); runOnUiThread { refresh(); toast("Контакт удалён") } }
+                            bg { try {
+                                val target = writableAccountFor(c) ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
+                                repo.deleteFromAccount(c.id, target)
+                                completeBridgeCommand(id)
+                                runOnUiThread { refresh(); toast("Контакт удалён из аккаунта: " + target.label) }
+                            }
                                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка удаления") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
@@ -400,18 +415,85 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
-                            bg { try { repo.merge(group); completeBridgeCommand(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
-                                catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
+                            bg { try { val target = repo.accounts().map { it.first }.firstOrNull { a ->
+                                    accountFlag(a, "enabled") && accountFlag(a, "write") && group.all { a in it.accountSources }
+                                } ?: throw IllegalStateException("Для объединения включите запись в одном аккаунте, содержащем все выбранные контакты")
+                                repo.mergeInAccount(group, target)
+                                completeBridgeCommand(id)
+                                runOnUiThread { refresh(); toast("Контакты объединены в аккаунте: " + target.label) }
+                            } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
                 }
             }
             "sync_contacts" -> bg {
-                try { val n = bridge.sync(repo.loadAll()); completeBridgeCommand(id, JSONObject().put("synced", n)) }
+                try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)) }
                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
             }
             else -> bg { try { completeBridgeCommand(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
+        }
+    }
+
+
+    private val accountSyncPrefs by lazy { getSharedPreferences("account_sync", MODE_PRIVATE) }
+
+    private fun accountKey(a: Acc): String {
+        val raw = (a.type ?: "") + "|" + (a.name ?: "")
+        return "account_" + android.util.Base64.encodeToString(raw.toByteArray(Charsets.UTF_8),
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING)
+    }
+
+    private fun accountFlag(a: Acc, flag: String, defaultValue: Boolean = true): Boolean =
+        accountSyncPrefs.getBoolean(accountKey(a) + "_" + flag, defaultValue)
+
+    private fun contactsForSync(): List<Contact> {
+        val allowed = repo.accounts().map { it.first }
+            .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }.toSet()
+        if (allowed.isEmpty()) return emptyList()
+        return repo.loadAll().mapNotNull { c ->
+            val selectedSources = c.accountSources.filter { it in allowed }
+            if (selectedSources.isEmpty()) null else c.copy(accountSources = selectedSources)
+        }
+    }
+
+    private fun writableAccountFor(contact: Contact?): Acc? {
+        return repo.accounts().map { it.first }.firstOrNull { a ->
+            accountFlag(a, "enabled") && accountFlag(a, "write") &&
+                (contact == null || a in contact.accountSources)
+        }
+    }
+
+    private fun showAccountSyncSettings() {
+        bg {
+            val accounts = repo.accounts().map { it.first }
+            runOnUiThread {
+                val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
+                accounts.forEach { account ->
+                    box.addView(TextView(this).apply { text = account.label; textSize = 16f; setPadding(0, 14, 0, 2) })
+                    val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                    fun option(label: String, flag: String) = android.widget.CheckBox(this).apply {
+                        text = label
+                        isChecked = accountFlag(account, flag)
+                        setOnCheckedChangeListener { _, checked ->
+                            accountSyncPrefs.edit().putBoolean(accountKey(account) + "_" + flag, checked).apply()
+                        }
+                    }
+                    row.addView(option("Участвует в синхронизации", "enabled"))
+                    row.addView(option("Чтение: передавать контакты этого аккаунта", "read"))
+                    row.addView(option("Запись: разрешать изменения в этом аккаунте", "write"))
+                    box.addView(row)
+                    box.addView(android.view.View(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+                        setBackgroundColor(0xFFCCCCCC.toInt())
+                    })
+                }
+                if (accounts.isEmpty()) box.addView(TextView(this).apply { text = "Нет доступных аккаунтов контактов." })
+                val scroll = android.widget.ScrollView(this).apply { addView(box) }
+                AlertDialog.Builder(this).setTitle("Аккаунты синхронизации")
+                    .setMessage("Настройки сохраняются сразу. Запись удалённых команд разрешена только для включённых аккаунтов с активной записью. Изменение и удаление затрагивают только выбранный аккаунт.")
+                    .setView(scroll).setPositiveButton("Готово", null).show()
+            }
         }
     }
 
@@ -636,7 +718,7 @@ class MainActivity : Activity() {
     }
 
     private fun bg(work: () -> Unit) = Thread {
-        try { work() } catch (e: Exception) { runOnUiThread { toast("Ошибка: " + e.message) } }
+        try { work() } catch (e: Exception) { AppLog.error(this, "MainActivity", "Background operation failed", e); runOnUiThread { toast("Ошибка: " + e.message) } }
     }.start()
 
     private fun transferDialog() {
@@ -840,6 +922,33 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun exportAppLogs() {
+        bg {
+            try {
+                val path = AppLog.exportToDownloads(this)
+                AppLog.info(this, "MainActivity", "Logs exported to $path")
+                runOnUiThread { toast("Логи сохранены: $path") }
+            } catch (e: Exception) {
+                AppLog.error(this, "MainActivity", "Log export failed", e)
+                runOnUiThread { toast("Не удалось сохранить логи: ${e.message}") }
+            }
+        }
+    }
+
+    private fun exportTermuxGuide() {
+        bg {
+            try {
+                val path = AppLog.exportTermuxGuide(this)
+                val scriptPath = AppLog.exportTermuxSetupScript(this)
+                AppLog.info(this, "MainActivity", "Termux guide and setup script exported to $path; $scriptPath")
+                runOnUiThread { toast("Инструкция и скрипт сохранены в Загрузки/MyContacts") }
+            } catch (e: Exception) {
+                AppLog.error(this, "MainActivity", "Termux guide export failed", e)
+                runOnUiThread { toast("Не удалось сохранить инструкцию: ${e.message}") }
+            }
+        }
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
