@@ -189,6 +189,10 @@ async function inspectAssetPack(strings) {
         " ZIP entries; central directory indexed without loading the full APK; " + extractedNames.length +
         " small text/config entries extracted (" + extractedTotal + " bytes).",
       candidates: candidates.slice(0, 100).map(e => e.name + " [" + e.uncompressedSize + " bytes]"),
+      inventory: entries.slice(0, 100).map(e =>
+        e.name + " [size=" + e.uncompressedSize + ", compressed=" + e.compressedSize +
+        ", method=" + e.method + "]"
+      ),
       extracted: extractedNames.length,
       extractedNames,
     };
@@ -279,6 +283,9 @@ export async function inspectApk() {
     assetPack.summary,
     "Candidate resource/config names (up to 100):",
     ...assetPack.candidates,
+    "",
+    "ASSET PACK ZIP ENTRY INVENTORY (up to 100)",
+    ...(assetPack.inventory || []),
     errors.length ? "\nFILE NOTES\n" + errors.join("\n") : "",
     "",
     "HOSTS DERIVED FROM EXPLICIT URL STRINGS (" + domains.size + ")",
