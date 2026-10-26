@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const APK_PATH = join(homedir(), "storage", "downloads", "PnS_APK", "base.apk");
+const APK_DIR = join(homedir(), "storage", "downloads", "PnS_APK");
+const APK_PATHS = [
+  join(APK_DIR, "base.apk"),
+  join(APK_DIR, "split_config.arm64_v8a.apk"),
+];
 const MAX_APK_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACT_BYTES = 80 * 1024 * 1024;
 const MAX_REPORT = 24000;
@@ -21,7 +25,6 @@ function printableStrings(buffer) {
     }
   }
   if (start >= 0 && buffer.length - start >= 5) found.push(buffer.toString("latin1", start));
-  // DEX and Android resources often contain UTF-16LE strings.
   for (let i = 0; i + 10 < buffer.length; i += 2) {
     let j = i;
     while (j + 1 < buffer.length && buffer[j + 1] === 0 &&
@@ -73,69 +76,95 @@ function extractEntry(apk, entry) {
 }
 
 function scrubUrl(raw) {
+  const cleaned = raw.replace(/[),.;]+$/, "");
   try {
-    const url = new URL(raw);
+    const url = new URL(cleaned);
     return url.origin + (url.pathname && url.pathname !== "/" ? url.pathname : "");
-  } catch { return raw.split(/[?#]/, 1)[0].slice(0, 250); }
+  } catch { return cleaned.split(/[?#]/, 1)[0].slice(0, 250); }
+}
+
+function hostFromUrl(raw) {
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    if (!host || host.includes("%s") || host.includes("%") || !host.includes(".")) return null;
+    if (/^(schemas\.android\.com|www\.w3\.org|ns\.adobe\.com|www\.smpte-ra\.org)$/.test(host)) return null;
+    return host;
+  } catch { return null; }
 }
 
 export async function inspectApk() {
-  const info = await stat(APK_PATH);
-  if (!info.isFile()) throw new Error("Configured APK path is not a file.");
-  if (info.size > MAX_APK_BYTES) throw new Error("base.apk exceeds the 100 MiB inspection limit.");
-  const apk = await readFile(APK_PATH);
-  const entries = zipEntries(apk);
-  const targets = entries.filter(e =>
-    /^classes(?:\d+)?\.dex$/.test(e.name) ||
-    e.name === "AndroidManifest.xml" ||
-    e.name === "resources.arsc"
-  );
-  if (!targets.some(e => e.name === "classes.dex")) throw new Error("classes.dex not found in base.apk.");
   const strings = [];
-  let extracted = 0;
   const inspected = [];
-  for (const entry of targets) {
-    if (extracted >= MAX_EXTRACT_BYTES) break;
-    if (entry.uncompressedSize > MAX_EXTRACT_BYTES - extracted) continue;
-    const data = extractEntry(apk, entry);
-    if (!data) continue;
-    extracted += data.length;
-    inspected.push(entry.name);
-    strings.push(...printableStrings(data));
+  const errors = [];
+  let totalExtracted = 0;
+  const apkSummaries = [];
+  for (const path of APK_PATHS) {
+    let info;
+    try { info = await stat(path); } catch { errors.push("Not found: " + path.split("/").pop()); continue; }
+    if (!info.isFile()) { errors.push("Not a file: " + path.split("/").pop()); continue; }
+    if (info.size > MAX_APK_BYTES) { errors.push("Skipped over 100 MiB: " + path.split("/").pop() + " (" + info.size + " bytes)"); continue; }
+    const apk = await readFile(path);
+    const entries = zipEntries(apk);
+    apkSummaries.push(path.split("/").pop() + ": " + info.size + " bytes; " + entries.length + " ZIP entries");
+    const targets = entries.filter(e =>
+      /^classes(?:\d+)?\.dex$/.test(e.name) ||
+      e.name === "AndroidManifest.xml" ||
+      e.name === "resources.arsc" ||
+      /^lib\/arm64-v8a\/[^/]+\.so$/.test(e.name)
+    );
+    if (path.endsWith("base.apk") && !targets.some(e => e.name === "classes.dex")) {
+      throw new Error("classes.dex not found in base.apk.");
+    }
+    for (const entry of targets) {
+      if (totalExtracted >= MAX_EXTRACT_BYTES) break;
+      if (entry.uncompressedSize > MAX_EXTRACT_BYTES - totalExtracted) continue;
+      let data;
+      try { data = extractEntry(apk, entry); } catch { continue; }
+      if (!data) continue;
+      totalExtracted += data.length;
+      inspected.push(path.split("/").pop() + ":" + entry.name);
+      strings.push(...printableStrings(data));
+    }
+  }
+  if (!inspected.some(name => name.startsWith("base.apk:classes.dex"))) {
+    throw new Error("No DEX data extracted from base.apk.");
   }
   const all = strings.join("\n");
   const urls = new Set();
   const urlRx = /https?:\/\/[^\s"'<>\u0000-\u001f]{4,500}/gi;
   for (const match of all.matchAll(urlRx)) urls.add(scrubUrl(match[0]));
   const domains = new Set();
-  const domainRx = /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|io|co|cn|ru|app|dev|google|googleapis|amazonaws|cloudfront|facebook|games|xyz|me|info|tech|top)(?::\d{1,5})?/gi;
-  for (const match of all.matchAll(domainRx)) domains.add(match[0].toLowerCase());
+  for (const url of urls) {
+    const host = hostFromUrl(url);
+    if (host) domains.add(host);
+  }
   const markers = [
     "okhttp", "retrofit", "volley", "cronet", "grpc", "websocket", "socket.io",
     "firebase", "appsflyer", "adjust", "facebook", "google analytics", "bugly",
     "unitywebrequest", "libcurl", "protobuf", "graphql", "x-api-key", "authorization",
     "content-type", "connect_timeout", "baseurl", "/api/", "/v1/", "/v2/", "/login",
-    "gateway", "heartbeat", "protobuf", "wss://", "mqtt"
+    "gateway", "heartbeat", "wss://", "mqtt", "socket", "certificate pinning",
+    "trustmanager", "sslcontext"
   ];
   const lower = all.toLowerCase();
   const foundMarkers = markers.filter(m => lower.includes(m));
   const report = [
-    "APK static inspection report",
-    "File: " + APK_PATH,
-    "Size: " + info.size + " bytes",
-    "ZIP entries: " + entries.length,
+    "APK static inspection report (refined)",
+    "Files: " + apkSummaries.join(" | "),
+    "Extracted bytes: " + totalExtracted,
     "Inspected entries: " + inspected.join(", "),
+    errors.length ? "\nFILE NOTES\n" + errors.join("\n") : "",
     "",
-    "DOMAINS (" + domains.size + ")",
-    ...[...domains].sort().slice(0, 180),
+    "HOSTS DERIVED FROM EXPLICIT URL STRINGS (" + domains.size + ")",
+    ...[...domains].sort().slice(0, 100),
     "",
     "HTTP URLS (query/fragment removed; " + urls.size + ")",
-    ...[...urls].sort().slice(0, 120),
+    ...[...urls].sort().slice(0, 100),
     "",
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "Caveats: strings are static indicators, not proof that an endpoint is active or a public API. Binary AndroidManifest.xml may require a dedicated AXML decoder. Native libraries and split APKs are not analyzed by this operation."
+    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. Only base.apk and split_config.arm64_v8a.apk are scanned; large asset packs and other splits are not analyzed. Native libraries are scanned only if their uncompressed size fits the extraction budget."
   ].join("\n").slice(0, MAX_REPORT);
   return { exitCode: 0, output: report, errorText: "" };
 }
