@@ -79,7 +79,7 @@ async function requestViaCurl(body) {
   if (result.code !== 0 || markerAt < 0) {
     throw new Error(`Bridge curl fallback failed (exit ${result.code}): ${result.stderr || "no HTTP status received"}`);
   }
-  const responseText = result.stdout.slice(0, markerAt).replace(/\\n$/, "");
+  const responseText = result.stdout.slice(0, markerAt).replace(/\n$/, "");
   const statusText = result.stdout.slice(markerAt + marker.length).trim();
   const status = Number(statusText);
   let data;
