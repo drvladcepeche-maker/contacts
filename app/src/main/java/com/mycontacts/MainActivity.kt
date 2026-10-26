@@ -349,7 +349,7 @@ class MainActivity : Activity() {
             "list_contacts", "search_contacts" -> {
                 val q = payload.optString("query").trim().lowercase()
                 val limit = payload.optInt("limit", 100).coerceIn(1, 500)
-                val rows = repo.loadAll().filter { c ->
+                val rows = contactsForSync().filter { c ->
                     action == "list_contacts" || c.name.lowercase().contains(q) ||
                         c.phones.any { it.contains(q) }
                 }.take(limit)
@@ -415,7 +415,12 @@ class MainActivity : Activity() {
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
-                            bg { try { repo.merge(group); completeBridgeCommand(id); runOnUiThread { refresh(); toast("Контакты объединены") } }
+                            bg { val target = repo.accounts().map { it.first }.firstOrNull { a ->
+                                    accountFlag(a, "enabled") && accountFlag(a, "write") && group.all { a in it.accountSources }
+                                } ?: throw IllegalStateException("Для объединения включите запись в одном аккаунте, содержащем все выбранные контакты")
+                                repo.mergeInAccount(group, target)
+                                completeBridgeCommand(id)
+                                runOnUiThread { refresh(); toast("Контакты объединены в аккаунте: " + target.label) }
                                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
