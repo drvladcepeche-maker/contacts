@@ -98,7 +98,7 @@ async function requestViaCurl(body) {
     try {
       const data = await requestViaCurlOnce(body);
       if (attempt > 1) {
-        console.error(`Curl transport recovered on attempt \${attempt}/\${maxAttempts}.`);
+        console.error(`Curl transport recovered on attempt ${attempt}/${maxAttempts}.`);
       }
       return data;
     } catch (error) {
@@ -110,7 +110,7 @@ async function requestViaCurl(body) {
       const delayMs = Math.min(10000, 750 * (2 ** (attempt - 1)));
       const detail = message.replace(/[\r\n]+/g, " ").slice(0, 300);
       console.error(
-        `Transient TLS failure on attempt \${attempt}/\${maxAttempts}: \${detail}; retrying in \${delayMs} ms.`
+        `Transient TLS failure on attempt ${attempt}/${maxAttempts}: ${detail}; retrying in ${delayMs} ms.`
       );
       await sleep(delayMs);
     }
