@@ -40,12 +40,14 @@ class TelegramMatchService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLog.info(this, TAG, "Foreground service created")
         repo = ContactRepo(contentResolver)
         createChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, notification("Подготовка сопоставления…", 0, 0, ongoing = true))
+        AppLog.info(this, TAG, "Matching requested")
         io.execute {
             try {
                 val all = repo.loadAll()
@@ -81,6 +83,7 @@ class TelegramMatchService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Could not prepare Telegram matching", e)
+            AppLog.error(this, TAG, "Could not prepare Telegram matching", e)
                 finishWithError("Не удалось подготовить контакты: ${e.message ?: e.javaClass.simpleName}")
             }
         }
@@ -89,6 +92,7 @@ class TelegramMatchService : Service() {
 
     private fun beginMatching() {
         if (!startedMatching.compareAndSet(false, true)) return
+        AppLog.info(this, TAG, "Matching started; candidates=${candidates.size}")
         updateNotification("Сопоставление запущено", 0, candidates.size)
         processNextBatch()
     }
@@ -158,6 +162,7 @@ class TelegramMatchService : Service() {
         if (shouldFinish) {
             synchronized(stateLock) { if (completed) return; completed = true }
             val summary = "Готово. Проверено: $checked; найдено ID: $matched; ошибок: $errors."
+            AppLog.info(this, TAG, summary)
             updateNotification(summary, candidates.size, candidates.size, ongoing = false, completed = true)
             stopForeground(false)
             stopSelf()
@@ -168,6 +173,7 @@ class TelegramMatchService : Service() {
         if (completed) return
         completed = true
         Log.w(TAG, message)
+        AppLog.error(this, TAG, message)
         updateNotification(message, checked, candidates.size.coerceAtLeast(1), ongoing = false, completed = true)
         stopForeground(false)
         stopSelf()
