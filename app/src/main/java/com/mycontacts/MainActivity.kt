@@ -641,7 +641,7 @@ class MainActivity : Activity() {
     }
 
     private fun bg(work: () -> Unit) = Thread {
-        try { work() } catch (e: Exception) { runOnUiThread { toast("Ошибка: " + e.message) } }
+        try { work() } catch (e: Exception) { AppLog.error(this, "MainActivity", "Background operation failed", e); runOnUiThread { toast("Ошибка: " + e.message) } }
     }.start()
 
     private fun transferDialog() {
