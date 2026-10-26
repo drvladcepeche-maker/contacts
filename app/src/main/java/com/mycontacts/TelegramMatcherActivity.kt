@@ -221,7 +221,7 @@ class TelegramMatcherActivity : Activity() {
                         }
                     }
                     progress.progress = checked
-                    progress.message = "Проверено $checked из ${candidates.size}…"
+                    progress.setMessage("Проверено $checked из ${candidates.size}…")
                     handler.postDelayed({ nextBatch() }, 3000)
                 }
             }
