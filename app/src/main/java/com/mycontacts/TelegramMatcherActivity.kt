@@ -140,7 +140,7 @@ class TelegramMatcherActivity : Activity() {
     }
 
     private fun confirmMatch() {
-        if (!session.isReady() || isMatching) return
+        if (!session.isReady()) return
         val contacts = repo.loadAll()
         val candidates = contacts.mapNotNull { contact ->
             val phone = contact.phones.firstOrNull { it.trim().startsWith("+") }
