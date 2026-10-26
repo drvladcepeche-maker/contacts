@@ -47,7 +47,7 @@ class TelegramMatcherActivity : Activity() {
         root.addView(matchButton)
         setContentView(root)
 
-        session = TelegramTdlibSession(this, { message ->
+        session = TelegramTdlibSession.get(this, { message ->
             runOnUiThread {
                 status.text = message
                 when {
