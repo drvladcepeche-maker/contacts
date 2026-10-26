@@ -123,7 +123,7 @@ export async function inspectApk() {
       if (!data) continue;
       totalExtracted += data.length;
       inspected.push(path.split("/").pop() + ":" + entry.name);
-      strings.push(...printableStrings(data));
+      for (const value of printableStrings(data)) strings.push(value);
     }
   }
   if (!inspected.some(name => name.startsWith("base.apk:classes.dex"))) {
