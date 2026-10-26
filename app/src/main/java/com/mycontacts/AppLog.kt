@@ -24,7 +24,7 @@ object AppLog {
             write(app, "FATAL", "Uncaught exception on ${thread.name}", error)
             previous?.uncaughtException(thread, error)
         }
-        info(app, "AppLog", "Crash handler installed; versionCode=${app.packageManager.getPackageInfo(app.packageName, 0).longVersionCode}")
+        info(app, "AppLog", "Crash handler installed; versionCode=${app.packageManager.getPackageInfo(app.packageName, 0).versionCode}")
     }
 
     fun info(context: Context, tag: String, message: String) = write(context, "INFO", tag + ": " + message, null)
