@@ -99,6 +99,7 @@ class MainActivity : Activity() {
         val row6 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row7 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row8 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row9 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -123,11 +124,12 @@ class MainActivity : Activity() {
         row7.addView(btn("Сохранить логи") { exportAppLogs() })
         row7.addView(btn("Файлы для Termux") { exportTermuxGuide() })
         row8.addView(btn("Аккаунты синхронизации") { showAccountSyncSettings() })
+        row9.addView(btn("Разрешить запрещённые настройки") { showRestrictedSettingsHelp() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
@@ -949,6 +951,31 @@ class MainActivity : Activity() {
                 runOnUiThread { toast("Не удалось сохранить инструкцию: ${e.message}") }
             }
         }
+    }
+
+    /**
+     * Android deliberately does not let apps grant their own restricted settings.
+     * This shortcut opens this app's system App info page and explains the manual steps.
+     */
+    private fun showRestrictedSettingsHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("Разрешить запрещённые настройки")
+            .setMessage(
+                "Android не позволяет приложению включить это разрешение автоматически. " +
+                "На следующем экране откройте меню ⋮ в правом верхнем углу и выберите " +
+                "«Разрешить запрещённые настройки», затем подтвердите действие. " +
+                "Пункт доступен не на всех версиях Android. Разрешайте его только если доверяете приложению."
+            )
+            .setPositiveButton("Открыть настройки приложения") { _, _ ->
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + packageName)))
+                } catch (e: Exception) {
+                    toast("Не удалось открыть настройки: " + (e.message ?: e.javaClass.simpleName))
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
