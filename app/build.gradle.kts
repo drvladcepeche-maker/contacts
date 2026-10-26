@@ -7,7 +7,7 @@ android {
     compileSdk = 34
     defaultConfig {
         applicationId = "com.mycontacts"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
