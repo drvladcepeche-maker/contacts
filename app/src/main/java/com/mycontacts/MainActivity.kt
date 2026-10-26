@@ -421,7 +421,7 @@ class MainActivity : Activity() {
                                 repo.mergeInAccount(group, target)
                                 completeBridgeCommand(id)
                                 runOnUiThread { refresh(); toast("Контакты объединены в аккаунте: " + target.label) }
-                                catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
+                            } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
