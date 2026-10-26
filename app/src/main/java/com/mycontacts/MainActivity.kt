@@ -94,6 +94,7 @@ class MainActivity : Activity() {
         val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row4 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row5 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row6 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -114,11 +115,12 @@ class MainActivity : Activity() {
         row4.addView(btn("Передать в ChatGPT") { shareWithChatGPT() })
         row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
         row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
+        row6.addView(btn("Telegram ID по номерам") { startActivity(Intent(this, TelegramMatcherActivity::class.java)) })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, status, list).forEach { root.addView(it) }
         setContentView(root)
     }
 
@@ -433,7 +435,7 @@ class MainActivity : Activity() {
                 val c = getItem(position)!!
                 val on = c.id in selected
                 v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
-                v.findViewById<TextView>(android.R.id.text2).text = c.phones.joinToString(", ")
+                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegramId.takeIf { it.isNotBlank() }?.let { "Telegram ID: $it" }, c.telegramUsername.takeIf { it.isNotBlank() }?.let { "Telegram: @$it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
                 v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }

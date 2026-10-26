@@ -9,6 +9,7 @@
     <application
         android:label="Мои контакты"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
+        <activity android:name=".TelegramMatcherActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
