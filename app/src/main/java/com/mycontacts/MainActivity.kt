@@ -451,7 +451,10 @@ class MainActivity : Activity() {
         val allowed = repo.accounts().map { it.first }
             .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }.toSet()
         if (allowed.isEmpty()) return emptyList()
-        return repo.loadAll().filter { c -> c.accountSources.any { it in allowed } }
+        return repo.loadAll().mapNotNull { c ->
+            val selectedSources = c.accountSources.filter { it in allowed }
+            if (selectedSources.isEmpty()) null else c.copy(accountSources = selectedSources)
+        }
     }
 
     private fun writableAccountFor(contact: Contact?): Acc? {
