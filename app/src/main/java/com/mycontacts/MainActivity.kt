@@ -435,7 +435,7 @@ class MainActivity : Activity() {
                 val c = getItem(position)!!
                 val on = c.id in selected
                 v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
-                v.findViewById<TextView>(android.R.id.text2).text = c.phones.joinToString(", ")
+                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegramId.takeIf { it.isNotBlank() }?.let { "Telegram ID: $it" }, c.telegramUsername.takeIf { it.isNotBlank() }?.let { "Telegram: @$it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
                 v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }
