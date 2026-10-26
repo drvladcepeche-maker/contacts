@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { readFile } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -11,6 +10,7 @@ const API_URL = process.env.TERMUX_BRIDGE_URL ||
   "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge";
 const TOKEN_PATH = resolve(homedir(), ".config/termux-bridge/device-token");
 const WORKSPACE = resolve(process.env.WORKSPACE || process.cwd());
+const APK_DIR = resolve(homedir(), "storage", "downloads", "PnS_APK");
 const POLL_MS = Math.max(3000, Number(process.env.POLL_MS) || 5000);
 const MAX_OUTPUT = 30000;
 let stopping = false;
@@ -85,6 +85,40 @@ function withinWorkspace(candidate) {
   return target;
 }
 
+async function readWorkspaceFile(args) {
+  const rel = String(args.path || "");
+  if (!rel || rel.startsWith("/") || rel.split(/[\\\\/]/).some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+    throw new Error("file_read requires a plain relative path without hidden or traversal segments.");
+  }
+  const leaf = basename(rel).toLowerCase();
+  if (/(secret|token|credential|password|\.env|private|keystore|\.jks|\.p12|\.pem)/i.test(leaf)) {
+    throw new Error("Reading sensitive filenames is blocked.");
+  }
+  if (!/\.(mjs|cjs|js|ts|tsx|json|md|ya?ml|sql|gradle|xml|properties|kt|java|txt|toml|sh)$/i.test(leaf)) {
+    throw new Error("file_read only supports approved text/code extensions.");
+  }
+  const target = withinWorkspace(rel);
+  const info = await stat(target);
+  if (!info.isFile()) throw new Error("Requested path is not a file.");
+  if (info.size > 65536) throw new Error("File exceeds the 64 KiB read limit.");
+  const output = await readFile(target, "utf8");
+  return { exitCode: 0, output, errorText: "" };
+}
+
+async function apkInventory() {
+  let names;
+  try { names = await readdir(APK_DIR); }
+  catch (error) { return { exitCode: 1, output: "", errorText: "APK directory unavailable: " + String(error?.message || error) }; }
+  const rows = [];
+  for (const name of names.filter(n => /\.apk$/i.test(n)).sort()) {
+    try {
+      const info = await stat(resolve(APK_DIR, name));
+      rows.push(name + "\\t" + info.size + " bytes");
+    } catch { rows.push(name + "\\tstat failed"); }
+  }
+  return { exitCode: 0, output: rows.join("\\n") || "No APK files found.", errorText: "" };
+}
+
 async function listFiles(args) {
   const target = withinWorkspace(String(args.path || "."));
   const entries = await readdir(target, { withFileTypes: true });
@@ -117,6 +151,16 @@ async function execute(job) {
       return { exitCode: 0, output: WORKSPACE, errorText: "" };
     case "list_files":
       return await listFiles(args);
+    case "file_read":
+      return await readWorkspaceFile(args);
+    case "apk_inventory":
+      return await apkInventory();
+    case "git_fetch_main":
+      return await run("git", ["fetch", "origin", "main"], 120000);
+    case "node_check_bridge":
+      return await run("node", ["--check", resolve(WORKSPACE, "tools/termux-bridge/bridge.mjs")]);
+    case "node_check_apk_inspect":
+      return await run("node", ["--check", resolve(WORKSPACE, "tools/termux-bridge/apk-inspect.mjs")]);
     case "apk_inspect":
       return await inspectApk();
     case "git_status":
@@ -151,7 +195,7 @@ async function execute(job) {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, git_status, git_log, git_diff_stat, apk_inspect (fixed base.apk path).");
+console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, apk_inspect, git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("No arbitrary shell command is accepted.");
 
