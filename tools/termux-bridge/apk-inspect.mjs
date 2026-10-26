@@ -9,11 +9,12 @@ const APK_PATHS = [
   join(APK_DIR, "split_config.arm64_v8a.apk"),
 ];
 const MAX_APK_BYTES = 100 * 1024 * 1024;
-const MAX_EXTRACT_BYTES = 80 * 1024 * 1024;
+const MAX_EXTRACT_BYTES = 150 * 1024 * 1024;
 const MAX_REPORT = 24000;
 const ASSET_PACK_PATH = join(APK_DIR, "split_abPack1.apk");
 const MAX_CENTRAL_DIRECTORY = 32 * 1024 * 1024;
 const MAX_ASSET_TEXT_TOTAL = 8 * 1024 * 1024;
+const MAX_ASSET_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_ASSET_TEXT_ENTRY = 1024 * 1024;
 
 function printableStrings(buffer) {
@@ -139,19 +140,28 @@ async function inspectAssetPack(strings) {
       offset += 46 + nameLen + extraLen + commentLen;
     }
     const textExt = /\.(json|xml|txt|cfg|ini|lua|proto|ya?ml|csv|properties|toml|conf)$/i;
+    const metadataRx = /(^|\/)global-metadata\.dat$/i;
     const candidates = entries.filter(e =>
+      metadataRx.test(e.name) ||
       textExt.test(e.name) ||
       (/(config|remote|server|endpoint|network|api|environment|channel|version)/i.test(e.name) &&
        e.uncompressedSize > 0 && e.uncompressedSize <= MAX_ASSET_TEXT_ENTRY)
     );
     const extractedNames = [];
     let extractedTotal = 0;
-    for (const entry of candidates) {
-      if (extractedNames.length >= 40 || extractedTotal >= MAX_ASSET_TEXT_TOTAL) break;
-      if (entry.uncompressedSize > MAX_ASSET_TEXT_ENTRY ||
-          entry.uncompressedSize > MAX_ASSET_TEXT_TOTAL - extractedTotal ||
-          entry.compressedSize > MAX_ASSET_TEXT_ENTRY ||
-          !textExt.test(entry.name)) continue;
+    for (const entry of candidates.sort((a, b) =>
+      Number(metadataRx.test(b.name)) - Number(metadataRx.test(a.name))
+    )) {
+      const isMetadata = metadataRx.test(entry.name);
+      const entryLimit = isMetadata ? MAX_ASSET_METADATA_BYTES : MAX_ASSET_TEXT_ENTRY;
+      const totalLimit = isMetadata ? MAX_ASSET_METADATA_BYTES : MAX_ASSET_TEXT_TOTAL;
+      if (extractedNames.length >= 40 || extractedTotal >= totalLimit) {
+        if (!isMetadata) break;
+      }
+      if (entry.uncompressedSize > entryLimit ||
+          (!isMetadata && entry.uncompressedSize > MAX_ASSET_TEXT_TOTAL - Math.min(extractedTotal, MAX_ASSET_TEXT_TOTAL)) ||
+          entry.compressedSize > entryLimit ||
+          (!isMetadata && !textExt.test(entry.name))) continue;
       const p = entry.localOffset;
       if (p + 30 > info.size) continue;
       const header = Buffer.alloc(30);
@@ -166,12 +176,12 @@ async function inspectAssetPack(strings) {
       let data;
       try {
         if (entry.method === 0) data = compressed;
-        else if (entry.method === 8) data = inflateRawSync(compressed, { maxOutputLength: MAX_ASSET_TEXT_ENTRY });
+        else if (entry.method === 8) data = inflateRawSync(compressed, { maxOutputLength: entryLimit });
         else continue;
       } catch { continue; }
-      if (data.length > MAX_ASSET_TEXT_ENTRY) continue;
+      if (data.length > entryLimit) continue;
       extractedTotal += data.length;
-      extractedNames.push(entry.name);
+      extractedNames.push(entry.name + (isMetadata ? " [IL2CPP metadata]" : ""));
       for (const value of printableStrings(data)) strings.push(value);
     }
     return {
@@ -207,8 +217,21 @@ export async function inspectApk() {
       /^classes(?:\d+)?\.dex$/.test(e.name) ||
       e.name === "AndroidManifest.xml" ||
       e.name === "resources.arsc" ||
-      /^lib\/arm64-v8a\/[^/]+\.so$/.test(e.name)
-    );
+      /^lib\/arm64-v8a\/[^/]+\.so$/.test(e.name) ||
+      /(^|\/)global-metadata\.dat$/i.test(e.name)
+    ).sort((a, b) => {
+      const rank = name => {
+        if (/global-metadata\.dat$/i.test(name)) return 0;
+        if (/lib\/arm64-v8a\/libil2cpp\.so$/i.test(name)) return 1;
+        if (/lib\/arm64-v8a\/libmain\.so$/i.test(name)) return 2;
+        if (/^classes(?:\d+)?\.dex$/.test(name)) return 3;
+        if (name === "AndroidManifest.xml") return 4;
+        if (/\.so$/i.test(name)) return 5;
+        return 6;
+      };
+      return rank(a.name) - rank(b.name) ||
+        a.uncompressedSize - b.uncompressedSize;
+    });
     if (path.endsWith("base.apk") && !targets.some(e => e.name === "classes.dex")) {
       throw new Error("classes.dex not found in base.apk.");
     }
@@ -267,7 +290,10 @@ export async function inspectApk() {
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. base.apk and split_config.arm64_v8a.apk are scanned within extraction limits. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed."
+    "IL2CPP / GAME-PROTOCOL SIGNALS",
+    ...[...new Set(strings.filter(s => /il2cpp|global-metadata|protobuf|messagepack|websocket|gateway|heartbeat|login|session|request|response|battle|march|alliance|player|serverlist|server_list|https?:\/\//i.test(s)).map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]").replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]").slice(0, 300)))].sort().slice(0, 100),
+    "",
+    "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. This pass prioritizes global-metadata.dat and libil2cpp.so if they exist in the scanned APKs. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed. No live service calls are made."
   ].join("\n").slice(0, MAX_REPORT);
   return { exitCode: 0, output: report, errorText: "" };
 }
