@@ -114,13 +114,13 @@ object AppLog {
 set -euo pipefail
 pkg update -y
 pkg install -y git nano
-if [ -d "\$HOME/contacts/.git" ]; then
-  git -C "\$HOME/contacts" pull --ff-only
+if [ -d "${'$'}HOME/contacts/.git" ]; then
+  git -C "${'$'}HOME/contacts" pull --ff-only
 else
-  git clone https://github.com/drvladcepeche-maker/contacts.git "\$HOME/contacts"
+  git clone https://github.com/drvladcepeche-maker/contacts.git "${'$'}HOME/contacts"
 fi
 echo
-echo "Исходники доступны: \$HOME/contacts"
+echo "Исходники доступны: ${'$'}HOME/contacts"
 echo "Редактируйте Kotlin-файлы в app/src/main/java/com/mycontacts/"
 echo "Изменения APK собираются через GitHub Actions после отправки commit в GitHub."
 """
