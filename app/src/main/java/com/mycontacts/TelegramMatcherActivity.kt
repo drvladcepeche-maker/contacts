@@ -201,7 +201,7 @@ class TelegramMatcherActivity : Activity() {
             val input = batch.mapIndexed { i, candidate ->
                 TdApi.Contact(candidate.phone, candidate.contact.name.take(64).ifBlank { "Contact" }, "", "", 0L)
             }.toTypedArray()
-            progress.message = "Проверено $checked из ${candidates.size}…"
+            progress.setMessage("Проверено $checked из ${candidates.size}…")
             session.importPhoneBatch(input) { ids, error ->
                 runOnUiThread {
                     if (error != null || ids == null) {
