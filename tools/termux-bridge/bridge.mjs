@@ -26,16 +26,87 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-async function request(body) {
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
+function curlConfigQuote(value) {
+  return '"' + String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n") + '"';
+}
+
+async function requestViaCurl(body) {
+  const payload = JSON.stringify(body);
+  const marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
+  const config = [
+    `url = ${curlConfigQuote(API_URL)}`,
+    'request = "POST"',
+    `header = ${curlConfigQuote("content-type: application/json")}`,
+    `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
+    `data = ${curlConfigQuote(payload)}`,
+    `max-time = "20"`,
+    `write-out = ${curlConfigQuote("\\n" + marker + "%{http_code}")}`,
+  ].join("\\n") + "\\n";
+
+  const result = await new Promise((resolveRun) => {
+    const child = spawn("curl", ["--silent", "--show-error", "--config", "-"], {
+      cwd: WORKSPACE,
+      shell: false,
+      env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => child.kill("SIGKILL"), 22000);
+    child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-MAX_OUTPUT - 128); });
+    child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
+    child.on("error", error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun({ code: 127, stdout, stderr: error.message });
+    });
+    child.on("close", code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun({ code: Number.isInteger(code) ? code : 1, stdout, stderr });
+    });
+    child.stdin.end(config);
   });
+
+  const markerAt = result.stdout.lastIndexOf(marker);
+  if (result.code !== 0 || markerAt < 0) {
+    throw new Error(`Bridge curl fallback failed (exit ${result.code}): ${result.stderr || "no HTTP status received"}`);
+  }
+  const responseText = result.stdout.slice(0, markerAt).replace(/\\n$/, "");
+  const statusText = result.stdout.slice(markerAt + marker.length).trim();
+  const status = Number(statusText);
+  let data;
+  try { data = responseText ? JSON.parse(responseText) : {}; }
+  catch { throw new Error(`Bridge returned invalid JSON (HTTP ${status})`); }
+  if (status < 200 || status >= 300) throw new Error(data.error || `Bridge HTTP ${status}`);
+  return data;
+}
+
+async function request(body) {
+  let response;
+  try {
+    response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`Bridge fetch failed; trying curl fallback: ${reason}`);
+    return await requestViaCurl(body);
+  }
+
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : {}; }
