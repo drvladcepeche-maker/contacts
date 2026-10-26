@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.util.Base64
 import android.util.Log
 import org.drinkless.tdlib.TdApi
 import java.util.concurrent.Executors
@@ -71,7 +70,7 @@ class TelegramMatchService : Service() {
                             updateNotification("Ошибка Telegram: " + message.removePrefix("Telegram: "), checked, candidates.size)
                         }
                     }, {
-                        beginMatching()
+                        main.post { beginMatching() }
                     })
                     if (session?.isReady() == true) beginMatching()
                     else if (session?.resumeIfConfigured() == false) {
