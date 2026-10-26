@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { inspectApk } from "./apk-inspect.mjs";
 import { readFile } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -116,6 +117,8 @@ async function execute(job) {
       return { exitCode: 0, output: WORKSPACE, errorText: "" };
     case "list_files":
       return await listFiles(args);
+    case "apk_inspect":
+      return await inspectApk();
     case "git_status":
       return await run("git", ["status", "--short", "--branch"]);
     case "git_log": {
@@ -148,7 +151,7 @@ async function execute(job) {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, git_status, git_log, git_diff_stat.");
+console.log("Automatic commands: pwd, list_files, git_status, git_log, git_diff_stat, apk_inspect (fixed base.apk path).");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("No arbitrary shell command is accepted.");
 
