@@ -89,7 +89,10 @@ async function requestViaCurl(body) {
   return data;
 }
 
+let preferCurlTransport = false;
+
 async function request(body) {
+  if (preferCurlTransport) return await requestViaCurl(body);
   let response;
   try {
     response = await fetch(API_URL, {
@@ -103,7 +106,8 @@ async function request(body) {
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`Bridge fetch failed; trying curl fallback: ${reason}`);
+    preferCurlTransport = true;
+    console.error(`Node fetch unavailable; using curl transport: ${reason}`);
     return await requestViaCurl(body);
   }
 
