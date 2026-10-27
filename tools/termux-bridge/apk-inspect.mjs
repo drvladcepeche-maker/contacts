@@ -103,7 +103,7 @@ function parseIl2CppMetadata(buffer) {
       const length = buffer.readUInt32LE(p + 4);
       if (offset > literalData.size || length > literalData.size - offset || length > 4096) continue;
       const value = buffer.toString("utf8", literalData.offset + offset, literalData.offset + offset + length);
-      if (value && !/[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]/.test(value)) literals.push(value);
+      if (value && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) literals.push(value);
     }
   }
   const stringTableBytes = safeRange(stringTable) ? stringTable.size : 0;
