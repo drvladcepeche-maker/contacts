@@ -119,7 +119,7 @@ function parseIl2CppMetadata(buffer) {
       start = i + 1;
     }
   }
-  const relevantRx = /api|https?:|wss?:|socket|gateway|server|login|auth|account|player|battle|march|request|response|protobuf|messagepack|heartbeat|resource|hero|alliance|activity|token|session|endpoint|version|channel|config|command|\\bcmd\\b|\\bnet\\b|\\bhttp\\b|\\brpc\\b|\\burl\\b/i;
+  const relevantRx = /api|https?:|wss?:|socket|gateway|server|login|auth|account|player|battle|march|request|response|protobuf|messagepack|heartbeat|resource|hero|alliance|activity|token|session|endpoint|version|channel|config|command|cmd|net|http|rpc|url/i;
   const relevant = [...new Set([...literals, ...metadataStrings].filter(s => relevantRx.test(s)))].slice(0, 240);
   return {
     summary: "IL2CPP metadata: magic=0xFAB11BAF; version=" + version +
@@ -300,7 +300,7 @@ export async function inspectApk() {
       if (!data) continue;
       totalExtracted += data.length;
       inspected.push(path.split("/").pop() + ":" + entry.name);
-      if (/(^|\\/)global-metadata\\.dat$/i.test(entry.name)) {
+      if (entry.name.endsWith("global-metadata.dat")) {
         il2cppMetadata = parseIl2CppMetadata(data);
         for (const value of il2cppMetadata.strings) strings.push(value);
       }
