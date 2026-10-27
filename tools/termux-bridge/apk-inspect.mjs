@@ -80,6 +80,45 @@ function extractEntry(apk, entry) {
   return null;
 }
 
+function parseIl2CppMetadata(buffer) {
+  if (buffer.length < 8 || buffer.readUInt32LE(0) !== 0xfab11baf) {
+    return { summary: "Metadata magic is absent; the file may be protected or not IL2CPP metadata.", strings: [] };
+  }
+  const version = buffer.readUInt32LE(4);
+  const pairs = [];
+  for (let i = 8; i + 8 <= Math.min(buffer.length, 8 + 40 * 8); i += 8) {
+    pairs.push({ offset: buffer.readUInt32LE(i), size: buffer.readUInt32LE(i + 4) });
+  }
+  const literalTable = pairs[0];
+  const literalData = pairs[1];
+  const stringTable = pairs[2];
+  const safeRange = section => section && section.offset <= buffer.length &&
+    section.size <= buffer.length - section.offset;
+  const literals = [];
+  if (safeRange(literalTable) && safeRange(literalData) && literalTable.size % 8 === 0) {
+    const count = Math.min(literalTable.size / 8, 200000);
+    for (let i = 0; i < count; i++) {
+      const p = literalTable.offset + i * 8;
+      const offset = buffer.readUInt32LE(p);
+      const length = buffer.readUInt32LE(p + 4);
+      if (offset > literalData.size || length > literalData.size - offset || length > 4096) continue;
+      const value = buffer.toString("utf8", literalData.offset + offset, literalData.offset + offset + length);
+      if (value && !/[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]/.test(value)) literals.push(value);
+    }
+  }
+  const stringTableBytes = safeRange(stringTable) ? stringTable.size : 0;
+  const relevantRx = /api|https?:|wss?:|socket|gateway|server|login|auth|account|player|battle|march|request|response|protobuf|messagepack|heartbeat|resource|hero|alliance|activity|token|session|endpoint|version|channel|config|command|\\bcmd\\b/i;
+  const relevant = [...new Set(literals.filter(s => relevantRx.test(s)))].slice(0, 160);
+  return {
+    summary: "IL2CPP metadata: magic=0xFAB11BAF; version=" + version +
+      "; headerPairs=" + pairs.length +
+      "; stringLiteralRecords=" + (literalTable && literalTable.size % 8 === 0 ? literalTable.size / 8 : "invalid") +
+      "; stringLiteralDataBytes=" + (literalData ? literalData.size : "n/a") +
+      "; metadataStringTableBytes=" + stringTableBytes,
+    strings: relevant,
+  };
+}
+
 function scrubUrl(raw) {
   const cleaned = raw.replace(/[),.;]+$/, "");
   try {
@@ -209,6 +248,7 @@ export async function inspectApk() {
   const errors = [];
   let totalExtracted = 0;
   const apkSummaries = [];
+  let il2cppMetadata = null;
   for (const path of APK_PATHS) {
     let info;
     try { info = await stat(path); } catch { errors.push("Not found: " + path.split("/").pop()); continue; }
@@ -247,6 +287,10 @@ export async function inspectApk() {
       if (!data) continue;
       totalExtracted += data.length;
       inspected.push(path.split("/").pop() + ":" + entry.name);
+      if (/(^|\\/)global-metadata\\.dat$/i.test(entry.name)) {
+        il2cppMetadata = parseIl2CppMetadata(data);
+        for (const value of il2cppMetadata.strings) strings.push(value);
+      }
       for (const value of printableStrings(data)) strings.push(value);
     }
   }
@@ -293,6 +337,11 @@ export async function inspectApk() {
     "Files: " + apkSummaries.join(" | "),
     "Extracted bytes: " + totalExtracted,
     "Inspected entries: " + inspected.join(", "),
+    "",
+    "IL2CPP METADATA SUMMARY",
+    il2cppMetadata ? il2cppMetadata.summary : "global-metadata.dat was not extracted.",
+    "IL2CPP METADATA STRINGS (filtered; up to 160)",
+    ...(il2cppMetadata ? il2cppMetadata.strings : []),
     "",
     "ASSET PACK INDEX",
     assetPack.summary,
