@@ -107,14 +107,27 @@ function parseIl2CppMetadata(buffer) {
     }
   }
   const stringTableBytes = safeRange(stringTable) ? stringTable.size : 0;
-  const relevantRx = /api|https?:|wss?:|socket|gateway|server|login|auth|account|player|battle|march|request|response|protobuf|messagepack|heartbeat|resource|hero|alliance|activity|token|session|endpoint|version|channel|config|command|\\bcmd\\b/i;
-  const relevant = [...new Set(literals.filter(s => relevantRx.test(s)))].slice(0, 160);
+  const metadataStrings = [];
+  if (stringTableBytes > 0) {
+    const end = stringTable.offset + stringTable.size;
+    let start = stringTable.offset;
+    for (let i = stringTable.offset; i < end; i++) {
+      if (buffer[i] !== 0) continue;
+      if (i - start >= 3 && i - start <= 512) {
+        metadataStrings.push(buffer.toString("utf8", start, i));
+      }
+      start = i + 1;
+    }
+  }
+  const relevantRx = /api|https?:|wss?:|socket|gateway|server|login|auth|account|player|battle|march|request|response|protobuf|messagepack|heartbeat|resource|hero|alliance|activity|token|session|endpoint|version|channel|config|command|\\bcmd\\b|\\bnet\\b|\\bhttp\\b|\\brpc\\b|\\burl\\b/i;
+  const relevant = [...new Set([...literals, ...metadataStrings].filter(s => relevantRx.test(s)))].slice(0, 240);
   return {
     summary: "IL2CPP metadata: magic=0xFAB11BAF; version=" + version +
       "; headerPairs=" + pairs.length +
       "; stringLiteralRecords=" + (literalTable && literalTable.size % 8 === 0 ? literalTable.size / 8 : "invalid") +
       "; stringLiteralDataBytes=" + (literalData ? literalData.size : "n/a") +
-      "; metadataStringTableBytes=" + stringTableBytes,
+      "; metadataStringTableBytes=" + stringTableBytes +
+      "; metadataStringsDecoded=" + metadataStrings.length,
     strings: relevant,
   };
 }
