@@ -10,7 +10,7 @@ const APK_PATHS = [
 ];
 const MAX_APK_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACT_BYTES = 150 * 1024 * 1024;
-const MAX_REPORT = 24000;
+const MAX_REPORT = 28000;
 const ASSET_PACK_PATH = join(APK_DIR, "split_abPack1.apk");
 const MAX_CENTRAL_DIRECTORY = 32 * 1024 * 1024;
 const MAX_ASSET_TEXT_TOTAL = 8 * 1024 * 1024;
@@ -338,6 +338,9 @@ export async function inspectApk() {
     "Extracted bytes: " + totalExtracted,
     "Inspected entries: " + inspected.join(", "),
     "",
+    "GAME / NETWORK STRING CANDIDATES (ranked; static, not proof of live API)",
+    ...networkCandidates.slice(0, 160),
+    "",
     "IL2CPP METADATA SUMMARY",
     il2cppMetadata ? il2cppMetadata.summary : "global-metadata.dat was not extracted.",
     "IL2CPP METADATA STRINGS (filtered; up to 160)",
@@ -361,8 +364,6 @@ export async function inspectApk() {
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "GAME / NETWORK STRING CANDIDATES (ranked; static, not proof of live API)",
-    ...networkCandidates.slice(0, 160),
     "",
     "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. This pass prioritizes global-metadata.dat and libil2cpp.so if they exist in the scanned APKs. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed. No live service calls are made."
   ].join("\n").slice(0, MAX_REPORT);
