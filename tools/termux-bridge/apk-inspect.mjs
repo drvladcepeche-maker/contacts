@@ -273,6 +273,21 @@ export async function inspectApk() {
   ];
   const lower = all.toLowerCase();
   const foundMarkers = markers.filter(m => lower.includes(m));
+  const networkCandidates = [...new Set(strings
+    .filter(s => /puzzles|37games|firebaseio|https?:\/\/|\b(api|server|gateway|login|auth|config|endpoint|channel|region|cdn|socket|websocket|grpc|protobuf|messagepack|request|response|heartbeat|account|role|player|battle|march|alliance|rpc|url|host)\b/i.test(s))
+    .map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]")
+      .replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]")
+      .slice(0, 500)))];
+  const networkScore = s => {
+    const v = s.toLowerCase();
+    let score = 0;
+    if (/puzzles|37games|firebaseio/.test(v)) score += 100;
+    if (/https?:\/\//.test(v)) score += 30;
+    if (/api|server|gateway|login|auth|config|endpoint|channel|region|socket|websocket|protobuf|messagepack|heartbeat|account|role|player|battle|march|alliance|rpc/.test(v)) score += 15;
+    if (/appsflyer|facebook|google|android\.com|w3\.org|example\.com|unity3d\.com|tiktok|twitter|vk\.com/.test(v)) score -= 20;
+    return score;
+  };
+  networkCandidates.sort((a, b) => networkScore(b) - networkScore(a) || a.localeCompare(b));
   const report = [
     "APK static inspection report (refined)",
     "Files: " + apkSummaries.join(" | "),
@@ -297,8 +312,8 @@ export async function inspectApk() {
     "NETWORK / SDK MARKERS",
     ...foundMarkers.sort(),
     "",
-    "IL2CPP / GAME-PROTOCOL SIGNALS",
-    ...[...new Set(strings.filter(s => /il2cpp|global-metadata|protobuf|messagepack|websocket|gateway|heartbeat|login|session|request|response|battle|march|alliance|player|serverlist|server_list|https?:\/\//i.test(s)).map(s => s.replace(/(bearer\s+)[A-Za-z0-9._~-]+/ig, "$1[REDACTED]").replace(/((?:token|secret|password|api[_-]?key|authorization)\s*[:=]\s*)[^\s,;]{6,}/ig, "$1[REDACTED]").slice(0, 300)))].sort().slice(0, 100),
+    "GAME / NETWORK STRING CANDIDATES (ranked; static, not proof of live API)",
+    ...networkCandidates.slice(0, 160),
     "",
     "Caveats: Static strings do not prove that an endpoint is active or public. URL templates may be assembled at runtime. This pass prioritizes global-metadata.dat and libil2cpp.so if they exist in the scanned APKs. The large asset pack is indexed by ZIP central directory and only small text/config entries are selectively extracted; binary Unity assets and other splits are not fully analyzed. No live service calls are made."
   ].join("\n").slice(0, MAX_REPORT);
