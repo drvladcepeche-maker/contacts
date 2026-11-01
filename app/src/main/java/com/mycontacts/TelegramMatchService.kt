@@ -153,7 +153,7 @@ class TelegramMatchService : Service() {
                                     repo.updateTelegramLookup(contact.id, id.toString(), storedUsername)
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to save Telegram fields for contact ${candidate.contact.id}", e)
+                                Log.e(TAG, "Failed to save Telegram fields for contact ${candidate.contacts.firstOrNull()?.id}", e)
                                 synchronized(stateLock) { errors++ }
                             } finally {
                                 synchronized(stateLock) { pendingUsernameWrites-- }
