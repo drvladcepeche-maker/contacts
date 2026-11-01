@@ -213,7 +213,7 @@ Deno.serve(async (req: Request) => {
 
   if (action === "queue_command") {
     const commandAction = String(body.command_action ?? "");
-    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts"];
+    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts", "update_telegram_fields"];
     if (!allowed.includes(commandAction)) return json({ error: "Unsupported command_action" }, 400);
     if (!deviceId && body.device_id) deviceId = String(body.device_id);
     if (!deviceId) {
