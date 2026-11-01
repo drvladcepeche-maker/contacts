@@ -60,3 +60,7 @@ The resolver can also run as a scheduled, checkpointed GitHub Actions job; this 
 4. The scheduled workflow processes up to 250 phone candidates per run, saves progress, and resumes on a later run. It runs every five minutes when enabled.
 
 The Telegram StringSession is equivalent to a login credential and can access the Telegram account. Prefer a dedicated Telegram account. Never paste the session or service-role key into chat, source files, issues, or commits. The scheduled worker uses the Supabase service-role key only as a protected GitHub Actions secret.
+
+### Username preservation
+
+When a Telegram account resolves but currently has no public username, the resolver stores `Скрыт` only if no earlier username is known. Previously discovered usernames are retained and combined with new values using comma + space. A later unresolved phone lookup also cannot erase an already confirmed Telegram match on the same contact.
