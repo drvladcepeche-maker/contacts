@@ -1,13 +1,14 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
 val stableStorePath = System.getenv("MYCONTACTS_KEYSTORE_PATH")
 val stableStorePassword = System.getenv("MYCONTACTS_KEYSTORE_PASSWORD")
 val stableKeyAlias = System.getenv("MYCONTACTS_KEY_ALIAS")
 val stableKeyPassword = System.getenv("MYCONTACTS_KEY_PASSWORD")
 val stableSigningEnabled = listOf(stableStorePath, stableStorePassword, stableKeyAlias, stableKeyPassword).all { !it.isNullOrBlank() }
 
-plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-}
 android {
     namespace = "com.mycontacts"
     compileSdk = 34
