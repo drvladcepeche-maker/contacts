@@ -2,18 +2,13 @@ package com.mycontacts
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.ProgressDialog
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
-import org.drinkless.tdlib.TdApi
-import java.util.Locale
 
 class TelegramMatcherActivity : Activity() {
     private lateinit var repo: ContactRepo
@@ -21,7 +16,6 @@ class TelegramMatcherActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var authButton: Button
     private lateinit var matchButton: Button
-    private val handler = Handler(Looper.getMainLooper())
     private var lastPrompt = ""
     private var isMatching = false
 
@@ -161,7 +155,7 @@ class TelegramMatcherActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Передать номера Telegram?")
             .setMessage("Будет передано в Telegram до ${candidates.size} номеров из контактов для сопоставления. Telegram может сохранить их в списке контактов аккаунта. Номера без международного префикса пропущены: $skipped. Продолжить?")
-            .setPositiveButton("Передать и сопоставить") { _, _ -> runMatching(candidates, skipped) }
+            .setPositiveButton("Передать и сопоставить") { _, _ -> requestNotificationPermissionAndStart() }
             .setNegativeButton("Отмена", null)
             .show()
     }
@@ -174,76 +168,40 @@ class TelegramMatcherActivity : Activity() {
         return if (trimmed.startsWith("+") && digits.length in 8..15) "+$digits" else ""
     }
 
-    private fun runMatching(candidates: List<Candidate>, skipped: Int) {
-        if (isMatching) return
-        isMatching = true
-        matchButton.isEnabled = false
-        var index = 0
-        var matched = 0
-        var checked = 0
-        var errors = 0
-        val progress = ProgressDialog(this).apply {
-            setTitle("Сопоставление Telegram")
-            setMessage("Подготовка…")
-            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
-            max = candidates.size
-            setCancelable(false)
-            show()
+    private fun requestNotificationPermissionAndStart() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+            return
         }
-        fun nextBatch() {
-            if (index >= candidates.size) {
-                progress.dismiss()
-                isMatching = false
-                matchButton.isEnabled = true
-                status.text = "Готово. Проверено: $checked; найдено ID: $matched; ошибок: $errors; пропущено номеров: $skipped."
-                AlertDialog.Builder(this).setTitle("Сопоставление завершено")
-                    .setMessage(status.text).setPositiveButton("ОК", null).show()
-                return
-            }
-            val start = index
-            val batch = candidates.subList(start, minOf(start + 50, candidates.size))
-            index += batch.size
-            val input = batch.mapIndexed { i, candidate ->
-                TdApi.ImportedContact(candidate.phone, candidate.contact.name.take(64).ifBlank { "Contact" }, "", null)
-            }.toTypedArray()
-            progress.setMessage("Проверено $checked из ${candidates.size}…")
-            session.importPhoneBatch(input) { ids, error ->
-                runOnUiThread {
-                    if (error != null || ids == null) {
-                        errors += batch.size
-                        status.text = "Ошибка пачки: ${error ?: "нет результата"}"
-                    } else {
-                        // Count every submitted number, including numbers with no Telegram account.
-                        checked += batch.size
-                        for (i in batch.indices) {
-                            val id = ids.getOrNull(i) ?: 0L
-                            if (id <= 0L) continue
-                            matched++
-                            val candidate = batch[i]
-                            session.fetchUsername(id) { username ->
-                                val foundNames = username.split(",")
-                                    .map { it.trim().removePrefix("@") }
-                                    .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
-                                val previousNames = candidate.contact.telegramUsername.split(",")
-                                    .map { it.trim().removePrefix("@") }
-                                    .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
-                                val allNames = (previousNames + foundNames).distinct()
-                                val storedUsername = if (foundNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
-                                repo.updateTelegramLookup(candidate.contact.id, id.toString(), storedUsername)
-                            }
-                        }
-                    }
-                    progress.progress = checked
-                    progress.setMessage("Проверено $checked из ${candidates.size}…")
-                    handler.postDelayed({ nextBatch() }, 3000)
-                }
-            }
-        }
-        nextBatch()
+        startMatchingService()
     }
 
-    override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        super.onDestroy()
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            // Continue even if notifications are denied; Android may suppress progress notifications.
+            startMatchingService()
+        }
     }
+
+    private fun startMatchingService() {
+        try {
+            val intent = android.content.Intent(this, TelegramMatchService::class.java).apply {
+                action = TelegramMatchService.ACTION_MATCH
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(intent)
+            else startService(intent)
+            status.text = "Сопоставление запущено в фоне. Прогресс и результат будут в уведомлениях."
+            matchButton.isEnabled = false
+        } catch (e: Exception) {
+            status.text = "Не удалось запустить фоновое сопоставление: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    companion object {
+        private const val REQUEST_NOTIFICATIONS = 7312
+    }
+
+    override fun onDestroy() { super.onDestroy() }
 }
