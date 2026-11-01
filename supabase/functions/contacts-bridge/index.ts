@@ -83,8 +83,47 @@ Deno.serve(async (req: Request) => {
       }
       const rows = Array.from(byLocalId.values());
       if (rows.length) {
+        const ids = rows.map((row) => String(row.local_contact_id));
+        const { data: previousRows, error: previousError } = await supabase
+          .from("contact_bridge_snapshots")
+          .select("local_contact_id, contact_data")
+          .eq("device_id", deviceId)
+          .in("local_contact_id", ids);
+        if (previousError) return json({ error: previousError.message }, 500);
+        const previousById = new Map((previousRows ?? []).map((row: any) => [String(row.local_contact_id), row.contact_data]));
+        const mergedRows = rows.map((row) => {
+          const incoming = row.contact_data as Record<string, unknown>;
+          const previous = previousById.get(String(row.local_contact_id));
+          if (!previous || typeof previous !== "object" || Array.isArray(previous)) return row;
+          const prior = previous as Record<string, unknown>;
+          const merged: Record<string, unknown> = { ...prior, ...incoming };
+          // Android may sync before it has polled the queued write. Preserve resolver
+          // metadata so checked phone numbers are not scanned again after every sync.
+          for (const key of [
+            "telegram_match_status",
+            "telegram_match_phone",
+            "telegram_match_checked_phones",
+            "telegram_match_checked_at",
+          ]) {
+            if (prior[key] !== undefined) merged[key] = prior[key];
+          }
+          // A server-confirmed result remains authoritative until the queued Android
+          // update is applied. A not_resolved result also preserves a deliberate clear.
+          const hasServerTelegramValue = Boolean(prior.telegram_id) ||
+            (typeof prior.telegram_username === "string" && prior.telegram_username.length > 0);
+          if (hasServerTelegramValue) {
+            // A later non-match for another number must not erase an earlier match.
+            if (prior.telegram_id !== undefined) merged.telegram_id = prior.telegram_id;
+            if (prior.telegram_username !== undefined) merged.telegram_username = prior.telegram_username;
+          } else if (prior.telegram_match_status === "not_resolved") {
+            // Preserve an intentional server-side clear for the last checked number.
+            merged.telegram_id = prior.telegram_id ?? null;
+            merged.telegram_username = prior.telegram_username ?? null;
+          }
+          return { ...row, contact_data: merged };
+        });
         const { error } = await supabase.from("contact_bridge_snapshots")
-          .upsert(rows, { onConflict: "device_id,local_contact_id" });
+          .upsert(mergedRows, { onConflict: "device_id,local_contact_id" });
         if (error) return json({ error: error.message }, 500);
       }
       return json({ synced: rows.length, unique_contacts: rows.length, duplicate_ids_in_batch_removed: contacts.length - rows.length });
