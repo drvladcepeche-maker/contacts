@@ -31,7 +31,7 @@ Optional:
 - `REQUEST_JITTER_MS` (default 3000)
 - `PORT` (default 8080)
 
-Apply the new SQL migration before starting the worker. Generate a dedicated MTProto StringSession on a trusted local machine; do not paste it into chat, commit it, or place it in build logs. The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker.
+Apply the new SQL migration before starting the worker. Generate a dedicated MTProto StringSession on a trusted local machine; do not paste it into chat, commit it, or place it in build logs. On Windows, run `generate-session.bat` from this directory (it uses CMD, not PowerShell); enter the API ID and API hash when prompted. It installs dependencies and starts the Telegram phone/code/2FA authorization flow. Copy the final session string directly into the Hostless secret `TELEGRAM_SESSION`. The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker.
 
 ## Health check
 
