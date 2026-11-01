@@ -149,7 +149,7 @@ class TelegramMatchService : Service() {
                                         .map { it.trim().removePrefix("@") }
                                         .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
                                     val allNames = (previousNames + foundNames).distinct()
-                                    val storedUsername = if (foundNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
+                                    val storedUsername = if (allNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
                                     repo.updateTelegramLookup(contact.id, id.toString(), storedUsername)
                                 }
                             } catch (e: Exception) {
