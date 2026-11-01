@@ -7,6 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 type PhoneCandidate = {
   device_id: string;
   local_contact_id: string;
+  local_contact_ids?: string[];
   name?: string;
   phone: string;
 };
@@ -271,7 +272,16 @@ async function processJob(job: Job) {
       }
     }
     lastRequestAt = new Date().toISOString();
-    await saveContactResult(candidate, result);
+    const targetContactIds = Array.from(new Set([
+      candidate.local_contact_id,
+      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0)));
+    for (const localContactId of targetContactIds) {
+      await saveContactResult(
+        { ...candidate, local_contact_id: localContactId },
+        { ...result, local_contact_id: localContactId },
+      );
+    }
     results.push(result);
     await updateJob(job.id, {
       results, checked: results.length,
@@ -299,7 +309,7 @@ async function main() {
     connectionRetries: 3, autoReconnect: true, requestRetries: 0,
   });
   await telegram.connect();
-  if (!(await telegram.checkAuthorization())) throw new Error("Telegram session is not authorized. Generate a dedicated StringSession and store it as a Hostless secret.");
+  if (!(await telegram.checkAuthorization())) throw new Error("Telegram session is not authorized. Generate a dedicated StringSession and store it as the GitHub Actions secret TELEGRAM_SESSION.");
   ready = true;
   console.log("Dedicated Telegram MTProto session authorized; resolver worker started.");
   while (!stopping) {
