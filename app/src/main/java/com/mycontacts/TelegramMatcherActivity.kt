@@ -193,7 +193,6 @@ class TelegramMatcherActivity : Activity() {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(intent)
             else startService(intent)
             status.text = "Сопоставление запущено в фоне. Прогресс и результат будут в уведомлениях."
-            matchButton.isEnabled = false
         } catch (e: Exception) {
             status.text = "Не удалось запустить фоновое сопоставление: ${e.message ?: e.javaClass.simpleName}"
         }
