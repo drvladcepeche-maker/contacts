@@ -19,7 +19,8 @@ call npm run session
 if errorlevel 1 goto failed
 echo.
 echo Copy the generated session directly into the GitHub repository secret TELEGRAM_SESSION.
-echo Do NOT paste it into ChatGPT, GitHub, or logs.
+echo Do NOT paste it into chat, source files, public GitHub content, or logs.
+echo Paste it only into the private GitHub Actions secret TELEGRAM_SESSION.
 goto done
 :missing
 echo API ID and API HASH are required.
