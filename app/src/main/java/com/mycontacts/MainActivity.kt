@@ -375,6 +375,21 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            "update_telegram_fields" -> {
+                bg {
+                    try {
+                        val contactId = payload.optLong("id", -1)
+                        require(contactId > 0) { "Некорректный ID контакта" }
+                        val telegramId = payload.optString("telegram_id", "")
+                        val username = payload.optString("telegram_username", "")
+                        repo.updateTelegramLookup(contactId, telegramId, username)
+                        completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
+                        runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
+                    } catch (e: Exception) {
+                        try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                    }
+                }
+            }
             "delete_contact" -> {
                 runOnUiThread {
                     val contactId = payload.optLong("id", -1)
@@ -435,7 +450,7 @@ class MainActivity : Activity() {
                 val c = getItem(position)!!
                 val on = c.id in selected
                 v.findViewById<TextView>(android.R.id.text1).text = (if (on) "✓ " else "") + c.name
-                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegramId.takeIf { it.isNotBlank() }?.let { "Telegram ID: $it" }, c.telegramUsername.takeIf { it.isNotBlank() }?.let { "Telegram: @$it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
+                v.findViewById<TextView>(android.R.id.text2).text = listOf(c.phones.joinToString(", "), c.telegramId.takeIf { it.isNotBlank() }?.let { "Telegram ID: $it" }, c.telegramUsername.takeIf { it.isNotBlank() }?.let { if (it == "СКРЫТ") "Telegram: СКРЫТ" else "Telegram: @$it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
                 v.setBackgroundColor(if (on) 0x3366BB6A else 0)
                 return v
             }
