@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { mkdir, chmod, writeFile } from "node:fs/promises";
+import { mkdir, chmod, writeFile, access } from "node:fs/promises";
+import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { TelegramClient } from "telegram";
@@ -12,19 +13,44 @@ if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) {
   throw new Error("Set TELEGRAM_API_ID and TELEGRAM_API_HASH in the local environment.");
 }
 
+const force = process.argv.includes("--force");
 const sessionDir = join(homedir(), ".config", "contacts-telegram");
 const sessionPath = join(sessionDir, "TELEGRAM_SESSION");
 const rl = createInterface({ input, output });
 const ask = async (prompt: string) => (await rl.question(prompt)).trim();
 let client: TelegramClient | undefined;
 
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 try {
+  if (await fileExists(sessionPath)) {
+    if (!force) {
+      const answer = await ask(
+        `Session file already exists at:\n  ${sessionPath}\n\nOverwrite it? (y/N): `
+      );
+      if (!/^y(es)?$/i.test(answer)) {
+        console.log("Aborted. Existing session was left unchanged.");
+        process.exit(0);
+      }
+    } else {
+      console.log(`--force: overwriting existing session at ${sessionPath}`);
+    }
+  }
+
   const phone = await ask("Telegram account phone (international format): ");
   if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error("Invalid international phone number.");
 
   client = new TelegramClient(new StringSession(""), apiId, apiHash, {
-    connectionRetries: 3,
+    connectionRetries: 8,
     autoReconnect: true,
+    useWSS: false,
   });
 
   await client.start({
@@ -42,8 +68,8 @@ try {
   await mkdir(sessionDir, { recursive: true, mode: 0o700 });
   await chmod(sessionDir, 0o700);
 
-  // wx prevents accidentally overwriting an existing authorized session.
-  await writeFile(sessionPath, session + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+  // Use "w" so we can overwrite after explicit confirmation / --force.
+  await writeFile(sessionPath, session + "\n", { encoding: "utf8", mode: 0o600, flag: "w" });
   await chmod(sessionPath, 0o600);
 
   console.log("\nTelegram authorization successful.");
