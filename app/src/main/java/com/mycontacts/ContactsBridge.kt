@@ -41,6 +41,7 @@ class ContactsBridge(context: Context) {
     }
 
     fun sync(contacts: List<Contact>): Int {
+        require(contacts.size <= 7000) { "Maximum 7000 contacts per device snapshot" }
         var total = 0
         for (batch in contacts.chunked(1000)) {
             val arr = JSONArray()
@@ -62,6 +63,9 @@ class ContactsBridge(context: Context) {
             }
             total += request(JSONObject().put("action", "sync_contacts").put("contacts", arr)).optInt("synced")
         }
+        // Prune only after every batch has been accepted. An interrupted sync never deletes old rows.
+        val keepIds = JSONArray().apply { contacts.forEach { put(it.id.toString()) } }
+        request(JSONObject().put("action", "prune_contacts").put("keep_ids", keepIds))
         return total
     }
 
