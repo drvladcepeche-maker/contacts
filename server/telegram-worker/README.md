@@ -64,3 +64,7 @@ The Telegram StringSession is equivalent to a login credential and can access th
 ### Username preservation
 
 When a Telegram account resolves but currently has no public username, the resolver stores `Скрыт` only if no earlier username is known. Previously discovered usernames are retained and combined with new values using comma + space. A later unresolved phone lookup also cannot erase an already confirmed Telegram match on the same contact.
+
+### Duplicate phone numbers
+
+The queue stores each normalized international phone number once per device. If the same number appears in several contacts, one Telegram lookup result is applied to every matching local contact ID, avoiding repeated Telegram requests.
