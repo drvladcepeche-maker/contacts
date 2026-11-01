@@ -42,8 +42,10 @@ for (const name of required) {
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const apiId = Number(process.env.TELEGRAM_API_ID);
+const apiId = Number(process.env.TELEGRAM_API_ID!.trim());
 if (!Number.isInteger(apiId) || apiId <= 0) throw new Error("TELEGRAM_API_ID must be a positive integer");
+const apiHash = process.env.TELEGRAM_API_HASH!.trim();
+const sessionString = process.env.TELEGRAM_SESSION!.trim();
 const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
 const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
 const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
@@ -70,14 +72,14 @@ function normalizePhone(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const raw = value.trim();
   if (!raw.startsWith("+")) return null;
-  const digits = raw.replace(/\\D/g, "");
+  const digits = raw.replace(/\D/g, "");
   return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
 }
 function floodWaitSeconds(error: unknown): number | null {
   const message = error instanceof Error ? error.message : String(error);
-  const direct = message.match(/FLOOD(?:_PREMIUM)?_WAIT_(\\d+)/i);
+  const direct = message.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
   if (direct) return Number(direct[1]);
-  const natural = message.match(/A wait of (\\d+) seconds is required/i);
+  const natural = message.match(/A wait of (\d+) seconds is required/i);
   return natural ? Number(natural[1]) : null;
 }
 function rpcIsNotResolved(error: unknown): boolean {
@@ -90,6 +92,14 @@ function resolvedUserId(resolved: any): string | null {
   if (peer && peer.userId !== undefined) return String(peer.userId);
   const users = Array.isArray(resolved?.users) ? resolved.users : [];
   return users.length === 1 && users[0]?.id !== undefined ? String(users[0].id) : null;
+}
+function describeSession(value: string): string {
+  const length = value.length;
+  const prefix = value.slice(0, 4);
+  const suffix = value.slice(-4);
+  const hasWhitespace = /\s/.test(value);
+  const printable = /^[A-Za-z0-9+/=_-]+$/.test(value);
+  return `len=${length} prefix=${prefix} suffix=${suffix} whitespace=${hasWhitespace} charset_ok=${printable}`;
 }
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const { error } = await supabase.from("telegram_match_jobs")
@@ -305,11 +315,20 @@ async function claimJob(): Promise<Job | null> {
   return data ? data as Job : null;
 }
 async function main() {
-  telegram = new TelegramClient(new StringSession(process.env.TELEGRAM_SESSION!.trim()), apiId, process.env.TELEGRAM_API_HASH!, {
+  console.log(`Telegram auth diagnostics: apiId=${apiId} apiHashLen=${apiHash.length} session(${describeSession(sessionString)})`);
+  if (sessionString.length < 100) {
+    throw new Error(`TELEGRAM_SESSION looks too short (${sessionString.length} chars). Re-copy the full StringSession into the GitHub secret.`);
+  }
+  telegram = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
     connectionRetries: 3, autoReconnect: true, requestRetries: 0,
   });
   await telegram.connect();
-  if (!(await telegram.checkAuthorization())) throw new Error("Telegram session is not authorized. Generate a dedicated StringSession and store it as the GitHub Actions secret TELEGRAM_SESSION.");
+  if (!(await telegram.checkAuthorization())) {
+    throw new Error(
+      `Telegram session is not authorized (${describeSession(sessionString)}). ` +
+      "Regenerate StringSession with the same TELEGRAM_API_ID/TELEGRAM_API_HASH secrets and replace TELEGRAM_SESSION."
+    );
+  }
   ready = true;
   console.log("Dedicated Telegram MTProto session authorized; resolver worker started.");
   while (!stopping) {
