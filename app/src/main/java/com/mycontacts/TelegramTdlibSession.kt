@@ -200,12 +200,17 @@ class TelegramTdlibSession(
                     // username list, then fall back to the legacy single username field.
                     val usernames = try { result.javaClass.getField("usernames").get(result) } catch (_: Exception) { null }
                     val active = try { usernames?.javaClass?.getField("activeUsernames")?.get(usernames) } catch (_: Exception) { null }
-                    val activeName = when (active) {
-                        is Array<*> -> active.firstOrNull()?.toString().orEmpty()
-                        else -> ""
+                    val activeNames = when (active) {
+                        is Array<*> -> active.mapNotNull { it?.toString()?.trim()?.removePrefix("@") }
+                        else -> emptyList()
                     }
-                    val legacyName = try { result.javaClass.getField("username").get(result)?.toString().orEmpty() } catch (_: Exception) { "" }
-                    callback(activeName.ifBlank { legacyName })
+                    val legacyName = try {
+                        result.javaClass.getField("username").get(result)?.toString()?.trim()?.removePrefix("@").orEmpty()
+                    } catch (_: Exception) { "" }
+                    val allNames = (activeNames + legacyName)
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                    callback(allNames.joinToString(", "))
                 } catch (_: Exception) {
                     // TDLib's User username representation differs by API version.
                     callback("")
