@@ -121,7 +121,12 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   };
   if (result.status === "matched") {
     next.telegram_id = result.telegram_id;
-    next.telegram_username = result.username;
+    const priorUsernames = String(prior.telegram_username ?? "")
+      .split(",").map((value) => value.trim().replace(/^@/, ""))
+      .filter((value) => value && value.toUpperCase() !== "СКРЫТ");
+    const foundUsernames = String(result.username ?? "")
+      .split(",").map((value) => value.trim().replace(/^@/, "")).filter(Boolean);
+    next.telegram_username = [...new Set([...priorUsernames, ...foundUsernames])].join(", ");
   } else if (result.status === "username_missing") {
     next.telegram_id = result.telegram_id;
     next.telegram_username = "СКРЫТ";
@@ -161,8 +166,15 @@ async function resolvePhone(phone: string): Promise<{ id: string; username: stri
   if (!userId) return null;
   const users: any[] = Array.isArray(resolved?.users) ? resolved.users : [];
   const user = users.find((item) => String(item?.id) === userId);
-  const username = typeof user?.username === "string" && user.username.trim()
-    ? user.username.trim() : null;
+  const usernameObject = user?.usernames && typeof user.usernames === "object"
+    ? user.usernames : null;
+  const activeUsernames = Array.isArray(usernameObject?.activeUsernames)
+    ? usernameObject.activeUsernames : [];
+  const legacyUsername = typeof user?.username === "string" ? [user.username] : [];
+  const usernames = [...activeUsernames, ...legacyUsername]
+    .map((value) => String(value ?? "").trim().replace(/^@/, ""))
+    .filter(Boolean);
+  const username = [...new Set(usernames)].join(", ") || null;
   return { id: userId, username };
 }
 async function waitForRateLimit(lastRequestAt?: string | null) {
