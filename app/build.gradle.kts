@@ -23,9 +23,9 @@ android {
         if (stableSigningEnabled) {
             create("stable") {
                 storeFile = file(stableStorePath!!)
-                storePassword = stableStorePassword
-                keyAlias = stableKeyAlias
-                keyPassword = stableKeyPassword
+                storePassword = stableStorePassword!!
+                keyAlias = stableKeyAlias!!
+                keyPassword = stableKeyPassword!!
             }
         }
     }
