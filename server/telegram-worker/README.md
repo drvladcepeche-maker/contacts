@@ -1,0 +1,45 @@
+# Contacts Telegram Resolver Worker
+
+A standalone Node.js MTProto worker for Hostless. It resolves phone numbers already present in the Supabase contact snapshot without importing or adding them to the Telegram account's contacts.
+
+## Behaviour
+
+- Calls `contacts.resolvePhone` one phone number at a time.
+- Enforces a minimum 5-second interval between Telegram lookup requests, plus random additive jitter (default 0–3 seconds).
+- On Telegram FloodWait, stops processing the current job and re-queues it with `paused_until` set beyond the server-specified wait.
+- Persists each result and progress to Supabase immediately; a restarted worker resumes at the first unprocessed candidate.
+- Updates the corresponding `contact_bridge_snapshots.contact_data` record by `device_id + local_contact_id`.
+- Stores the real username when present. If Telegram resolves a user but no username is returned, stores `СКРЫТ` in `telegram_username`. Unresolvable numbers are marked `not_resolved`, never `СКРЫТ`.
+- Does not import contacts, send messages, or change Telegram account contact lists.
+
+Telegram rate limits are dynamic. A 5-second minimum interval is a conservative throttle, not a guarantee against FloodWait or account restrictions. The worker obeys FloodWait and never retries the same lookup immediately.
+
+## Hostless deployment
+
+Working directory: `server/telegram-worker`; build from the included Dockerfile; expose port 8080.
+
+Required Hostless secrets:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `TELEGRAM_API_ID`
+- `TELEGRAM_API_HASH`
+- `TELEGRAM_SESSION`
+
+Optional:
+- `POLL_INTERVAL_MS` (default 5000)
+- `MIN_REQUEST_INTERVAL_MS` (default 5000; values below 5000 are clamped to 5000)
+- `REQUEST_JITTER_MS` (default 3000)
+- `PORT` (default 8080)
+
+Apply the new SQL migration before starting the worker. Generate a dedicated MTProto StringSession on a trusted local machine; do not paste it into chat, commit it, or place it in build logs. The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker.
+
+## Health check
+
+`GET /health` returns HTTP 200 after the MTProto session has been authorized.
+
+## Result semantics
+
+- `matched`: Telegram user resolved and username exists.
+- `username_missing`: Telegram user resolved but username is absent; phonebook field is set to `СКРЫТ`.
+- `not_resolved`: Telegram did not resolve the phone number. Telegram privacy rules can make this indistinguishable from a number with no Telegram account.
+- `error`: an unexpected technical failure.
