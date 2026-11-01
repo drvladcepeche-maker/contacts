@@ -114,26 +114,30 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   // Never let a later non-match for a second number erase an already confirmed match.
   const alreadyMatched = existingStatus === "matched" || existingStatus === "username_missing";
   const samePhone = existingPhone === result.phone;
+  const priorUsernames = String(prior.telegram_username ?? "")
+    .split(",").map((value) => value.trim().replace(/^@/, ""))
+    .filter((value) => value && value.toUpperCase() !== "СКРЫТ");
+  const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
   const next: Record<string, unknown> = {
     ...prior,
-    telegram_match_status: result.status,
-    telegram_match_phone: result.phone,
+    telegram_match_status: preserveExistingMatch ? existingStatus : result.status,
+    telegram_match_phone: preserveExistingMatch ? existingPhone : result.phone,
     telegram_match_checked_phones: checkedPhones,
     telegram_match_checked_at: result.checked_at,
   };
   if (result.status === "matched") {
     next.telegram_id = result.telegram_id;
-    const priorUsernames = String(prior.telegram_username ?? "")
-      .split(",").map((value) => value.trim().replace(/^@/, ""))
-      .filter((value) => value && value.toUpperCase() !== "СКРЫТ");
     const foundUsernames = String(result.username ?? "")
       .split(",").map((value) => value.trim().replace(/^@/, "")).filter(Boolean);
     next.telegram_username = [...new Set([...priorUsernames, ...foundUsernames])].join(", ");
   } else if (result.status === "username_missing") {
     next.telegram_id = result.telegram_id;
-    next.telegram_username = "Скрыт";
-  } else if (result.status === "not_resolved" && !(alreadyMatched && !samePhone)) {
-    // The number was not resolvable; do not label it as a privacy-hidden username.
+    // A private/hidden current username must not erase previously discovered names.
+    next.telegram_username = priorUsernames.length
+      ? [...new Set(priorUsernames)].join(", ")
+      : "Скрыт";
+  } else if (result.status === "not_resolved" && !alreadyMatched) {
+    // An unresolved phone is not evidence that a previously confirmed Telegram match is invalid.
     if (samePhone) {
       next.telegram_id = null;
       next.telegram_username = null;
