@@ -3,10 +3,10 @@ setlocal
 cd /d "%~dp0"
 echo.
 echo Telegram MTProto session generator
-echo This creates a separate server session. Do not share the generated session string.
+echo The session is saved locally and is never printed to the terminal.
 echo.
-set /p TELEGRAM_API_ID=Telegram API ID: 
-set /p TELEGRAM_API_HASH=Telegram API HASH: 
+set /p TELEGRAM_API_ID=Telegram API ID:
+set /p TELEGRAM_API_HASH=Telegram API HASH:
 if "%TELEGRAM_API_ID%"=="" goto missing
 if "%TELEGRAM_API_HASH%"=="" goto missing
 echo.
@@ -15,12 +15,12 @@ call npm install
 if errorlevel 1 goto failed
 echo.
 echo Starting Telegram authorization...
-call npm run session
+call npm run generate-session
 if errorlevel 1 goto failed
 echo.
-echo Copy the generated session directly into the GitHub repository secret TELEGRAM_SESSION.
+echo Session saved in your user profile under .config\contacts-telegram\TELEGRAM_SESSION
+echo Add its contents only to the private GitHub Actions secret TELEGRAM_SESSION.
 echo Do NOT paste it into chat, source files, public GitHub content, or logs.
-echo Paste it only into the private GitHub Actions secret TELEGRAM_SESSION.
 goto done
 :missing
 echo API ID and API HASH are required.
