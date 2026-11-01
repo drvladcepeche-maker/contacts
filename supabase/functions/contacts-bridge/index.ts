@@ -109,17 +109,16 @@ Deno.serve(async (req: Request) => {
           }
           // A server-confirmed result remains authoritative until the queued Android
           // update is applied. A not_resolved result also preserves a deliberate clear.
-          if (prior.telegram_match_status === "matched" || prior.telegram_match_status === "username_missing") {
+          const hasServerTelegramValue = Boolean(prior.telegram_id) ||
+            (typeof prior.telegram_username === "string" && prior.telegram_username.length > 0);
+          if (hasServerTelegramValue) {
+            // A later non-match for another number must not erase an earlier match.
             if (prior.telegram_id !== undefined) merged.telegram_id = prior.telegram_id;
             if (prior.telegram_username !== undefined) merged.telegram_username = prior.telegram_username;
-          } else if (prior.telegram_match_status === "not_resolved" &&
-              typeof prior.telegram_match_phone === "string") {
-            const checkedPhone = prior.telegram_match_phone;
-            const incomingPhones = Array.isArray(incoming.phones) ? incoming.phones : [];
-            if (incomingPhones.includes(checkedPhone)) {
-              merged.telegram_id = prior.telegram_id ?? null;
-              merged.telegram_username = prior.telegram_username ?? null;
-            }
+          } else if (prior.telegram_match_status === "not_resolved") {
+            // Preserve an intentional server-side clear for the last checked number.
+            merged.telegram_id = prior.telegram_id ?? null;
+            merged.telegram_username = prior.telegram_username ?? null;
           }
           return { ...row, contact_data: merged };
         });
