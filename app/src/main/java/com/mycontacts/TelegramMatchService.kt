@@ -34,7 +34,7 @@ class TelegramMatchService : Service() {
     private var completed = false
     private val stateLock = Any()
 
-    private data class Candidate(val contact: Contact, val phone: String)
+    private data class Candidate(val contacts: List<Contact>, val phone: String)
 
     override fun onCreate() {
         super.onCreate()
@@ -48,12 +48,15 @@ class TelegramMatchService : Service() {
         io.execute {
             try {
                 val all = repo.loadAll()
-                candidates = all.flatMap { contact ->
+                val phoneRows = all.flatMap { contact ->
                     contact.phones.mapNotNull { raw ->
                         normalizeInternationalPhone(raw).takeIf { it.isNotBlank() }
-                            ?.let { Candidate(contact, it) }
+                            ?.let { contact to it }
                     }
-                }.distinctBy { it.phone }
+                }
+                candidates = phoneRows.groupBy { it.second }.map { (phone, rows) ->
+                    Candidate(rows.map { it.first }.distinctBy { it.id }, phone)
+                }
                 if (candidates.isEmpty()) {
                     finishWithError("Нет номеров в международном формате +код страны.")
                     return@execute
@@ -109,7 +112,7 @@ class TelegramMatchService : Service() {
         val batch = candidates.subList(index, minOf(index + 50, candidates.size))
         index += batch.size
         val imported = batch.map { candidate ->
-            TdApi.ImportedContact(candidate.phone, candidate.contact.name.take(64).ifBlank { "Contact" }, "", null)
+            TdApi.ImportedContact(candidate.phone, candidate.contacts.firstOrNull()?.name?.take(64).orEmpty().ifBlank { "Contact" }, "", null)
         }.toTypedArray()
         val activeSession = session
         if (activeSession == null) {
@@ -141,12 +144,14 @@ class TelegramMatchService : Service() {
                                 val foundNames = username.split(",")
                                     .map { it.trim().removePrefix("@") }
                                     .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
-                                val previousNames = candidate.contact.telegramUsername.split(",")
-                                    .map { it.trim().removePrefix("@") }
-                                    .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
-                                val allNames = (previousNames + foundNames).distinct()
-                                val storedUsername = if (foundNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
-                                repo.updateTelegramLookup(candidate.contact.id, id.toString(), storedUsername)
+                                candidate.contacts.forEach { contact ->
+                                    val previousNames = contact.telegramUsername.split(",")
+                                        .map { it.trim().removePrefix("@") }
+                                        .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
+                                    val allNames = (previousNames + foundNames).distinct()
+                                    val storedUsername = if (foundNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
+                                    repo.updateTelegramLookup(contact.id, id.toString(), storedUsername)
+                                }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to save Telegram fields for contact ${candidate.contact.id}", e)
                                 synchronized(stateLock) { errors++ }
