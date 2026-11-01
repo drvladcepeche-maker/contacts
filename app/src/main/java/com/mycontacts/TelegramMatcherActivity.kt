@@ -221,11 +221,15 @@ class TelegramMatcherActivity : Activity() {
                             matched++
                             val candidate = batch[i]
                             session.fetchUsername(id) { username ->
-                                repo.updateTelegramLookup(
-                                    candidate.contact.id,
-                                    id.toString(),
-                                    username.ifBlank { candidate.contact.telegramUsername }
-                                )
+                                val foundNames = username.split(",")
+                                    .map { it.trim().removePrefix("@") }
+                                    .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
+                                val previousNames = candidate.contact.telegramUsername.split(",")
+                                    .map { it.trim().removePrefix("@") }
+                                    .filter { it.isNotBlank() && !it.equals("Скрыт", ignoreCase = true) }
+                                val allNames = (previousNames + foundNames).distinct()
+                                val storedUsername = if (foundNames.isEmpty()) "Скрыт" else allNames.joinToString(", ")
+                                repo.updateTelegramLookup(candidate.contact.id, id.toString(), storedUsername)
                             }
                         }
                     }
