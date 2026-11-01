@@ -14,7 +14,7 @@ A standalone Node.js MTProto worker for Hostless. It resolves phone numbers alre
 
 Telegram rate limits are dynamic. A 5-second minimum interval is a conservative throttle, not a guarantee against FloodWait or account restrictions. The worker obeys FloodWait and never retries the same lookup immediately.
 
-## Hostless deployment
+## Legacy Hostless deployment (optional)
 
 Working directory: `server/telegram-worker`; build from the included Dockerfile; expose port 8080.
 
@@ -31,7 +31,7 @@ Optional:
 - `REQUEST_JITTER_MS` (default 3000)
 - `PORT` (default 8080)
 
-Apply the new SQL migration before starting the worker. Generate a dedicated MTProto StringSession on a trusted local machine; do not paste it into chat, commit it, or place it in build logs. On Windows, run `generate-session.bat` from this directory (it uses CMD, not PowerShell); enter the API ID and API hash when prompted. It installs dependencies and starts the Telegram phone/code/2FA authorization flow. Copy the final session string directly into the Hostless secret `TELEGRAM_SESSION`. The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker.
+Apply the new SQL migration before starting the worker. Generate a dedicated MTProto StringSession on a trusted local machine; do not paste it into chat, commit it, or place it in build logs. On Windows, run `generate-session.bat` from this directory (it uses CMD, not PowerShell); enter the API ID and API hash when prompted. It installs dependencies and starts the Telegram phone/code/2FA authorization flow. Copy the final session string directly into the GitHub repository secret `TELEGRAM_SESSION` (or the Hostless secret if using that legacy deployment). The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker.
 
 ## Health check
 
