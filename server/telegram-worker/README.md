@@ -43,3 +43,20 @@ Apply the new SQL migration before starting the worker. Generate a dedicated MTP
 - `username_missing`: Telegram user resolved but username is absent; phonebook field is set to `СКРЫТ`.
 - `not_resolved`: Telegram did not resolve the phone number. Telegram privacy rules can make this indistinguishable from a number with no Telegram account.
 - `error`: an unexpected technical failure.
+
+
+## GitHub Actions runtime (no separate worker host)
+
+The resolver can also run as a scheduled, checkpointed GitHub Actions job; this avoids keeping a paid Docker worker online.
+
+1. In GitHub repository Settings → Secrets and variables → Actions, add these repository secrets:
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `TELEGRAM_API_ID`
+   - `TELEGRAM_API_HASH`
+   - `TELEGRAM_SESSION`
+2. Generate a dedicated Telegram session on a trusted computer after installing Node.js:
+   `cd server/telegram-worker && npm install && npm run generate-session`
+3. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
+4. The scheduled workflow processes up to 250 phone candidates per run, saves progress, and resumes on a later run. It runs every five minutes when enabled.
+
+The Telegram StringSession is equivalent to a login credential and can access the Telegram account. Prefer a dedicated Telegram account. Never paste the session or service-role key into chat, source files, issues, or commits. The scheduled worker uses the Supabase service-role key only as a protected GitHub Actions secret.
