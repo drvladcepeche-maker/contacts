@@ -20,7 +20,7 @@ let client: TelegramClient | undefined;
 
 try {
   const phone = await ask("Telegram account phone (international format): ");
-  if (!/^\\+[1-9]\\d{7,14}$/.test(phone)) throw new Error("Invalid international phone number.");
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error("Invalid international phone number.");
 
   client = new TelegramClient(new StringSession(""), apiId, apiHash, {
     connectionRetries: 3,
@@ -43,13 +43,13 @@ try {
   await chmod(sessionDir, 0o700);
 
   // wx prevents accidentally overwriting an existing authorized session.
-  await writeFile(sessionPath, session + "\\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await writeFile(sessionPath, session + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
   await chmod(sessionPath, 0o600);
 
-  console.log("\\nTelegram authorization successful.");
+  console.log("\nTelegram authorization successful.");
   console.log("Session saved locally with restricted file permissions:");
   console.log(sessionPath);
-  console.log("\\nThe session value was NOT printed. Copy it locally into GitHub Actions secret TELEGRAM_SESSION.");
+  console.log("\nThe session value was NOT printed. Copy it locally into GitHub Actions secret TELEGRAM_SESSION.");
   console.log("Never send it in chat, commit it, or expose it in terminal logs.");
 } finally {
   if (client) await client.disconnect().catch(() => {});
