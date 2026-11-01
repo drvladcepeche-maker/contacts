@@ -129,7 +129,7 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
     next.telegram_username = [...new Set([...priorUsernames, ...foundUsernames])].join(", ");
   } else if (result.status === "username_missing") {
     next.telegram_id = result.telegram_id;
-    next.telegram_username = "СКРЫТ";
+    next.telegram_username = "Скрыт";
   } else if (result.status === "not_resolved" && !(alreadyMatched && !samePhone)) {
     // The number was not resolvable; do not label it as a privacy-hidden username.
     if (samePhone) {
