@@ -43,9 +43,9 @@ This workflow does not require a laptop. Use the official Termux app and keep th
    pkg update
    pkg install nodejs git
    ```
-2. Clone this branch (or the merged default branch):
+2. Clone the repository:
    ```sh
-   git clone -b feature/android-telegram-session-generator https://github.com/drvladcepeche-maker/contacts.git
+   git clone https://github.com/drvladcepeche-maker/contacts.git
    cd contacts/server/telegram-worker
    npm install
    ```
@@ -61,12 +61,15 @@ This workflow does not require a laptop. Use the official Termux app and keep th
    npm run generate-session
    ```
    Enter the Telegram phone number in international format, then the login code Telegram sends, and the 2FA password if enabled.
+
+   If a session file already exists the script will ask for confirmation before overwriting. To force overwrite without a prompt use:
+   ```sh
+   npx tsx scripts/generate-session.ts --force
+   ```
 5. On success, the script saves the session to:
    `~/.config/contacts-telegram/TELEGRAM_SESSION`
    The directory and file are created with owner-only permissions (0700/0600). The session value is not printed. Do not delete this file until the GitHub secret is saved.
 6. In the GitHub repository open Settings → Secrets and variables → Actions → New repository secret. Name it exactly `TELEGRAM_SESSION`. Open the local file in Termux and copy its contents directly into that secret field. Never paste the value into ChatGPT, issues, commits, screenshots, or logs. Clear the Android clipboard after saving.
-
-If the session file already exists, the generator refuses to overwrite it. This prevents accidental replacement of a working login. Do not run the generator again unless you have intentionally removed or backed up the old session.
 
 ## GitHub Actions runtime (no separate worker host)
 
