@@ -105,6 +105,10 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
     ? row.contact_data as Record<string, unknown> : {};
   const existingStatus = String(prior.telegram_match_status ?? "");
   const existingPhone = String(prior.telegram_match_phone ?? "");
+  const checkedPhones = Array.isArray(prior.telegram_match_checked_phones)
+    ? prior.telegram_match_checked_phones.filter((value): value is string => typeof value === "string")
+    : [];
+  if (!checkedPhones.includes(result.phone)) checkedPhones.push(result.phone);
   // Never let a later non-match for a second number erase an already confirmed match.
   const alreadyMatched = existingStatus === "matched" || existingStatus === "username_missing";
   const samePhone = existingPhone === result.phone;
@@ -112,6 +116,7 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
     ...prior,
     telegram_match_status: result.status,
     telegram_match_phone: result.phone,
+    telegram_match_checked_phones: checkedPhones,
     telegram_match_checked_at: result.checked_at,
   };
   if (result.status === "matched") {
