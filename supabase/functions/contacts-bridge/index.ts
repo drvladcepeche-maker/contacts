@@ -161,6 +161,86 @@ Deno.serve(async (req: Request) => {
       return json({ kept: keepIds.length, deleted: staleIds.length });
     }
 
+    if (action === "queue_telegram_match") {
+      const { data: activeJobs, error: activeError } = await supabase
+        .from("telegram_match_jobs")
+        .select("id, status")
+        .in("status", ["queued", "running"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (activeError) return json({ error: activeError.message }, 500);
+      if (activeJobs?.length) {
+        return json({ error: "A Telegram matching job is already queued or running", job_id: activeJobs[0].id }, 409);
+      }
+
+      const { data: snapshots, error: snapshotError } = await supabase
+        .from("contact_bridge_snapshots")
+        .select("local_contact_id, contact_data")
+        .eq("device_id", deviceId);
+      if (snapshotError) return json({ error: snapshotError.message }, 500);
+      if ((snapshots ?? []).length > 7000) {
+        return json({ error: "Device snapshot exceeds the 7000-contact limit; run a full sync first" }, 413);
+      }
+
+      const byPhone = new Map<string, {
+        device_id: string;
+        local_contact_id: string;
+        local_contact_ids: string[];
+        name: string;
+        phone: string;
+      }>();
+      for (const row of snapshots ?? []) {
+        const localId = String(row.local_contact_id ?? "").trim();
+        const data = row.contact_data && typeof row.contact_data === "object" && !Array.isArray(row.contact_data)
+          ? row.contact_data as Record<string, unknown>
+          : {};
+        const phones = Array.isArray(data.phones) ? data.phones : [];
+        for (const value of phones) {
+          const raw = typeof value === "string" ? value.trim() : "";
+          if (!raw.startsWith("+")) continue;
+          const digits = raw.replace(/\D/g, "");
+          if (digits.length < 8 || digits.length > 15) continue;
+          const phone = "+" + digits;
+          const existing = byPhone.get(phone);
+          if (!existing) {
+            byPhone.set(phone, {
+              device_id: deviceId!,
+              local_contact_id: localId,
+              local_contact_ids: [],
+              name: String(data.name ?? ""),
+              phone,
+            });
+          } else if (localId && localId !== existing.local_contact_id && !existing.local_contact_ids.includes(localId)) {
+            existing.local_contact_ids.push(localId);
+          }
+        }
+      }
+
+      const candidates = Array.from(byPhone.values()).filter((candidate) => candidate.local_contact_id);
+      if (!candidates.length) {
+        return json({ queued: false, contacts: (snapshots ?? []).length, unique_phone_count: 0 });
+      }
+      const { data: job, error: insertError } = await supabase
+        .from("telegram_match_jobs")
+        .insert({
+          status: "queued",
+          phones: candidates,
+          results: [],
+          checked: 0,
+          matched: 0,
+          errors: 0,
+        })
+        .select("id")
+        .single();
+      if (insertError) return json({ error: insertError.message }, 500);
+      return json({
+        queued: true,
+        job_id: job.id,
+        contacts: (snapshots ?? []).length,
+        unique_phone_count: candidates.length,
+      });
+    }
+
     if (action === "poll_commands") {
       // Requeue claims older than five minutes. This recovers commands if the
       // app process exits after claiming but before persisting its local queue.
