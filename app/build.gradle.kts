@@ -2,6 +2,13 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val stableStorePath = System.getenv("MYCONTACTS_KEYSTORE_PATH")
+val stableStorePassword = System.getenv("MYCONTACTS_KEYSTORE_PASSWORD")
+val stableKeyAlias = System.getenv("MYCONTACTS_KEY_ALIAS")
+val stableKeyPassword = System.getenv("MYCONTACTS_KEY_PASSWORD")
+val stableSigningEnabled = listOf(stableStorePath, stableStorePassword, stableKeyAlias, stableKeyPassword).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.mycontacts"
     compileSdk = 34
@@ -9,10 +16,28 @@ android {
         applicationId = "com.mycontacts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
     }
-    buildTypes { release { isMinifyEnabled = false } }
+    signingConfigs {
+        if (stableSigningEnabled) {
+            create("stable") {
+                storeFile = file(stableStorePath!!)
+                storePassword = stableStorePassword!!
+                keyAlias = stableKeyAlias!!
+                keyPassword = stableKeyPassword!!
+            }
+        }
+    }
+    buildTypes {
+        getByName("debug") {
+            if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
+        }
+        getByName("release") {
+            isMinifyEnabled = false
+            if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

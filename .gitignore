@@ -3,3 +3,7 @@ build/
 local.properties
 .idea/
 *.iml
+
+# Private Android signing material (never commit)
+mycontacts-signing.p12
+mycontacts-signing-base64.txt
