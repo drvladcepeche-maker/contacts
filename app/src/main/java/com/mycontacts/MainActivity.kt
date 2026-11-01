@@ -120,6 +120,7 @@ class MainActivity : Activity() {
         row5.addView(btn("Связь с ChatGPT") { bridgeDialog("ChatGPT") })
         row5.addView(btn("Связь с Claude") { bridgeDialog("Claude") })
         row6.addView(btn("Telegram ID по номерам") { startActivity(Intent(this, TelegramMatcherActivity::class.java)) })
+        row6.addView(btn("Серверная проверка") { queueTelegramMatch() })
         row7.addView(btn("Аккаунты синхронизации") { showAccountSyncSettings() })
         row8.addView(btn("Сохранить логи") { exportAppLogs() })
         row8.addView(btn("Файлы для Termux") { exportTermuxGuide() })
@@ -971,6 +972,29 @@ class MainActivity : Activity() {
             .setNegativeButton("Отмена", null).show()
     }
 
+
+
+    private fun queueTelegramMatch() {
+        bg {
+            try {
+                val synced = bridge.sync(contactsForSync())
+                val result = bridge.queueTelegramMatch()
+                val count = result.optInt("unique_phone_count")
+                val jobId = result.optString("job_id")
+                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
+                runOnUiThread {
+                    if (result.optBoolean("queued")) {
+                        toast("Серверная проверка поставлена в очередь: $count уникальных номеров. Обработка начнётся после настройки Telegram-сессии и GitHub Actions.")
+                    } else {
+                        toast("Нет международных номеров для серверной проверки.")
+                    }
+                }
+            } catch (e: Exception) {
+                AppLog.error(this, "TelegramResolver", "Could not queue cloud matching", e)
+                runOnUiThread { toast("Не удалось поставить серверную проверку: ${e.message}") }
+            }
+        }
+    }
 
     private fun exportAppLogs() {
         bg {
