@@ -141,14 +141,21 @@ Deno.serve(async (req: Request) => {
       }
       const keepIds = Array.from(new Set(normalized));
       const keepSet = new Set(keepIds);
-      const { data: existingRows, error: existingError } = await supabase
-        .from("contact_bridge_snapshots")
-        .select("local_contact_id")
-        .eq("device_id", deviceId);
-      if (existingError) return json({ error: existingError.message }, 500);
-      const staleIds = (existingRows ?? [])
-        .map((row: any) => String(row.local_contact_id))
-        .filter((id: string) => !keepSet.has(id));
+      const existingRows: Array<{ local_contact_id: string }> = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data: page, error: pageError } = await supabase
+          .from("contact_bridge_snapshots")
+          .select("local_contact_id")
+          .eq("device_id", deviceId)
+          .order("local_contact_id", { ascending: true })
+          .range(offset, offset + 999);
+        if (pageError) return json({ error: pageError.message }, 500);
+        existingRows.push(...(page ?? []));
+        if (!page || page.length < 1000) break;
+      }
+      const staleIds = existingRows
+        .map((row) => String(row.local_contact_id))
+        .filter((id) => !keepSet.has(id));
       for (let offset = 0; offset < staleIds.length; offset += 500) {
         const batch = staleIds.slice(offset, offset + 500);
         const { error: deleteError } = await supabase
@@ -173,13 +180,25 @@ Deno.serve(async (req: Request) => {
         return json({ error: "A Telegram matching job is already queued or running", job_id: activeJobs[0].id }, 409);
       }
 
-      const { data: snapshots, error: snapshotError } = await supabase
+      const { count: snapshotCount, error: countError } = await supabase
         .from("contact_bridge_snapshots")
-        .select("local_contact_id, contact_data")
+        .select("local_contact_id", { count: "exact", head: true })
         .eq("device_id", deviceId);
-      if (snapshotError) return json({ error: snapshotError.message }, 500);
-      if ((snapshots ?? []).length > 7000) {
+      if (countError) return json({ error: countError.message }, 500);
+      if ((snapshotCount ?? 0) > 7000) {
         return json({ error: "Device snapshot exceeds the 7000-contact limit; run a full sync first" }, 413);
+      }
+      const snapshots: Array<{ local_contact_id: string; contact_data: unknown }> = [];
+      for (let offset = 0; ; offset += 1000) {
+        const { data: page, error: pageError } = await supabase
+          .from("contact_bridge_snapshots")
+          .select("local_contact_id, contact_data")
+          .eq("device_id", deviceId)
+          .order("local_contact_id", { ascending: true })
+          .range(offset, offset + 999);
+        if (pageError) return json({ error: pageError.message }, 500);
+        snapshots.push(...(page ?? []));
+        if (!page || page.length < 1000) break;
       }
 
       const byPhone = new Map<string, {
