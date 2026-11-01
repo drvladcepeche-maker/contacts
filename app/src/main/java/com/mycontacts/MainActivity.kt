@@ -482,7 +482,7 @@ class MainActivity : Activity() {
         if (allowed.isEmpty()) return emptyList()
         return repo.loadAll().filter { contact ->
             contact.accountSources.isNotEmpty() && contact.accountSources.all { it in allowed }
-        }
+        }.take(7000)
     }
 
     private fun writableAccountFor(contact: Contact?): Acc? =
