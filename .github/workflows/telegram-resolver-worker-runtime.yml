@@ -10,6 +10,11 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   process-queue:
@@ -25,10 +30,10 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         working-directory: server/telegram-worker
-        run: npm install
+        run: npm install 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
       - name: Build worker
         working-directory: server/telegram-worker
-        run: npm run build
+        run: npm run build 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
       - name: Process one checkpointed queue batch
         working-directory: server/telegram-worker
         env:
@@ -41,4 +46,43 @@ jobs:
           MAX_CANDIDATES_PER_RUN: "250"
           MIN_REQUEST_INTERVAL_MS: "5000"
           REQUEST_JITTER_MS: "3000"
-        run: node dist/index.js
+        run: node dist/index.js 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
+      - name: Publish failure log to issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+        run: |
+          LOG="$RUNNER_TEMP/worker.log"
+          [ -f "$LOG" ] || echo "(log is empty)" > "$LOG"
+          tail -n 60 "$LOG" > "$RUNNER_TEMP/tail.log"
+          python3 - <<'PY'
+          import os, re
+          p = os.path.join(os.environ["RUNNER_TEMP"], "tail.log")
+          t = open(p, errors="replace").read()
+          for k in ("SUPABASE_SERVICE_ROLE_KEY", "TELEGRAM_SESSION", "TELEGRAM_API_HASH"):
+              v = os.environ.get(k, "").strip()
+              if v:
+                  t = t.replace(v, "***")
+          t = re.sub(r"prefix=\S+ suffix=\S+", "prefix=*** suffix=***", t)
+          open(p, "w").write(t)
+          PY
+          {
+            echo "Run: $RUN_URL"
+            echo "Time (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/tail.log"
+            echo '```'
+          } > "$RUNNER_TEMP/report.md"
+          TITLE="Telegram worker last failure log"
+          NUM=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue edit "$NUM" --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/report.md"
+          fi
