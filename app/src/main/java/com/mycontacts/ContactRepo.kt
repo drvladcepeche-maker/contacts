@@ -195,6 +195,118 @@ class ContactRepo(private val cr: ContentResolver) {
         upsert("Telegram username", username.removePrefix("@"))
     }
 
+
+    /** Создаёт контакт непосредственно в выбранном Android-аккаунте. */
+    fun addToAccount(name: String, phone: String, account: Acc) {
+        insertCopy(
+            RawEntry(-1L, name, if (phone.isBlank()) emptyList() else listOf(phone to Phone.TYPE_MOBILE), emptyList()),
+            account
+        )
+    }
+
+    private fun rawIdsForAccount(contactId: Long, account: Acc): List<Long> {
+        val parts = arrayListOf(CC.RawContacts.CONTACT_ID + "=?", CC.RawContacts.DELETED + "=0")
+        val args = arrayListOf(contactId.toString())
+        if (account.name == null) parts.add(CC.RawContacts.ACCOUNT_NAME + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_NAME + "=?"); args.add(account.name) }
+        if (account.type == null) parts.add(CC.RawContacts.ACCOUNT_TYPE + " IS NULL")
+        else { parts.add(CC.RawContacts.ACCOUNT_TYPE + "=?"); args.add(account.type) }
+        val ids = ArrayList<Long>()
+        cr.query(CC.RawContacts.CONTENT_URI, arrayOf(CC.RawContacts._ID), parts.joinToString(" AND "), args.toTypedArray(), null)?.use { c ->
+            while (c.moveToNext()) ids.add(c.getLong(0))
+        }
+        return ids
+    }
+
+    /** Изменяет только исходные записи выбранного аккаунта, не затрагивая агрегированные записи других аккаунтов. */
+    fun updateInAccount(contactId: Long, name: String, phone: String, account: Acc) {
+        val ids = rawIdsForAccount(contactId, account)
+        if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
+        val marks = ids.joinToString(",") { "?" }
+        val rawArgs = ids.map { it.toString() }.toTypedArray()
+        val nameWhere = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " + CC.Data.MIMETYPE + "=?"
+        val nameArgs = rawArgs + arrayOf(StructuredName.CONTENT_ITEM_TYPE)
+        val nameCount = cr.update(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(StructuredName.DISPLAY_NAME, name)
+        }, nameWhere, nameArgs)
+        if (nameCount == 0) cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            put(CC.Data.RAW_CONTACT_ID, ids.first())
+            put(CC.Data.MIMETYPE, StructuredName.CONTENT_ITEM_TYPE)
+            put(StructuredName.DISPLAY_NAME, name)
+        })
+        val phoneWhere = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " + CC.Data.MIMETYPE + "=?"
+        val phoneArgs = rawArgs + arrayOf(Phone.CONTENT_ITEM_TYPE)
+        if (phone.isBlank()) {
+            cr.delete(CC.Data.CONTENT_URI, phoneWhere, phoneArgs)
+        } else {
+            val phoneCount = cr.update(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+                put(Phone.NUMBER, phone)
+            }, phoneWhere, phoneArgs)
+            if (phoneCount == 0) cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+                put(CC.Data.RAW_CONTACT_ID, ids.first())
+                put(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
+                put(Phone.NUMBER, phone)
+                put(Phone.TYPE, Phone.TYPE_MOBILE)
+            })
+        }
+    }
+
+    /** Объединяет только исходные записи, принадлежащие выбранному аккаунту. */
+    fun mergeInAccount(group: List<Contact>, account: Acc) {
+        val raws = group.flatMap { rawIdsForAccount(it.id, account) }.distinct()
+        if (raws.size < 2) throw IllegalStateException("В выбранном аккаунте недостаточно исходных записей для объединения")
+        val ops = ArrayList<ContentProviderOperation>()
+        for (i in 1 until raws.size) {
+            ops.add(ContentProviderOperation.newUpdate(CC.AggregationExceptions.CONTENT_URI)
+                .withValue(CC.AggregationExceptions.RAW_CONTACT_ID1, raws[0])
+                .withValue(CC.AggregationExceptions.RAW_CONTACT_ID2, raws[i])
+                .withValue(CC.AggregationExceptions.TYPE, CC.AggregationExceptions.TYPE_KEEP_TOGETHER)
+                .build())
+        }
+        cr.applyBatch(CC.AUTHORITY, ops)
+    }
+
+    fun deleteFromAccount(contactId: Long, account: Acc) {
+        val ids = rawIdsForAccount(contactId, account)
+        if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
+        ids.forEach { cr.delete(ContentUris.withAppendedId(CC.RawContacts.CONTENT_URI, it), null, null) }
+    }
+
+    /** Записывает Telegram-поля только в разрешённый аккаунт. */
+    fun updateTelegramLookupInAccount(contactId: Long, telegramId: String, username: String, account: Acc) {
+        val ids = rawIdsForAccount(contactId, account)
+        if (ids.isEmpty()) throw IllegalStateException("Контакт не принадлежит выбранному аккаунту")
+        val marks = ids.joinToString(",") { "?" }
+        val rawArgs = ids.map { it.toString() }.toTypedArray()
+        fun upsert(protocolName: String, value: String) {
+            val selection = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " +
+                CC.Data.MIMETYPE + "=? AND " + Im.PROTOCOL + "=? AND " + Im.CUSTOM_PROTOCOL + "=?"
+            val args = rawArgs + arrayOf(Im.CONTENT_ITEM_TYPE, Im.PROTOCOL_CUSTOM.toString(), protocolName)
+            val rowIds = ArrayList<Long>()
+            cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data._ID), selection, args, null)?.use { cur ->
+                while (cur.moveToNext()) rowIds.add(cur.getLong(0))
+            }
+            if (value.isBlank()) {
+                rowIds.forEach { cr.delete(ContentUris.withAppendedId(CC.Data.CONTENT_URI, it), null, null) }
+            } else if (rowIds.isNotEmpty()) {
+                cr.update(ContentUris.withAppendedId(CC.Data.CONTENT_URI, rowIds.first()), android.content.ContentValues().apply {
+                    put(Im.DATA, value.trim())
+                }, null, null)
+                rowIds.drop(1).forEach { cr.delete(ContentUris.withAppendedId(CC.Data.CONTENT_URI, it), null, null) }
+            } else {
+                cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+                    put(CC.Data.RAW_CONTACT_ID, ids.first())
+                    put(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+                    put(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+                    put(Im.CUSTOM_PROTOCOL, protocolName)
+                    put(Im.DATA, value.trim())
+                })
+            }
+        }
+        upsert("Telegram ID", telegramId)
+        upsert("Telegram username", username.removePrefix("@"))
+    }
+
     fun delete(contactId: Long) {
         cr.delete(ContentUris.withAppendedId(CC.Contacts.CONTENT_URI, contactId), null, null)
     }
