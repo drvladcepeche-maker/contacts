@@ -17,5 +17,6 @@
             </intent-filter>
         </activity>
         <service android:name=".BridgeNotificationService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".TelegramMatchService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
