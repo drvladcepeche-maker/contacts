@@ -305,7 +305,7 @@ async function claimJob(): Promise<Job | null> {
   return data ? data as Job : null;
 }
 async function main() {
-  telegram = new TelegramClient(new StringSession(process.env.TELEGRAM_SESSION!), apiId, process.env.TELEGRAM_API_HASH!, {
+  telegram = new TelegramClient(new StringSession(process.env.TELEGRAM_SESSION!.trim()), apiId, process.env.TELEGRAM_API_HASH!, {
     connectionRetries: 3, autoReconnect: true, requestRetries: 0,
   });
   await telegram.connect();
