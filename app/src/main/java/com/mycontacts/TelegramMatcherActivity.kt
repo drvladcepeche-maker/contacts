@@ -143,12 +143,17 @@ class TelegramMatcherActivity : Activity() {
     private fun confirmMatch() {
         if (!session.isReady() || isMatching) return
         val contacts = repo.loadAll()
-        val candidates = contacts.mapNotNull { contact ->
-            val phone = contact.phones.firstOrNull { it.trim().startsWith("+") }
-                ?.let { normalizeInternationalPhone(it) }
-            if (phone.isNullOrBlank()) null else Candidate(contact, phone)
+        // Match every valid international phone, not only the first phone stored on a contact.
+        // Telegram import results are positional, so retain the exact contact for each number.
+        val candidates = contacts.flatMap { contact ->
+            contact.phones.mapNotNull { raw ->
+                normalizeInternationalPhone(raw).takeIf { it.isNotBlank() }
+                    ?.let { Candidate(contact, it) }
+            }
+        }.distinctBy { it.phone }
+        val skipped = contacts.sumOf { contact ->
+            contact.phones.count { normalizeInternationalPhone(it).isBlank() }
         }
-        val skipped = contacts.size - candidates.size
         if (candidates.isEmpty()) {
             status.text = "Не найдено номеров в международном формате +код страны. Обработано контактов: 0."
             return
@@ -208,15 +213,19 @@ class TelegramMatcherActivity : Activity() {
                         errors += batch.size
                         status.text = "Ошибка пачки: ${error ?: "нет результата"}"
                     } else {
+                        // Count every submitted number, including numbers with no Telegram account.
+                        checked += batch.size
                         for (i in batch.indices) {
                             val id = ids.getOrNull(i) ?: 0L
+                            if (id <= 0L) continue
+                            matched++
                             val candidate = batch[i]
-                            checked++
-                            if (id > 0L) {
-                                matched++
-                                session.fetchUsername(id) { username ->
-                                    repo.updateTelegramLookup(candidate.contact.id, id.toString(), username.ifBlank { candidate.contact.telegramUsername })
-                                }
+                            session.fetchUsername(id) { username ->
+                                repo.updateTelegramLookup(
+                                    candidate.contact.id,
+                                    id.toString(),
+                                    username.ifBlank { candidate.contact.telegramUsername }
+                                )
                             }
                         }
                     }

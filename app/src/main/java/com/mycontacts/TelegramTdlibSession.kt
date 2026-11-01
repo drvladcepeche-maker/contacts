@@ -196,14 +196,16 @@ class TelegramTdlibSession(
         send(TdApi.GetUser(userId)) { result ->
             if (result is TdApi.User) {
                 try {
-                    val usernamesField = result.javaClass.getField("usernames")
-                    val usernames = usernamesField.get(result)
-                    val active = usernames?.javaClass?.getField("activeUsernames")?.get(usernames)
-                    val username = when (active) {
+                    // TDLib schema versions expose usernames differently. Prefer the active
+                    // username list, then fall back to the legacy single username field.
+                    val usernames = try { result.javaClass.getField("usernames").get(result) } catch (_: Exception) { null }
+                    val active = try { usernames?.javaClass?.getField("activeUsernames")?.get(usernames) } catch (_: Exception) { null }
+                    val activeName = when (active) {
                         is Array<*> -> active.firstOrNull()?.toString().orEmpty()
                         else -> ""
                     }
-                    callback(username)
+                    val legacyName = try { result.javaClass.getField("username").get(result)?.toString().orEmpty() } catch (_: Exception) { "" }
+                    callback(activeName.ifBlank { legacyName })
                 } catch (_: Exception) {
                     // TDLib's User username representation differs by API version.
                     callback("")
