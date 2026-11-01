@@ -45,3 +45,15 @@ $$;
 
 revoke all on function public.claim_telegram_match_job() from public, anon, authenticated;
 grant execute on function public.claim_telegram_match_job() to service_role;
+
+-- Permit the worker to queue a narrow, non-destructive Telegram-field update
+-- that Android applies to the existing contact when the device reconnects.
+alter table public.contact_bridge_commands
+  drop constraint if exists contact_bridge_commands_action_check;
+alter table public.contact_bridge_commands
+  add constraint contact_bridge_commands_action_check
+  check (action = any (array[
+    'list_contacts'::text, 'search_contacts'::text, 'upsert_contact'::text,
+    'delete_contact'::text, 'merge_contacts'::text, 'sync_contacts'::text,
+    'update_telegram_fields'::text
+  ]));
