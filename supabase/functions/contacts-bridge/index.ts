@@ -217,6 +217,9 @@ Deno.serve(async (req: Request) => {
       }
 
       const candidates = Array.from(byPhone.values()).filter((candidate) => candidate.local_contact_id);
+      if (candidates.length > 25000) {
+        return json({ error: "Telegram match job exceeds the 25000 unique-phone safety limit" }, 413);
+      }
       if (!candidates.length) {
         return json({ queued: false, contacts: (snapshots ?? []).length, unique_phone_count: 0 });
       }
