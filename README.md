@@ -39,3 +39,5 @@ APK собирается автоматически: GitHub → Actions → «Bu
 StringSession — полноценный секрет авторизованного Telegram-сеанса. Не отправляйте его в чат, не добавляйте в исходники, issues или коммиты. Вставляйте его только в приватный GitHub Actions secret. До включения переменной `TELEGRAM_RESOLVER_ENABLED` задания остаются в очереди и не обрабатываются.
 
 The device-authenticated `prune_contacts` action only affects the calling device. It runs after every contact batch succeeds; an empty permitted set removes that device's server snapshot, while an interrupted sync leaves the previous snapshot intact.
+
+Удалённое изменение контакта обновляет только основной номер в выбранном аккаунте; дополнительные телефонные номера сохраняются. Удаление номера выполняется только при явно пустом значении поля телефона.
