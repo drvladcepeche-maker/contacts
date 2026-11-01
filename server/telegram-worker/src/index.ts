@@ -127,11 +127,28 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
       next.telegram_username = null;
     }
   }
+  const telegramIdChanged = String(prior.telegram_id ?? "") !== String(next.telegram_id ?? "");
+  const usernameChanged = String(prior.telegram_username ?? "") !== String(next.telegram_username ?? "");
   const { error: writeError } = await supabase.from("contact_bridge_snapshots")
     .update({ contact_data: next, synced_at: new Date().toISOString() })
     .eq("device_id", candidate.device_id)
     .eq("local_contact_id", candidate.local_contact_id);
   if (writeError) throw writeError;
+
+  // Queue the actual Android Contacts Provider write. It will be applied when
+  // that device reconnects; the server-side snapshot remains authoritative meanwhile.
+  if (telegramIdChanged || usernameChanged) {
+    const { error: commandError } = await supabase.from("contact_bridge_commands").insert({
+      device_id: candidate.device_id,
+      action: "update_telegram_fields",
+      payload: {
+        id: candidate.local_contact_id,
+        telegram_id: String(next.telegram_id ?? ""),
+        telegram_username: String(next.telegram_username ?? ""),
+      },
+    });
+    if (commandError) throw commandError;
+  }
 }
 async function resolvePhone(phone: string): Promise<{ id: string; username: string | null } | null> {
   const resolved: any = await telegram!.invoke(new Api.contacts.ResolvePhone({ phone }));
