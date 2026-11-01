@@ -129,6 +129,38 @@ Deno.serve(async (req: Request) => {
       return json({ synced: rows.length, unique_contacts: rows.length, duplicate_ids_in_batch_removed: contacts.length - rows.length });
     }
 
+    if (action === "prune_contacts") {
+      const rawKeepIds = Array.isArray(body.keep_ids) ? body.keep_ids : null;
+      if (!rawKeepIds) return json({ error: "keep_ids must be an array" }, 400);
+      if (rawKeepIds.length > 7000) return json({ error: "Maximum 7000 contacts per device snapshot" }, 413);
+      const normalized = rawKeepIds.map((value: unknown) =>
+        typeof value === "string" ? value.trim() : ""
+      );
+      if (normalized.some((value: string) => !value)) {
+        return json({ error: "keep_ids must contain only non-empty strings" }, 400);
+      }
+      const keepIds = Array.from(new Set(normalized));
+      const keepSet = new Set(keepIds);
+      const { data: existingRows, error: existingError } = await supabase
+        .from("contact_bridge_snapshots")
+        .select("local_contact_id")
+        .eq("device_id", deviceId);
+      if (existingError) return json({ error: existingError.message }, 500);
+      const staleIds = (existingRows ?? [])
+        .map((row: any) => String(row.local_contact_id))
+        .filter((id: string) => !keepSet.has(id));
+      for (let offset = 0; offset < staleIds.length; offset += 500) {
+        const batch = staleIds.slice(offset, offset + 500);
+        const { error: deleteError } = await supabase
+          .from("contact_bridge_snapshots")
+          .delete()
+          .eq("device_id", deviceId)
+          .in("local_contact_id", batch);
+        if (deleteError) return json({ error: deleteError.message }, 500);
+      }
+      return json({ kept: keepIds.length, deleted: staleIds.length });
+    }
+
     if (action === "poll_commands") {
       // Requeue claims older than five minutes. This recovers commands if the
       // app process exits after claiming but before persisting its local queue.
