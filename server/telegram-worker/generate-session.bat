@@ -18,7 +18,7 @@ echo Starting Telegram authorization...
 call npm run session
 if errorlevel 1 goto failed
 echo.
-echo Copy the generated session directly into the Hostless secret TELEGRAM_SESSION.
+echo Copy the generated session directly into the GitHub repository secret TELEGRAM_SESSION.
 echo Do NOT paste it into ChatGPT, GitHub, or logs.
 goto done
 :missing
