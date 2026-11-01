@@ -47,6 +47,8 @@ const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
 const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
 const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
 const port = Number(process.env.PORT) || 8080;
+const runOnce = process.env.RUN_ONCE === "true";
+const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
 
 let stopping = false;
 let ready = false;
@@ -190,8 +192,21 @@ async function processJob(job: Job) {
   const candidates = Array.isArray(job.phones) ? job.phones : [];
   const results: MatchResult[] = Array.isArray(job.results) ? job.results : [];
   let lastRequestAt = job.last_request_at ?? null;
-  for (let index = results.length; index < candidates.length; index++) {
+  const startIndex = results.length;
+  for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
+    if (index - startIndex >= maxCandidatesPerRun) {
+      const resumeAt = new Date(Date.now() + 60_000).toISOString();
+      await updateJob(job.id, {
+        status: "queued", results, checked: results.length,
+        matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
+        errors: results.filter(x => x.status === "error").length,
+        last_request_at: lastRequestAt, paused_until: resumeAt,
+        error_message: null,
+      });
+      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; resume at ${resumeAt}`);
+      return;
+    }
     const candidate = candidates[index];
     const phone = normalizePhone(candidate?.phone);
     const checkedAt = new Date().toISOString();
@@ -294,13 +309,23 @@ async function main() {
           console.error("Job processing failed", job.id, message);
           await updateJob(job.id, { status: "failed", error_message: message.slice(0, 500), completed_at: new Date().toISOString() });
         }
+        if (runOnce) break;
       } else {
+        if (runOnce) break;
         await sleep(pollMs);
       }
     } catch (error) {
       console.error("Queue polling failed", error instanceof Error ? error.message : String(error));
+      if (runOnce) throw error;
       await sleep(pollMs);
     }
+  }
+  if (runOnce) {
+    ready = false;
+    stopping = true;
+    await telegram.disconnect().catch(() => {});
+    server.close();
+    console.log("One-shot resolver run finished.");
   }
 }
 process.on("SIGTERM", () => { stopping = true; server.close(); });
