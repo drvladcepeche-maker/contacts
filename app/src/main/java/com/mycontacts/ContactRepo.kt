@@ -236,13 +236,18 @@ class ContactRepo(private val cr: ContentResolver) {
         })
         val phoneWhere = CC.Data.RAW_CONTACT_ID + " IN (" + marks + ") AND " + CC.Data.MIMETYPE + "=?"
         val phoneArgs = rawArgs + arrayOf(Phone.CONTENT_ITEM_TYPE)
+        val phoneRowIds = ArrayList<Long>()
+        cr.query(CC.Data.CONTENT_URI, arrayOf(CC.Data._ID), phoneWhere, phoneArgs, null)?.use { cursor ->
+            while (cursor.moveToNext()) phoneRowIds.add(cursor.getLong(0))
+        }
         if (phone.isBlank()) {
             cr.delete(CC.Data.CONTENT_URI, phoneWhere, phoneArgs)
+        } else if (phoneRowIds.isNotEmpty()) {
+            // Update only the primary phone row; preserve secondary numbers.
+            cr.update(ContentUris.withAppendedId(CC.Data.CONTENT_URI, phoneRowIds.first()),
+                android.content.ContentValues().apply { put(Phone.NUMBER, phone) }, null, null)
         } else {
-            val phoneCount = cr.update(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
-                put(Phone.NUMBER, phone)
-            }, phoneWhere, phoneArgs)
-            if (phoneCount == 0) cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
+            cr.insert(CC.Data.CONTENT_URI, android.content.ContentValues().apply {
                 put(CC.Data.RAW_CONTACT_ID, ids.first())
                 put(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
                 put(Phone.NUMBER, phone)
