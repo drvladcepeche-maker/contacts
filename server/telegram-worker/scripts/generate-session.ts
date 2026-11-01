@@ -22,7 +22,7 @@ try {
     onError: error => console.error("Telegram authorization error:", error.message),
   });
   if (!(await client.checkAuthorization())) throw new Error("Telegram authorization was not confirmed.");
-  console.log("\nAuthorization successful. Add this value only to the Hostless secret TELEGRAM_SESSION:");
+  console.log("\nAuthorization successful. Add this value only to the GitHub repository secret TELEGRAM_SESSION:");
   console.log((client.session as StringSession).save());
   console.log("\nDo not paste this session into chat, commit it, or include it in logs.");
 } finally {
