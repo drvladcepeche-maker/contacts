@@ -69,6 +69,8 @@ class ContactsBridge(context: Context) {
         return total
     }
 
+    fun queueTelegramMatch(): JSONObject = request(JSONObject().put("action", "queue_telegram_match"))
+
     fun poll(): JSONArray = request(JSONObject().put("action", "poll_commands")).optJSONArray("commands") ?: JSONArray()
 
     fun complete(id: String, result: JSONObject? = null, error: String? = null) {
