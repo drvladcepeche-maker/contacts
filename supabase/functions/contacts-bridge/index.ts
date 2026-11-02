@@ -22,7 +22,7 @@ function stableJson(value: unknown): string {
     const object = value as Record<string, unknown>;
     return "{" + Object.keys(object).sort().map((key) => JSON.stringify(key) + ":" + stableJson(object[key])).join(",") + "}";
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? "null";
 }
 
 function contactCore(value: unknown): Record<string, unknown> {
