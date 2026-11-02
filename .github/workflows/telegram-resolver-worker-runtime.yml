@@ -6,7 +6,7 @@ on:
 
 concurrency:
   group: telegram-resolver-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
