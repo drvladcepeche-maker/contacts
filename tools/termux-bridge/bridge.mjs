@@ -226,7 +226,7 @@ async function apkInventory() {
 async function installApk(args) {
   const filename = String(args.file || "");
   if (!filename || filename.length > 180 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.apk$/i.test(filename)) {
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$/i.test(filename)) {
     return { exitCode: 2, output: "", errorText: "install_apk requires args.file with a plain APK filename from the APK inventory." };
   }
 
@@ -239,7 +239,7 @@ async function installApk(args) {
   } catch {
     return { exitCode: 2, output: "", errorText: "APK not found in the approved Download/PnS_APK folder." };
   }
-  if (actual !== target || !info.isFile()) {
+  if (actual !== resolve(await realpath(APK_DIR), filename) || !info.isFile()) {
     return { exitCode: 2, output: "", errorText: "APK must be a regular file directly inside the approved APK folder; symlinks are rejected." };
   }
   if (info.size < 1 || info.size > 250 * 1024 * 1024) {
@@ -293,7 +293,7 @@ async function installApk(args) {
   // and preserves app data; no uninstall, downgrade, or signature-bypass flags are used.
   const install = await run(
     rishBin,
-    ["-c", "pm install -r --user 0 '" + target + "'"],
+    ["-c", "pm install -r --user 0 '" + actual + "'"],
     120000
   );
   const report = [
