@@ -312,8 +312,14 @@ async function processJob(job: Job) {
   }
 }
 async function claimJob(): Promise<Job | null> {
-  const { data, error } = await supabase.rpc("claim_telegram_match_job");
+  console.log("Queue poll: requesting claim_telegram_match_job RPC");
+  const rpc = supabase.rpc("claim_telegram_match_job");
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")), 20000);
+  });
+  const { data, error } = await Promise.race([rpc, timeout]);
   if (error) throw error;
+  console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
   return data ? data as Job : null;
 }
 async function ensureTelegramConnected() {
@@ -388,4 +394,4 @@ async function main() {
 }
 process.on("SIGTERM", () => { stopping = true; server.close(); });
 process.on("SIGINT", () => { stopping = true; server.close(); });
-main().catch(error => { console.error("Worker startup failed", error); process.exitCode = 1; });
+main().catch(error => { console.error("Worker startup failed", error); server.close(); process.exitCode = 1; });
