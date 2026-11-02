@@ -307,7 +307,7 @@ class MainActivity : Activity() {
                     try {
                         val n = bridge.sync(contactsForSync())
                         runOnUiThread {
-                            toast("Синхронизировано контактов: $n")
+                            showSyncResult(n)
                             startBridgeService()
                         }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
@@ -317,11 +317,19 @@ class MainActivity : Activity() {
                 bg {
                     try {
                         val n = bridge.sync(contactsForSync())
-                        runOnUiThread { toast("Синхронизировано контактов: $n") }
+                        runOnUiThread { showSyncResult(n) }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
                 }
             }
             .setNegativeButton("Закрыть", null).show()
+    }
+
+    private fun showSyncResult(count: Int) {
+        val conflicts = bridge.lastSyncConflicts
+        val message = if (conflicts.isEmpty()) "Новых контактов передано: $count. Повторные ID пропущены." else "Новых: $count. Конфликтов ID: ${conflicts.size}. Существующие записи не перезаписаны. ID: ${conflicts.take(8).joinToString(", ")}"
+        status.text = message
+        toast(message)
+        if (conflicts.isNotEmpty()) AlertDialog.Builder(this).setTitle("Расхождения данных по ID").setMessage(conflicts.take(50).joinToString("\n")).setPositiveButton("Закрыть", null).show()
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
@@ -454,7 +462,7 @@ class MainActivity : Activity() {
                 }
             }
             "sync_contacts" -> bg {
-                try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)) }
+                try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)); runOnUiThread { showSyncResult(n) } }
                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
             }
             else -> bg { try { completeBridgeCommand(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
@@ -985,6 +993,7 @@ class MainActivity : Activity() {
                 val jobId = result.optString("job_id")
                 AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
                 runOnUiThread {
+                    showSyncResult(synced)
                     if (result.optBoolean("queued")) {
                         toast("Серверная проверка поставлена в очередь: $count уникальных номеров. Обработка начнётся после настройки Telegram-сессии и GitHub Actions.")
                     } else {
