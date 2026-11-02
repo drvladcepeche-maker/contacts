@@ -1,5 +1,8 @@
 name: Telegram Resolver Worker
 on:
+  push:
+    paths:
+      - '.github/workflows/telegram-resolver-worker-runtime.yml'
   schedule:
     - cron: "3-58/5 * * * *"
   workflow_dispatch:
