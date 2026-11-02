@@ -141,7 +141,10 @@ Deno.serve(async (req: Request) => {
             .from("contact_bridge_snapshots")
             .upsert(newRows, { onConflict: "device_id,local_contact_id", ignoreDuplicates: true })
             .select("local_contact_id");
-          if (insertError) return json({ error: insertError.message }, 500);
+          if (insertError?.code === "23505") {
+        return json({ error: "A Telegram matching job is already queued or running" }, 409);
+      }
+      if (insertError) return json({ error: insertError.message }, 500);
           insertedCount = inserted?.length ?? 0;
           skippedCount += newRows.length - insertedCount;
         }
