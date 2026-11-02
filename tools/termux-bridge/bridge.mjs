@@ -31,7 +31,7 @@ function curlConfigQuote(value) {
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\\n") + '"';
+    .replace(/\n/g, "\n") + '"';
 }
 
 async function requestViaCurlOnce(body) {
@@ -44,7 +44,7 @@ async function requestViaCurlOnce(body) {
     `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
     `data = ${curlConfigQuote(payload)}`,
     `max-time = "20"`,
-    `write-out = ${curlConfigQuote("\\n" + marker + "%{http_code}")}`,
+    `write-out = ${curlConfigQuote("\n" + marker + "%{http_code}")}`,
   ].join("\n") + "\n";
 
   const result = await new Promise((resolveRun) => {
@@ -219,7 +219,7 @@ async function apkInventory() {
       rows.push(name + "\\t" + info.size + " bytes");
     } catch { rows.push(name + "\\tstat failed"); }
   }
-  return { exitCode: 0, output: rows.join("\\n") || "No APK files found.", errorText: "" };
+  return { exitCode: 0, output: rows.join("\n") || "No APK files found.", errorText: "" };
 }
 
 
@@ -246,8 +246,8 @@ async function installApk(args) {
     return { exitCode: 2, output: "", errorText: "APK size is outside the allowed 1 byte–250 MiB range." };
   }
 
-  const hash = createHash("sha256").update(await readFile(target)).digest("hex");
-  const metadata = await run("aapt", ["dump", "badging", target], 30000);
+  const hash = createHash("sha256").update(await readFile(actual)).digest("hex");
+  const metadata = await run("aapt", ["dump", "badging", actual], 30000);
   if (metadata.exitCode !== 0) {
     return {
       exitCode: 2,
@@ -255,8 +255,8 @@ async function installApk(args) {
       errorText: "Could not inspect APK package. Install the Termux package 'aapt' (pkg install aapt), then retry. " + (metadata.errorText || ""),
     };
   }
-  const packageLine = metadata.output.split("\\n").find(line => line.startsWith("package:"));
-  const packageMatch = packageLine?.match(/\\bname='([^']+)'/);
+  const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
+  const packageMatch = packageLine?.match(/\bname='([^']+)'/);
   if (packageMatch?.[1] !== "com.mycontacts") {
     return {
       exitCode: 2,
@@ -272,7 +272,7 @@ async function installApk(args) {
   }
 
   const identity = await run(rishBin, ["-c", "id"], 15000);
-  if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identity.output)) {
+  if (identity.exitCode !== 0 || !/uid=2000\(shell\)/.test(identity.output)) {
     return {
       exitCode: 3,
       output: identity.output,
@@ -304,7 +304,7 @@ async function installApk(args) {
     "Shizuku identity: " + identity.output.trim(),
     "PackageManager result:",
     install.output.trim(),
-  ].filter(Boolean).join("\\n");
+  ].filter(Boolean).join("\n");
 
   if (install.exitCode !== 0 || !/Success/.test(install.output)) {
     return {
@@ -314,7 +314,7 @@ async function installApk(args) {
         " If this is INSTALL_FAILED_UPDATE_INCOMPATIBLE, the APK signing key differs from the installed app. Do not uninstall the existing app.",
     };
   }
-  return { exitCode: 0, output: report + "\\nApp updated in place; existing app data was not intentionally cleared.", errorText: "" };
+  return { exitCode: 0, output: report + "\nApp updated in place; existing app data was not intentionally cleared.", errorText: "" };
 }
 
 async function listFiles(args) {
