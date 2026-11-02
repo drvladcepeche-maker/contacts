@@ -41,7 +41,10 @@ class ContactRepo(private val cr: ContentResolver) {
         cr.query(Phone.CONTENT_URI, arrayOf(Phone.CONTACT_ID, Phone.NUMBER), null, null, null)?.use { c ->
             while (c.moveToNext()) {
                 val n = c.getString(1) ?: continue
-                phones.getOrPut(c.getLong(0)) { mutableListOf() }.let { if (n !in it) it.add(n) }
+                phones.getOrPut(c.getLong(0)) { mutableListOf() }.let { list ->
+                    val digits = n.filter { it.isDigit() }
+                    if (digits.isNotEmpty() && list.none { existing -> existing.filter { it.isDigit() } == digits }) list.add(n)
+                }
             }
         }
         val telegrams = HashMap<Long, String>()
