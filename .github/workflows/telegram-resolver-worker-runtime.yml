@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - '.github/workflows/telegram-resolver-worker-runtime.yml'
+      - 'server/telegram-worker/src/**'
   schedule:
     - cron: "3-58/5 * * * *"
   workflow_dispatch:
