@@ -40,9 +40,12 @@ class ContactsBridge(context: Context) {
         }
     }
 
+    @Volatile var lastSyncConflicts: List<String> = emptyList()
+        private set
+
     fun sync(contacts: List<Contact>): Int {
-        require(contacts.size <= 7000) { "Maximum 7000 contacts per device snapshot" }
         var total = 0
+        val conflicts = LinkedHashSet<String>()
         for (batch in contacts.chunked(1000)) {
             val arr = JSONArray()
             batch.forEach { c ->
@@ -61,11 +64,17 @@ class ContactsBridge(context: Context) {
                         }
                     }))
             }
-            total += request(JSONObject().put("action", "sync_contacts").put("contacts", arr)).optInt("synced")
+            val response = request(JSONObject().put("action", "sync_contacts").put("contacts", arr))
+            total += response.optInt("synced")
+            val rows = response.optJSONArray("conflicts") ?: JSONArray()
+            for (i in 0 until rows.length()) {
+                val item = rows.optJSONObject(i) ?: continue
+                val id = item.optString("id")
+                if (id.isNotBlank()) conflicts.add(id)
+            }
         }
-        // Prune only after every batch has been accepted. An interrupted sync never deletes old rows.
-        val keepIds = JSONArray().apply { contacts.forEach { put(it.id.toString()) } }
-        request(JSONObject().put("action", "prune_contacts").put("keep_ids", keepIds))
+        // Do not prune snapshots during routine sync: the server is append-only by contact ID.
+        lastSyncConflicts = conflicts.toList()
         return total
     }
 
