@@ -208,6 +208,45 @@ async function readWorkspaceFile(args) {
   return { exitCode: 0, output, errorText: "" };
 }
 
+async function shizukuStorageCheck() {
+  let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
+  try { await access(rishBin); } catch { rishBin = "rish"; }
+  const identity = await run(rishBin, ["-c", "id"], 15000);
+  if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
+    return {
+      exitCode: 3,
+      output: identity.output,
+      errorText: "Shizuku is unavailable or not authorized for Termux; expected Android shell uid=2000.",
+    };
+  }
+
+  const target = "/sdcard/Download/PnS_APK";
+  const listing = await run(rishBin, ["-c", "ls " + target], 15000);
+  if (listing.exitCode !== 0) {
+    const parent = await run(rishBin, ["-c", "ls /sdcard/Download"], 15000);
+    return {
+      exitCode: 1,
+      output: [
+        "Shizuku identity: " + identity.output.trim(),
+        "Download directory contents:",
+        parent.output.trim(),
+      ].join("\n"),
+      errorText: "Shizuku could not list " + target + ". " +
+        (listing.errorText || listing.output || "Directory missing or inaccessible."),
+    };
+  }
+
+  return {
+    exitCode: 0,
+    output: [
+      "Shizuku identity: " + identity.output.trim(),
+      "Read-only listing: " + target,
+      listing.output.trim(),
+    ].join("\n"),
+    errorText: "",
+  };
+}
+
 async function apkInventory() {
   let names;
   try { names = await readdir(APK_DIR); }
@@ -353,6 +392,8 @@ async function execute(job) {
       return await readWorkspaceFile(args);
     case "apk_inventory":
       return await apkInventory();
+    case "shizuku_storage_check":
+      return await shizukuStorageCheck();
     case "install_apk":
       return await installApk(args);
     case "git_fetch_main":
@@ -395,7 +436,7 @@ async function execute(job) {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, apk_inspect, install_apk (com.mycontacts only; Shizuku PackageManager update), git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
+console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, shizuku_storage_check (read-only Shizuku listing), apk_inspect, install_apk (com.mycontacts only; Shizuku PackageManager update), git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("No arbitrary shell command is accepted.");
 
