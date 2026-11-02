@@ -16,6 +16,23 @@ async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return "{" + Object.keys(object).sort().map((key) => JSON.stringify(key) + ":" + stableJson(object[key])).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function contactCore(value: unknown): Record<string, unknown> {
+  const data = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  // Telegram lookup fields are server-managed; they must not trigger a conflict
+  // when the handset has not yet received the corresponding write command.
+  return { name: data.name ?? null, phones: data.phones ?? [], accounts: data.accounts ?? [] };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "POST required" }, 405);
@@ -68,12 +85,20 @@ Deno.serve(async (req: Request) => {
     if (action === "sync_contacts") {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
-      // Deduplicate repeated local IDs inside a single batch; the last occurrence wins.
-      // Unique (device_id, local_contact_id) + upsert makes repeated full syncs idempotent.
+      // Android Contacts._ID is the stable per-contact key for this device.
+      // Existing IDs are immutable here: skip them, and report data divergence.
       const byLocalId = new Map<string, Record<string, unknown>>();
+      const conflicts: Array<{ id: string; fields: string[] }> = [];
       for (const item of contacts as any[]) {
         const localId = String(item?.id ?? "").trim();
         if (!localId) continue;
+        const priorInBatch = byLocalId.get(localId);
+        if (priorInBatch) {
+          if (stableJson(contactCore(priorInBatch.contact_data)) !== stableJson(contactCore(item))) {
+            conflicts.push({ id: localId, fields: ["duplicate_id_in_batch"] });
+          }
+          continue;
+        }
         byLocalId.set(localId, {
           device_id: deviceId,
           local_contact_id: localId,
@@ -82,6 +107,8 @@ Deno.serve(async (req: Request) => {
         });
       }
       const rows = Array.from(byLocalId.values());
+      let insertedCount = 0;
+      let skippedCount = 0;
       if (rows.length) {
         const ids = rows.map((row) => String(row.local_contact_id));
         const { data: previousRows, error: previousError } = await supabase
@@ -91,48 +118,47 @@ Deno.serve(async (req: Request) => {
           .in("local_contact_id", ids);
         if (previousError) return json({ error: previousError.message }, 500);
         const previousById = new Map((previousRows ?? []).map((row: any) => [String(row.local_contact_id), row.contact_data]));
-        const mergedRows = rows.map((row) => {
-          const incoming = row.contact_data as Record<string, unknown>;
-          const previous = previousById.get(String(row.local_contact_id));
-          if (!previous || typeof previous !== "object" || Array.isArray(previous)) return row;
-          const prior = previous as Record<string, unknown>;
-          const merged: Record<string, unknown> = { ...prior, ...incoming };
-          // Android may sync before it has polled the queued write. Preserve resolver
-          // metadata so checked phone numbers are not scanned again after every sync.
-          for (const key of [
-            "telegram_match_status",
-            "telegram_match_phone",
-            "telegram_match_checked_phones",
-            "telegram_match_checked_at",
-          ]) {
-            if (prior[key] !== undefined) merged[key] = prior[key];
+        const newRows: typeof rows = [];
+        for (const row of rows) {
+          const id = String(row.local_contact_id);
+          if (previousById.has(id)) {
+            skippedCount++;
+            const previous = previousById.get(id);
+            const incoming = row.contact_data;
+            if (stableJson(contactCore(previous)) !== stableJson(contactCore(incoming))) {
+              const left = contactCore(previous);
+              const right = contactCore(incoming);
+              const fields = ["name", "phones", "accounts"].filter((key) =>
+                stableJson(left[key]) !== stableJson(right[key]));
+              conflicts.push({ id, fields });
+            }
+          } else {
+            newRows.push(row);
           }
-          // A server-confirmed result remains authoritative until the queued Android
-          // update is applied. A not_resolved result also preserves a deliberate clear.
-          const hasServerTelegramValue = Boolean(prior.telegram_id) ||
-            (typeof prior.telegram_username === "string" && prior.telegram_username.length > 0);
-          if (hasServerTelegramValue) {
-            // A later non-match for another number must not erase an earlier match.
-            if (prior.telegram_id !== undefined) merged.telegram_id = prior.telegram_id;
-            if (prior.telegram_username !== undefined) merged.telegram_username = prior.telegram_username;
-          } else if (prior.telegram_match_status === "not_resolved") {
-            // Preserve an intentional server-side clear for the last checked number.
-            merged.telegram_id = prior.telegram_id ?? null;
-            merged.telegram_username = prior.telegram_username ?? null;
-          }
-          return { ...row, contact_data: merged };
-        });
-        const { error } = await supabase.from("contact_bridge_snapshots")
-          .upsert(mergedRows, { onConflict: "device_id,local_contact_id" });
-        if (error) return json({ error: error.message }, 500);
+        }
+        if (newRows.length) {
+          const { data: inserted, error: insertError } = await supabase
+            .from("contact_bridge_snapshots")
+            .upsert(newRows, { onConflict: "device_id,local_contact_id", ignoreDuplicates: true })
+            .select("local_contact_id");
+          if (insertError) return json({ error: insertError.message }, 500);
+          insertedCount = inserted?.length ?? 0;
+          skippedCount += newRows.length - insertedCount;
+        }
       }
-      return json({ synced: rows.length, unique_contacts: rows.length, duplicate_ids_in_batch_removed: contacts.length - rows.length });
+      return json({
+        synced: insertedCount,
+        inserted: insertedCount,
+        skipped_existing: skippedCount,
+        unique_contacts: rows.length,
+        duplicate_ids_in_batch_removed: contacts.length - rows.length,
+        conflicts,
+      });
     }
 
     if (action === "prune_contacts") {
       const rawKeepIds = Array.isArray(body.keep_ids) ? body.keep_ids : null;
       if (!rawKeepIds) return json({ error: "keep_ids must be an array" }, 400);
-      if (rawKeepIds.length > 7000) return json({ error: "Maximum 7000 contacts per device snapshot" }, 413);
       const normalized = rawKeepIds.map((value: unknown) =>
         typeof value === "string" ? value.trim() : ""
       );
@@ -185,9 +211,6 @@ Deno.serve(async (req: Request) => {
         .select("local_contact_id", { count: "exact", head: true })
         .eq("device_id", deviceId);
       if (countError) return json({ error: countError.message }, 500);
-      if ((snapshotCount ?? 0) > 7000) {
-        return json({ error: "Device snapshot exceeds the 7000-contact limit; run a full sync first" }, 413);
-      }
       const snapshots: Array<{ local_contact_id: string; contact_data: unknown }> = [];
       for (let offset = 0; ; offset += 1000) {
         const { data: page, error: pageError } = await supabase
