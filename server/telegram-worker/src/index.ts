@@ -32,7 +32,7 @@ type Job = {
   last_request_at?: string | null;
 };
 
-const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION"] as const;
+const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
 for (const name of required) {
   if (!process.env[name]?.trim()) {
     console.error(`Missing required environment variable: ${name}`);
@@ -42,10 +42,6 @@ for (const name of required) {
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const apiId = Number(process.env.TELEGRAM_API_ID!.trim());
-if (!Number.isInteger(apiId) || apiId <= 0) throw new Error("TELEGRAM_API_ID must be a positive integer");
-const apiHash = process.env.TELEGRAM_API_HASH!.trim();
-const sessionString = process.env.TELEGRAM_SESSION!.trim();
 const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
 const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
 const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
@@ -314,7 +310,14 @@ async function claimJob(): Promise<Job | null> {
   if (error) throw error;
   return data ? data as Job : null;
 }
-async function main() {
+async function ensureTelegramConnected() {
+  if (telegram && ready) return;
+  const apiIdText = process.env.TELEGRAM_API_ID?.trim() ?? "";
+  const apiHash = process.env.TELEGRAM_API_HASH?.trim() ?? "";
+  const sessionString = process.env.TELEGRAM_SESSION?.trim() ?? "";
+  const apiId = Number(apiIdText);
+  if (!Number.isInteger(apiId) || apiId <= 0) throw new Error("TELEGRAM_API_ID is missing or invalid");
+  if (!apiHash || !sessionString) throw new Error("TELEGRAM_API_HASH or TELEGRAM_SESSION is missing");
   console.log(`Telegram auth diagnostics: apiId=${apiId} apiHashLen=${apiHash.length} session(${describeSession(sessionString)})`);
   if (sessionString.length < 100) {
     throw new Error(`TELEGRAM_SESSION looks too short (${sessionString.length} chars). Re-copy the full StringSession into the GitHub secret.`);
@@ -324,17 +327,33 @@ async function main() {
   });
   await telegram.connect();
   if (!(await telegram.checkAuthorization())) {
+    await telegram.disconnect().catch(() => {});
+    telegram = undefined;
     throw new Error(
       `Telegram session is not authorized (${describeSession(sessionString)}). ` +
       "Regenerate StringSession with the same TELEGRAM_API_ID/TELEGRAM_API_HASH secrets and replace TELEGRAM_SESSION."
     );
   }
   ready = true;
-  console.log("Dedicated Telegram MTProto session authorized; resolver worker started.");
+  console.log("Dedicated Telegram MTProto session authorized; resolver worker connected.");
+}
+
+async function main() {
+  console.log("Telegram resolver worker started; Telegram connects only when a queued job exists.");
   while (!stopping) {
     try {
       const job = await claimJob();
       if (job) {
+        try {
+          await ensureTelegramConnected();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await updateJob(job.id, {
+            status: "queued", claimed_at: null,
+            error_message: message.slice(0, 500),
+          });
+          throw error;
+        }
         console.log(`Claimed job ${job.id}; remaining candidates: ${Math.max(0, (job.phones?.length ?? 0) - (job.results?.length ?? 0))}`);
         try { await processJob(job); }
         catch (error) {
@@ -356,7 +375,7 @@ async function main() {
   if (runOnce) {
     ready = false;
     stopping = true;
-    await telegram.disconnect().catch(() => {});
+    if (telegram) await telegram.disconnect().catch(() => {});
     server.close();
     console.log("One-shot resolver run finished.");
   }
