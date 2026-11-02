@@ -10,12 +10,14 @@ Automatically executed:
 - `git_status`
 - `git_log` (at most 20 entries)
 - `git_diff_stat`
+- `apk_inventory` and `apk_inspect`
+- `install_apk` (only a named APK directly inside `~/storage/downloads/PnS_APK`, and only package `com.mycontacts`; requires Shizuku `rish` to run as Android shell)
 
 Requires an interactive confirmation in the Termux terminal (type exactly `YES`):
 - `gradle_test`
 - `gradle_assemble_debug`
 
-The Gradle tasks execute repository build scripts, so they are treated as potentially unsafe. If the agent is not attached to an interactive terminal, it rejects these tasks. Unknown command types are rejected. Do not add a generic shell, exec, or arbitrary command handler.
+The Gradle tasks execute repository build scripts, so they are treated as potentially unsafe. If the agent is not attached to an interactive terminal, it rejects these tasks. The APK installer is narrowly scoped: it validates a plain filename, rejects symlinks and oversized files, checks the APK package with `aapt`, requires Shizuku `rish` to report `uid=2000(shell)`, confirms the existing package is installed, then runs only `pm install -r --user 0`. Android PackageManager enforces signing-key compatibility; a mismatch fails without uninstalling the old app. No downgrade or signature-bypass flags are used. Install `aapt` in Termux with `pkg install aapt` if it is missing. Unknown command types are rejected. Do not add a generic shell, exec, or arbitrary command handler.
 
 ## 1. Install prerequisites in Termux
 
@@ -70,7 +72,7 @@ limit 1
 returning id, status, command_type, created_at;
 ```
 
-Allowed command types are constrained by the database. Never insert raw shell commands. To inspect a result, query the returned job ID:
+Allowed command types are constrained by the database. To install a specific APK already listed by `apk_inventory`, queue `install_apk` with `{"file":"app-debug.apk"}` (replace with the exact listed filename). Never insert raw shell commands. This operation updates `com.mycontacts` in place and does not uninstall it. To inspect a result, query the returned job ID:
 
 ```sql
 select id, status, output, error_text, exit_code, created_at, finished_at

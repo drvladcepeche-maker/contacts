@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -31,7 +31,7 @@ function curlConfigQuote(value) {
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\\n") + '"';
+    .replace(/\n/g, "\n") + '"';
 }
 
 async function requestViaCurlOnce(body) {
@@ -44,7 +44,7 @@ async function requestViaCurlOnce(body) {
     `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
     `data = ${curlConfigQuote(payload)}`,
     `max-time = "20"`,
-    `write-out = ${curlConfigQuote("\\n" + marker + "%{http_code}")}`,
+    `write-out = ${curlConfigQuote("\n" + marker + "%{http_code}")}`,
   ].join("\n") + "\n";
 
   const result = await new Promise((resolveRun) => {
@@ -219,7 +219,102 @@ async function apkInventory() {
       rows.push(name + "\\t" + info.size + " bytes");
     } catch { rows.push(name + "\\tstat failed"); }
   }
-  return { exitCode: 0, output: rows.join("\\n") || "No APK files found.", errorText: "" };
+  return { exitCode: 0, output: rows.join("\n") || "No APK files found.", errorText: "" };
+}
+
+
+async function installApk(args) {
+  const filename = String(args.file || "");
+  if (!filename || filename.length > 180 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*\.apk$/i.test(filename)) {
+    return { exitCode: 2, output: "", errorText: "install_apk requires args.file with a plain APK filename from the APK inventory." };
+  }
+
+  const target = resolve(APK_DIR, filename);
+  let actual;
+  let info;
+  try {
+    actual = await realpath(target);
+    info = await stat(target);
+  } catch {
+    return { exitCode: 2, output: "", errorText: "APK not found in the approved Download/PnS_APK folder." };
+  }
+  if (actual !== resolve(await realpath(APK_DIR), filename) || !info.isFile()) {
+    return { exitCode: 2, output: "", errorText: "APK must be a regular file directly inside the approved APK folder; symlinks are rejected." };
+  }
+  if (info.size < 1 || info.size > 250 * 1024 * 1024) {
+    return { exitCode: 2, output: "", errorText: "APK size is outside the allowed 1 byte–250 MiB range." };
+  }
+
+  const hash = createHash("sha256").update(await readFile(actual)).digest("hex");
+  const metadata = await run("aapt", ["dump", "badging", actual], 30000);
+  if (metadata.exitCode !== 0) {
+    return {
+      exitCode: 2,
+      output: metadata.output,
+      errorText: "Could not inspect APK package. Install the Termux package 'aapt' (pkg install aapt), then retry. " + (metadata.errorText || ""),
+    };
+  }
+  const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
+  const packageMatch = packageLine?.match(/\bname='([^']+)'/);
+  if (packageMatch?.[1] !== "com.mycontacts") {
+    return {
+      exitCode: 2,
+      output: packageLine || metadata.output.slice(0, 1000),
+      errorText: "Rejected: only package com.mycontacts can be installed by this command.",
+    };
+  }
+
+  let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
+  try { await access(rishBin); }
+  catch {
+    rishBin = "rish";
+  }
+
+  const identity = await run(rishBin, ["-c", "id"], 15000);
+  if (identity.exitCode !== 0 || !/uid=2000\(shell\)/.test(identity.output)) {
+    return {
+      exitCode: 3,
+      output: identity.output,
+      errorText: "Shizuku bridge unavailable or not authorized. Expected rish to run as Android shell (uid=2000). Check Shizuku authorization and RISH_BIN.",
+    };
+  }
+
+  const installed = await run(rishBin, ["-c", "pm path com.mycontacts"], 15000);
+  if (installed.exitCode !== 0 || !installed.output.includes("package:")) {
+    return {
+      exitCode: 3,
+      output: installed.output,
+      errorText: "Installed package com.mycontacts was not found for Android user 0. No installation was attempted.",
+    };
+  }
+
+  // PackageManager enforces signing-certificate compatibility. -r replaces in place
+  // and preserves app data; no uninstall, downgrade, or signature-bypass flags are used.
+  const install = await run(
+    rishBin,
+    ["-c", "pm install -r --user 0 '" + actual + "'"],
+    120000
+  );
+  const report = [
+    "APK: " + filename,
+    "Package: com.mycontacts",
+    "Size: " + info.size + " bytes",
+    "SHA-256: " + hash,
+    "Shizuku identity: " + identity.output.trim(),
+    "PackageManager result:",
+    install.output.trim(),
+  ].filter(Boolean).join("\n");
+
+  if (install.exitCode !== 0 || !/Success/.test(install.output)) {
+    return {
+      exitCode: install.exitCode || 1,
+      output: report,
+      errorText: (install.errorText || "Android PackageManager rejected the update. The existing app was not uninstalled.") +
+        " If this is INSTALL_FAILED_UPDATE_INCOMPATIBLE, the APK signing key differs from the installed app. Do not uninstall the existing app.",
+    };
+  }
+  return { exitCode: 0, output: report + "\nApp updated in place; existing app data was not intentionally cleared.", errorText: "" };
 }
 
 async function listFiles(args) {
@@ -258,6 +353,8 @@ async function execute(job) {
       return await readWorkspaceFile(args);
     case "apk_inventory":
       return await apkInventory();
+    case "install_apk":
+      return await installApk(args);
     case "git_fetch_main":
       return await run("git", ["fetch", "origin", "main"], 120000);
     case "node_check_bridge":
@@ -298,7 +395,7 @@ async function execute(job) {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, apk_inspect, git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
+console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, apk_inspect, install_apk (com.mycontacts only; Shizuku PackageManager update), git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("No arbitrary shell command is accepted.");
 
