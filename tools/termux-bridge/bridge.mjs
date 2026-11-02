@@ -212,16 +212,39 @@ async function shizukuStorageCheck() {
   let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
   try { await access(rishBin); } catch { rishBin = "rish"; }
   const identity = await run(rishBin, ["-c", "id"], 15000);
-  if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identity.output)) {
-    return { exitCode: 3, output: identity.output, errorText: "Shizuku is unavailable or not authorized for Termux; expected Android shell uid=2000." };
+  if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
+    return {
+      exitCode: 3,
+      output: identity.output,
+      errorText: "Shizuku is unavailable or not authorized for Termux; expected Android shell uid=2000.",
+    };
   }
+
   const target = "/sdcard/Download/PnS_APK";
   const listing = await run(rishBin, ["-c", "ls " + target], 15000);
   if (listing.exitCode !== 0) {
     const parent = await run(rishBin, ["-c", "ls /sdcard/Download"], 15000);
-    return { exitCode: 1, output: "Shizuku identity: " + identity.output.trim() + "\\nDownload contents:\\n" + parent.output, errorText: "Shizuku could not list " + target + ". " + (listing.errorText || listing.output || "Directory missing or inaccessible.") };
+    return {
+      exitCode: 1,
+      output: [
+        "Shizuku identity: " + identity.output.trim(),
+        "Download directory contents:",
+        parent.output.trim(),
+      ].join("\n"),
+      errorText: "Shizuku could not list " + target + ". " +
+        (listing.errorText || listing.output || "Directory missing or inaccessible."),
+    };
   }
-  return { exitCode: 0, output: "Shizuku identity: " + identity.output.trim() + "\\nRead-only listing: " + target + "\\n" + listing.output.trim(), errorText: "" };
+
+  return {
+    exitCode: 0,
+    output: [
+      "Shizuku identity: " + identity.output.trim(),
+      "Read-only listing: " + target,
+      listing.output.trim(),
+    ].join("\n"),
+    errorText: "",
+  };
 }
 
 async function apkInventory() {
