@@ -39,8 +39,14 @@ for (const name of required) {
     process.exit(1);
   }
 }
+const fetchWithTimeout: typeof fetch = (input, init = {}) => {
+  const timeoutSignal = AbortSignal.timeout(15000);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+  return fetch(input, { ...init, signal });
+};
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
   auth: { persistSession: false, autoRefreshToken: false },
+  global: { fetch: fetchWithTimeout },
 });
 const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
 const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
