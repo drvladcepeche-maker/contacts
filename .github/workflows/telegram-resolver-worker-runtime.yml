@@ -24,7 +24,7 @@ jobs:
   process-queue:
     if: vars.TELEGRAM_RESOLVER_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
