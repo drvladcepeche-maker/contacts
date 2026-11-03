@@ -86,19 +86,50 @@ Deno.serve(async (req: Request) => {
     crypto.getRandomValues(randomBytes);
     const deviceToken = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     const deviceTokenHash = await sha256(deviceToken);
-    const requestedName = String(body.device_name ?? "MyContacts Android").trim();
-    const deviceName = (requestedName || "MyContacts Android").slice(0, 80);
-    const { data: created, error: createError } = await supabase
+    const requestedName = String(body.device_name ?? "Android contacts app — refreshed sync").trim();
+    const deviceName = (requestedName || "Android contacts app — refreshed sync").slice(0, 80);
+
+    // Reuse the original snapshot-owning device so restored contacts stay
+    // attached to their original device ID. Pairing rotates only its bearer hash.
+    const { data: existingDevice, error: lookupError } = await supabase
       .from("contact_bridge_devices")
-      .insert({ device_name: deviceName, token_hash: deviceTokenHash })
       .select("id, device_name, created_at")
-      .single();
-    if (createError) return json({ error: createError.message }, 500);
+      .eq("device_name", deviceName)
+      .is("revoked_at", null)
+      .order("last_seen_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) return json({ error: lookupError.message }, 500);
+
+    let created = existingDevice;
+    const reusedExistingDevice = Boolean(existingDevice);
+    if (existingDevice) {
+      const { data: updated, error: updateError } = await supabase
+        .from("contact_bridge_devices")
+        .update({ token_hash: deviceTokenHash })
+        .eq("id", existingDevice.id)
+        .is("revoked_at", null)
+        .select("id, device_name, created_at")
+        .maybeSingle();
+      if (updateError) return json({ error: updateError.message }, 500);
+      if (!updated) return json({ error: "Existing device is no longer available for pairing" }, 409);
+      created = updated;
+    } else {
+      const { data: inserted, error: createError } = await supabase
+        .from("contact_bridge_devices")
+        .insert({ device_name: deviceName, token_hash: deviceTokenHash })
+        .select("id, device_name, created_at")
+        .single();
+      if (createError) return json({ error: createError.message }, 500);
+      created = inserted;
+    }
     return json({
       paired: true,
       device: created,
       device_token: deviceToken,
       token_delivery: "shown_once",
+      reused_existing_device: reusedExistingDevice,
     }, 201);
   }
 

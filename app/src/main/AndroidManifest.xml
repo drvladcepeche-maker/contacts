@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application
-        android:label="Мои контакты"
+        android:label="Мои контакты — привязка"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
         <activity android:name=".TelegramMatcherActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
