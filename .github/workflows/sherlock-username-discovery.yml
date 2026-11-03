@@ -1,0 +1,41 @@
+name: Sherlock Username Discovery
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sherlock-username-discovery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/sherlock-worker/requirements.txt
+      - name: Install pinned Sherlock engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r server/sherlock-worker/requirements.txt
+          sherlock --version
+      - name: Validate classifier
+        run: python server/sherlock-worker/worker.py --self-test
+      - name: Scan contacts and discover public profiles
+        env:
+          SUPABASE_URL: https://xevqbgjtxuveeqaiacvm.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SHERLOCK_MAX_CANDIDATES: "12"
+          SHERLOCK_CACHE_DAYS: "30"
+          SHERLOCK_SITE_TIMEOUT: "12"
+        run: python server/sherlock-worker/worker.py
