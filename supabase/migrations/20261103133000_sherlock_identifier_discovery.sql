@@ -8,6 +8,7 @@ create table if not exists public.contact_identifier_observations (
   source_path text not null,
   source_mimetype text,
   source_value text not null,
+  source_value_hash text not null,
   detected_type text not null,
   expected_type text,
   normalized_value text,
@@ -16,7 +17,7 @@ create table if not exists public.contact_identifier_observations (
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
-  unique (device_id, local_contact_id, source_path, source_value, detected_type)
+  unique (device_id, local_contact_id, source_path, source_value_hash, detected_type)
 );
 
 create index if not exists contact_identifier_observations_contact_idx
