@@ -45,7 +45,7 @@ def expected_for_mime(mime):
     if "email" in m: return "email"
     if "phone" in m: return "phone"
     if "website" in m: return "profile_url"
-    if "im" in m: return "username"
+    if m.endswith("/im"): return "username"
     return None
 
 def classify_value(value, path, mime=None):
@@ -186,6 +186,13 @@ def run_sherlock(username, sites):
         with open(csv_path,newline="",encoding="utf-8") as f:
             return list(csv.DictReader(f))
 
+def canonical_platform(platform):
+    # Sherlock 0.16 renamed the Twitter catalog entry to X. Keep database
+    # cache keys stable across the old and new labels.
+    value = str(platform or "")
+    return "Twitter" if value.casefold() == "x" else value
+
+
 def latest_cache(username, selected_sites):
     rows=api("GET","contact_osint_profiles",params={
         "select":"platform,result_status,profile_url,http_status,response_time_s,checked_at,manifest_version,evidence",
@@ -193,10 +200,11 @@ def latest_cache(username, selected_sites):
         "order":"checked_at.desc","limit":"200"
     }) or []
     now=datetime.now(timezone.utc)
+    selected_keys={canonical_platform(site) for site in selected_sites}
     cache={}
     for row in rows:
-        platform=row.get("platform")
-        if platform not in selected_sites or platform in cache: continue
+        platform=canonical_platform(row.get("platform"))
+        if platform not in selected_keys or platform in cache: continue
         try: checked=datetime.fromisoformat(row["checked_at"].replace("Z","+00:00"))
         except Exception: continue
         status=str(row.get("result_status") or "")
@@ -241,6 +249,9 @@ def main():
         assert any(x["detected_type"]=="profile_url" for x in obs)
         assert "sample_handle" in candidates and "second_handle" in candidates and "another_name" in candidates
         assert not any(x["detected_type"]=="email" and x.get("normalized_value")=="b.example" for x in obs)
+        assert expected_for_mime("vnd.android.cursor.item/website") is None
+        assert expected_for_mime("vnd.android.cursor.item/im") == "username"
+        assert canonical_platform("X") == canonical_platform("Twitter") == "Twitter"
         print("Sherlock worker self-test passed")
         return
     if not SERVICE_KEY: raise SystemExit("SUPABASE_SERVICE_ROLE_KEY is required")
@@ -281,7 +292,8 @@ def main():
         site_union=set().union(*(x["sites"] for x in contacts)) or set(SITES)
         _, selected_sites=selected_catalog_sites(site_union)
         cached=latest_cache(username,selected_sites)
-        if selected_sites and set(selected_sites).issubset(cached):
+        required_cache_keys={canonical_platform(site) for site in selected_sites}
+        if required_cache_keys and required_cache_keys.issubset(cached):
             continue
         try:
             results=run_sherlock(username,selected_sites)
