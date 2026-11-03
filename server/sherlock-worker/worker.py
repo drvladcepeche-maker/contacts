@@ -59,7 +59,7 @@ def classify_value(value, path, mime=None):
         found.append({
             "source_path": path, "source_mimetype": mime, "source_value": raw,
             "detected_type": kind, "expected_type": expected, "normalized_value": normalized,
-            "confidence": confidence, "is_misfiled": bool(expected and expected != kind)
+            "confidence": confidence, "is_misfiled": bool(expected and expected != kind and not (expected == "phone" and kind == "possible_phone"))
         })
     for email in EMAIL_RE.findall(raw):
         add("email", email.lower())
@@ -94,6 +94,10 @@ def classify_value(value, path, mime=None):
             found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,
                 "detected_type":"username","expected_type":expected,"normalized_value":handle,
                 "confidence":"medium","is_misfiled":bool(expected and expected not in ("username","profile_url"))})
+    # Bare values in the dedicated Telegram username field are valid handles.
+    if path.startswith("telegram_username") and re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", raw) and raw.lower() not in RESERVED:
+        found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,"detected_type":"username",
+            "expected_type":expected,"normalized_value":raw,"confidence":"high","is_misfiled":False})
     # Known Telegram ID fields are classified as IDs; generic numeric strings remain ambiguous.
     if path == "telegram_id" and re.fullmatch(r"\d{5,20}", raw):
         add("telegram_id", raw)
