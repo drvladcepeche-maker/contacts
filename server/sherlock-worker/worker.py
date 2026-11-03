@@ -276,10 +276,17 @@ def main():
             results=run_sherlock(username,site_union)
             upsert_profiles(contacts,username,results,version)
             processed += 1
-            print(f"Checked {username}: {len(results)} site results; contacts={len(contacts)}")
+            print(f"Candidate {processed}: {len(results)} site results; linked_contact_rows={len(contacts)}")
         except Exception as exc:
-            print(f"ERROR {username}: {str(exc)[:300]}",file=sys.stderr)
+            # Contact handles and profile URLs are personal data. Never put them or
+            # exception strings (which may embed request URLs) into public CI logs.
+            print(f"Candidate {processed + 1} failed: {type(exc).__name__}",file=sys.stderr)
     print(json.dumps({"snapshot_rows_scanned":offset,"unique_usernames":len(associations),"checked_usernames":processed,"manifest_version":version}))
 
 if __name__=="__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        # Avoid traceback/request URL leakage into public GitHub Actions logs.
+        print(f"Worker failed: {type(exc).__name__}", file=sys.stderr)
+        raise SystemExit(1)
