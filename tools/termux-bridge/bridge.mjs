@@ -44,13 +44,13 @@ async function requestViaCurlOnce(body) {
     `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
     `data = ${curlConfigQuote(payload)}`,
     `max-time = "20"`,
-    `write-out = ${curlConfigQuote("\n" + marker + "%{http_code}")}`,
   ].join("\n") + "\n";
 
   const result = await new Promise((resolveRun) => {
     const child = spawn("curl", [
       "--silent", "--show-error", "--ipv4", "--http1.1",
-      "--connect-timeout", "10", "--max-time", "20", "--config", "-"
+      "--connect-timeout", "10", "--max-time", "20",
+      "--write-out", "\n" + marker + "%{http_code}", "--config", "-"
     ], {
       cwd: WORKSPACE,
       shell: false,
