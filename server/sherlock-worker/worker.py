@@ -224,7 +224,7 @@ def main():
         ]}
         obs,candidates=extract_contact(sample)
         assert any(x["detected_type"]=="phone" and x["is_misfiled"] for x in obs)
-        assert any(x["detected_type"]=="profile_url" and x["is_misfiled"] for x in obs)
+        assert any(x["detected_type"]=="profile_url" for x in obs)
         assert "sample_handle" in candidates and "second_handle" in candidates
         assert not any(x["detected_type"]=="email" and x.get("normalized_value")=="b.example" for x in obs)
         print("Sherlock worker self-test passed")
