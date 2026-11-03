@@ -55,14 +55,14 @@ def classify_value(value, path, mime=None):
     expected = expected_for_mime(mime)
     if path == "telegram_id": expected = "telegram_id"
     found = []
-    def add(kind, normalized, confidence="high"):
+    def add(kind, normalized, confidence="high", source_value=None):
         found.append({
-            "source_path": path, "source_mimetype": mime, "source_value": raw,
+            "source_path": path, "source_mimetype": mime, "source_value": source_value if source_value is not None else raw,
             "detected_type": kind, "expected_type": expected, "normalized_value": normalized,
             "confidence": confidence, "is_misfiled": bool(expected and expected != kind and not (expected == "phone" and kind == "possible_phone"))
         })
     for email in EMAIL_RE.findall(raw):
-        add("email", email.lower())
+        add("email", email.lower(), source_value=email)
     for match in URL_RE.findall(raw):
         candidate_url = match.rstrip(".,);]")
         parsed = urlparse(candidate_url if "://" in candidate_url else "https://" + candidate_url)
@@ -76,8 +76,8 @@ def classify_value(value, path, mime=None):
             if site == "YouTube" and parts[0].startswith("@"): handle = parts[0][1:]
             if site == "Snapchat" and parts[0].lower()=="add" and len(parts)>1: handle = parts[1]
             if re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", handle) and handle.lower() not in RESERVED:
-                add("profile_url", candidate_url)
-                found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,
+                add("profile_url", candidate_url, source_value=candidate_url)
+                found.append({"source_path":path,"source_mimetype":mime,"source_value":handle,
                     "detected_type":"username","expected_type":expected,"normalized_value":handle,
                     "confidence":"high","is_misfiled":bool(expected and expected not in ("profile_url","username")),
                     "platform_hint":site})
@@ -87,14 +87,18 @@ def classify_value(value, path, mime=None):
         digits = re.sub(r"\D", "", number)
         if 7 <= len(digits) <= 15:
             kind = "phone" if number.strip().startswith("+") else "possible_phone"
-            add(kind, ("+" if kind == "phone" else "") + digits, "high" if kind == "phone" else "low")
+            add(kind, ("+" if kind == "phone" else "") + digits, "high" if kind == "phone" else "low", source_value=number.strip())
     handle_text = EMAIL_RE.sub(" ", raw)
     for handle in HANDLE_RE.findall(handle_text):
         if handle.lower() not in RESERVED:
-            found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,
+            found.append({"source_path":path,"source_mimetype":mime,"source_value":"@" + handle,
                 "detected_type":"username","expected_type":expected,"normalized_value":handle,
                 "confidence":"medium","is_misfiled":bool(expected and expected not in ("username","profile_url"))})
     # Bare values in the dedicated Telegram username field are valid handles.
+    if path.startswith("telegram_username") and re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", raw) and raw.lower() not in RESERVED:
+        found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,"detected_type":"username",
+            "expected_type":expected,"normalized_value":raw,"confidence":"high","is_misfiled":False})
+    # Dedicated Telegram username values may be stored without an @ prefix.
     if path.startswith("telegram_username") and re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", raw) and raw.lower() not in RESERVED:
         found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,"detected_type":"username",
             "expected_type":expected,"normalized_value":raw,"confidence":"high","is_misfiled":False})
@@ -229,7 +233,7 @@ def main():
         obs,candidates=extract_contact(sample)
         assert any(x["detected_type"]=="phone" and x["is_misfiled"] for x in obs)
         assert any(x["detected_type"]=="profile_url" for x in obs)
-        assert "sample_handle" in candidates and "second_handle" in candidates
+        assert "sample_handle" in candidates and "second_handle" in candidates and "another_name" in candidates
         assert not any(x["detected_type"]=="email" and x.get("normalized_value")=="b.example" for x in obs)
         print("Sherlock worker self-test passed")
         return
