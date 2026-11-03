@@ -36,6 +36,8 @@ android {
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
+            // Stable install identity for all future signed updates.
+            applicationIdSuffix = ".fullfields"
             isMinifyEnabled = false
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
