@@ -98,10 +98,6 @@ def classify_value(value, path, mime=None):
     if path.startswith("telegram_username") and re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", raw) and raw.lower() not in RESERVED:
         found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,"detected_type":"username",
             "expected_type":expected,"normalized_value":raw,"confidence":"high","is_misfiled":False})
-    # Dedicated Telegram username values may be stored without an @ prefix.
-    if path.startswith("telegram_username") and re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", raw) and raw.lower() not in RESERVED:
-        found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,"detected_type":"username",
-            "expected_type":expected,"normalized_value":raw,"confidence":"high","is_misfiled":False})
     # Known Telegram ID fields are classified as IDs; generic numeric strings remain ambiguous.
     if path == "telegram_id" and re.fullmatch(r"\d{5,20}", raw):
         add("telegram_id", raw)
