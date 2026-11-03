@@ -46,7 +46,7 @@ class ContactsBridge(context: Context) {
     }
 
     /** Exchanges an admin token for a new device token. The admin token is never persisted. */
-    fun pairDevice(adminToken: String, deviceName: String = "MyContacts Android"): JSONObject {
+    fun pairDevice(adminToken: String, deviceName: String = "MyContacts Recovery Android"): JSONObject {
         val response = requestWithToken(
             adminToken.trim(),
             JSONObject().put("action", "pair_device").put("device_name", deviceName)
