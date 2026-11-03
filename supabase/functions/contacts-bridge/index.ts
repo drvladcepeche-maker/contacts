@@ -36,6 +36,41 @@ function contactCore(value: unknown): Record<string, unknown> {
   ));
 }
 
+function mergeContactData(previousValue: unknown, incomingValue: unknown): Record<string, unknown> {
+  const previous = previousValue && typeof previousValue === "object" && !Array.isArray(previousValue)
+    ? previousValue as Record<string, unknown> : {};
+  const incoming = incomingValue && typeof incomingValue === "object" && !Array.isArray(incomingValue)
+    ? incomingValue as Record<string, unknown> : {};
+  // Incoming Android fields are the latest source snapshot. Preserve server-only
+  // metadata and any keys not emitted by older app builds.
+  const merged: Record<string, unknown> = { ...previous, ...incoming };
+  for (const [key, value] of Object.entries(previous)) {
+    if (!(key in incoming)) merged[key] = value;
+  }
+  if (!Array.isArray(incoming.fields) && Array.isArray(previous.fields)) merged.fields = previous.fields;
+
+  // Resolver-enriched Telegram IDs must survive until the Android-side write has
+  // been applied. Keep all discovered usernames instead of replacing them with one.
+  const priorStatus = String(previous.telegram_match_status ?? "");
+  if (!String(incoming.telegram_id ?? "").trim() &&
+      ["matched", "username_missing"].includes(priorStatus) &&
+      String(previous.telegram_id ?? "").trim()) {
+    merged.telegram_id = previous.telegram_id;
+  }
+  const names = [...new Set([
+    ...String(previous.telegram_username ?? "").split(","),
+    ...String(incoming.telegram_username ?? "").split(","),
+  ].map(value => value.trim().replace(/^@/, "")).filter(value => value && value.toUpperCase() !== "СКРЫТ"))];
+  if (names.length) merged.telegram_username = names.join(", ");
+  else if (String(incoming.telegram_username ?? previous.telegram_username ?? "").toUpperCase() === "СКРЫТ") {
+    merged.telegram_username = "Скрыт";
+  }
+  for (const [key, value] of Object.entries(previous)) {
+    if (key.startsWith("telegram_match_")) merged[key] = value;
+  }
+  return merged;
+}
+
 function phoneCandidates(data: Record<string, unknown>): string[] {
   const candidates = new Set<string>();
   const add = (value: unknown) => {
@@ -193,6 +228,7 @@ Deno.serve(async (req: Request) => {
       }
       const rows = Array.from(byLocalId.values());
       let insertedCount = 0;
+      let updatedExistingCount = 0;
       let skippedCount = 0;
       if (rows.length) {
         const ids = rows.map((row) => String(row.local_contact_id));
@@ -204,23 +240,36 @@ Deno.serve(async (req: Request) => {
         if (previousError) return json({ error: previousError.message }, 500);
         const previousById = new Map((previousRows ?? []).map((row: any) => [String(row.local_contact_id), row.contact_data]));
         const newRows: typeof rows = [];
+        const updateRows: typeof rows = [];
         for (const row of rows) {
           const id = String(row.local_contact_id);
           if (previousById.has(id)) {
-            skippedCount++;
             const previous = previousById.get(id);
-            const incoming = row.contact_data;
-            if (stableJson(contactCore(previous)) !== stableJson(contactCore(incoming))) {
+            const merged = mergeContactData(previous, row.contact_data);
+            if (stableJson(contactCore(previous)) !== stableJson(contactCore(merged))) {
               const left = contactCore(previous);
-              const right = contactCore(incoming);
+              const right = contactCore(merged);
               const fields = Array.from(new Set([...Object.keys(left), ...Object.keys(right)]))
                 .filter((key) => stableJson(left[key]) !== stableJson(right[key]))
                 .sort();
               conflicts.push({ id, fields });
             }
+            if (stableJson(previous) !== stableJson(merged)) {
+              updateRows.push({ ...row, contact_data: merged });
+            } else {
+              skippedCount++;
+            }
           } else {
             newRows.push(row);
           }
+        }
+        if (updateRows.length) {
+          const { data: updated, error: updateError } = await supabase
+            .from("contact_bridge_snapshots")
+            .upsert(updateRows, { onConflict: "device_id,local_contact_id" })
+            .select("local_contact_id");
+          if (updateError) return json({ error: updateError.message }, 500);
+          updatedExistingCount = updated?.length ?? 0;
         }
         if (newRows.length) {
           const { data: inserted, error: insertError } = await supabase
@@ -236,8 +285,9 @@ Deno.serve(async (req: Request) => {
         }
       }
       return json({
-        synced: insertedCount,
+        synced: insertedCount + updatedExistingCount,
         inserted: insertedCount,
+        updated_existing: updatedExistingCount,
         skipped_existing: skippedCount,
         unique_contacts: rows.length,
         duplicate_ids_in_batch_removed: contacts.length - rows.length,
