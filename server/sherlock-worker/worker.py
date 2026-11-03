@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Private Sherlock discovery worker for My Contacts. Never edits source contact rows."""
 from __future__ import annotations
-import argparse, csv, json, os, re, subprocess, sys, tempfile, time
+import argparse, csv, hashlib, json, os, re, subprocess, sys, tempfile
+from pathlib import Path
+import sherlock_project
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -51,6 +53,7 @@ def classify_value(value, path, mime=None):
     raw = value.strip()
     if not raw: return []
     expected = expected_for_mime(mime)
+    if path == "telegram_id": expected = "telegram_id"
     found = []
     def add(kind, normalized, confidence="high"):
         found.append({
@@ -80,12 +83,13 @@ def classify_value(value, path, mime=None):
                     "platform_hint":site})
     # International and unprefixed numeric values are observations only. Unprefixed
     # numbers are not promoted to E.164 and are never sent to Telegram automatically.
-    for number in PHONE_RE.findall(raw):
+    for number in ([] if path == "telegram_id" else PHONE_RE.findall(raw)):
         digits = re.sub(r"\D", "", number)
         if 7 <= len(digits) <= 15:
             kind = "phone" if number.strip().startswith("+") else "possible_phone"
             add(kind, ("+" if kind == "phone" else "") + digits, "high" if kind == "phone" else "low")
-    for handle in HANDLE_RE.findall(raw):
+    handle_text = EMAIL_RE.sub(" ", raw)
+    for handle in HANDLE_RE.findall(handle_text):
         if handle.lower() not in RESERVED:
             found.append({"source_path":path,"source_mimetype":mime,"source_value":raw,
                 "detected_type":"username","expected_type":expected,"normalized_value":handle,
@@ -129,29 +133,42 @@ def extract_contact(contact):
                     add_value(value, f"fields[{i}].{column}", mime)
     return observations, candidates
 
-def save_observations(device_id, local_id, observations):
+def observation_rows(device_id, local_id, observations):
     rows=[]
     for o in observations:
+        source_value=o["source_value"]
         rows.append({
             "device_id":device_id, "local_contact_id":str(local_id),
             "source_path":o["source_path"], "source_mimetype":o.get("source_mimetype"),
-            "source_value":o["source_value"], "detected_type":o["detected_type"],
+            "source_value":source_value,
+            "source_value_hash":hashlib.sha256(source_value.encode("utf-8")).hexdigest(),
+            "detected_type":o["detected_type"],
             "expected_type":o.get("expected_type"), "normalized_value":o.get("normalized_value"),
             "confidence":o.get("confidence","medium"), "is_misfiled":o.get("is_misfiled",False),
             "last_seen_at":datetime.now(timezone.utc).isoformat()
         })
-    if rows:
-        api("POST","contact_identifier_observations",
-            params={"on_conflict":"device_id,local_contact_id,source_path,source_value,detected_type"},
-            payload=rows,prefer="resolution=merge-duplicates,return=minimal")
+    return rows
 
 def run_sherlock(username, sites):
     with tempfile.TemporaryDirectory(prefix="contacts-sherlock-") as folder:
-        cmd=["sherlock","--local","--csv","--print-all","--no-color","--timeout",str(TIMEOUT),"--folderoutput",folder]
+        catalog=str(Path(sherlock_project.__file__).parent / "resources" / "data.json")
+        with open(catalog,encoding="utf-8") as f:
+            manifest=json.load(f)
+        available={name.casefold():name for name in manifest.keys()}
+        aliases={"twitter":"x"}
+        selected=[]
         for site in sorted(set(sites) & set(SITES)):
+            actual=available.get(site.casefold())
+            if not actual and site.casefold() in aliases:
+                actual=available.get(aliases[site.casefold()])
+            if actual and actual not in selected: selected.append(actual)
+        if not selected:
+            raise RuntimeError("No allowlisted sites are present in the pinned Sherlock catalog")
+        cmd=["sherlock","--json",catalog,"--csv","--print-all","--no-color","--timeout",str(TIMEOUT),"--folderoutput",folder]
+        for site in selected:
             cmd.extend(["--site",site])
         cmd.append(username)
-        proc=subprocess.run(cmd,capture_output=True,text=True,timeout=max(90,TIMEOUT*len(sites)+30))
+        proc=subprocess.run(cmd,capture_output=True,text=True,timeout=max(90,TIMEOUT*len(selected)+30))
         csv_path=os.path.join(folder,username+".csv")
         if proc.returncode != 0 or not os.path.exists(csv_path):
             raise RuntimeError((proc.stderr or proc.stdout or "Sherlock produced no CSV")[-1000:])
@@ -191,9 +208,9 @@ def upsert_profiles(associations, username, results, version):
                 "checked_at":now,"manifest_version":version,
                 "evidence":{"url_main":result.get("url_main"),"status":status}
             })
-    if rows:
+    for start in range(0,len(rows),500):
         api("POST","contact_osint_profiles",params={"on_conflict":"device_id,local_contact_id,normalized_username,platform"},
-            payload=rows,prefer="resolution=merge-duplicates,return=minimal")
+            payload=rows[start:start+500],prefer="resolution=merge-duplicates,return=minimal")
 
 def main():
     parser=argparse.ArgumentParser()
@@ -215,7 +232,7 @@ def main():
     if not SERVICE_KEY: raise SystemExit("SUPABASE_SERVICE_ROLE_KEY is required")
     version=subprocess.run(["sherlock","--version"],capture_output=True,text=True,timeout=15).stdout.strip() or "unknown"
     associations=defaultdict(list)
-    all_observations=[]
+    pending_observations=[]
     offset=0
     while offset < MAX_CONTACT_ROWS:
         rows=api("GET","contact_bridge_snapshots",params={
@@ -226,7 +243,13 @@ def main():
         for row in rows:
             data=row.get("contact_data") if isinstance(row.get("contact_data"),dict) else {}
             obs,candidates=extract_contact(data)
-            if obs: save_observations(row["device_id"],row["local_contact_id"],obs)
+            if obs:
+                pending_observations.extend(observation_rows(row["device_id"],row["local_contact_id"],obs))
+                if len(pending_observations)>=1000:
+                    api("POST","contact_identifier_observations",
+                        params={"on_conflict":"device_id,local_contact_id,source_path,source_value_hash,detected_type"},
+                        payload=pending_observations,prefer="resolution=merge-duplicates,return=minimal")
+                    pending_observations.clear()
             for candidate in candidates.values():
                 associations[(candidate["username"].casefold(),candidate["username"])].append({
                     "device_id":row["device_id"],"local_contact_id":row["local_contact_id"],
@@ -234,6 +257,10 @@ def main():
                 })
         offset += len(rows)
         if len(rows)<1000: break
+    if pending_observations:
+        api("POST","contact_identifier_observations",
+            params={"on_conflict":"device_id,local_contact_id,source_path,source_value_hash,detected_type"},
+            payload=pending_observations,prefer="resolution=merge-duplicates,return=minimal")
     processed=0
     for (key, username), contacts in associations.items():
         if processed >= MAX_PER_RUN: break
