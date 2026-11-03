@@ -51,18 +51,21 @@ function mergeContactData(previousValue: unknown, incomingValue: unknown): Recor
 
   // Resolver-enriched Telegram IDs must survive until the Android-side write has
   // been applied. Keep all discovered usernames instead of replacing them with one.
-  const priorStatus = String(previous.telegram_match_status ?? "");
-  if (!String(incoming.telegram_id ?? "").trim() &&
-      ["matched", "username_missing"].includes(priorStatus) &&
-      String(previous.telegram_id ?? "").trim()) {
+  if (!String(incoming.telegram_id ?? "").trim() && String(previous.telegram_id ?? "").trim()) {
     merged.telegram_id = previous.telegram_id;
+  }
+  if (!String(incoming.telegram ?? "").trim() && String(previous.telegram ?? "").trim()) {
+    merged.telegram = previous.telegram;
   }
   const names = [...new Set([
     ...String(previous.telegram_username ?? "").split(","),
     ...String(incoming.telegram_username ?? "").split(","),
   ].map(value => value.trim().replace(/^@/, "")).filter(value => value && value.toUpperCase() !== "СКРЫТ"))];
   if (names.length) merged.telegram_username = names.join(", ");
-  else if (String(incoming.telegram_username ?? previous.telegram_username ?? "").toUpperCase() === "СКРЫТ") {
+  else if (
+    String(incoming.telegram_username ?? "").toUpperCase() === "СКРЫТ" ||
+    String(previous.telegram_username ?? "").toUpperCase() === "СКРЫТ"
+  ) {
     merged.telegram_username = "Скрыт";
   }
   for (const [key, value] of Object.entries(previous)) {
