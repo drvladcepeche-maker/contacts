@@ -28,31 +28,57 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
-      - name: Configure stable signing when secrets are available
+      - name: Configure persistent signing
         shell: bash
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Stable signing secrets are not configured; this build will use the temporary runner debug key."
-            exit 0
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+              if [ -z "${!name}" ]; then
+                echo "::error::Missing repository secret: $name"
+                exit 1
+              fi
+            done
+            KEYSTORE_PATH="$RUNNER_TEMP/mycontacts-recovery.p12"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            test -s "$KEYSTORE_PATH"
+            echo "Using repository-stored recovery signing key."
+          else
+            echo "::warning::No persistent signing secrets found. A one-time recovery key will be generated; save the signing-bootstrap artifact and add its values to GitHub Actions Secrets before building future updates."
+            KEYSTORE_PATH="$RUNNER_TEMP/mycontacts-recovery.p12"
+            KEY_PASSWORD="$(openssl rand -hex 24)"
+            KEY_ALIAS="mycontacts-recovery"
+            keytool -genkeypair -noprompt -v \
+              -keystore "$KEYSTORE_PATH" -storetype PKCS12 \
+              -storepass "$KEY_PASSWORD" -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=MyContacts Recovery, O=MyContacts, C=US"
+            mkdir -p "$RUNNER_TEMP/recovery-signing-bootstrap"
+            cp "$KEYSTORE_PATH" "$RUNNER_TEMP/recovery-signing-bootstrap/mycontacts-recovery.p12"
+            printf 'ANDROID_KEY_ALIAS=%s\nANDROID_KEYSTORE_PASSWORD=%s\nANDROID_KEY_PASSWORD=%s\n' \
+              "$KEY_ALIAS" "$KEY_PASSWORD" "$KEY_PASSWORD" \
+              > "$RUNNER_TEMP/recovery-signing-bootstrap/signing-credentials.txt"
+            base64 -w0 "$KEYSTORE_PATH" > "$RUNNER_TEMP/recovery-signing-bootstrap/ANDROID_KEYSTORE_BASE64.txt"
+            echo "MYCONTACTS_BOOTSTRAP_DIR=$RUNNER_TEMP/recovery-signing-bootstrap" >> "$GITHUB_ENV"
+            ANDROID_KEYSTORE_PASSWORD="$KEY_PASSWORD"
+            ANDROID_KEY_ALIAS="$KEY_ALIAS"
+            ANDROID_KEY_PASSWORD="$KEY_PASSWORD"
           fi
-          for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing repository secret: $name"
-              exit 1
-            fi
-          done
-          KEYSTORE_PATH="$RUNNER_TEMP/mycontacts-signing.p12"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          test -s "$KEYSTORE_PATH"
           {
             echo "MYCONTACTS_KEYSTORE_PATH=$KEYSTORE_PATH"
             echo "MYCONTACTS_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
             echo "MYCONTACTS_KEY_ALIAS=$ANDROID_KEY_ALIAS"
             echo "MYCONTACTS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
-          echo "Stable Android signing is configured."
       - run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: moi-kontakty-apk
+          name: moi-kontakty-recovery-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Upload one-time signing backup
+        if: env.MYCONTACTS_BOOTSTRAP_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: moi-kontakty-recovery-signing-bootstrap
+          path: ${{ env.MYCONTACTS_BOOTSTRAP_DIR }}/*
+          if-no-files-found: error
+          retention-days: 90
