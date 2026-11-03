@@ -4,6 +4,7 @@ on:
     paths:
       - 'server/sherlock-worker/**'
       - 'supabase/functions/contacts-mcp/index.ts'
+      - 'supabase/functions/contacts-bridge/index.ts'
       - 'supabase/migrations/*sherlock*'
       - '.github/workflows/sherlock-worker-tests.yml'
   pull_request:
@@ -39,3 +40,5 @@ jobs:
           deno-version: v2.x
       - name: Type-check contacts MCP Edge Function
         run: deno check supabase/functions/contacts-mcp/index.ts
+      - name: Type-check contacts bridge Edge Function
+        run: deno check supabase/functions/contacts-bridge/index.ts
