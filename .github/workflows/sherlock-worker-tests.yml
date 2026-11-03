@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'server/sherlock-worker/**'
+      - 'supabase/functions/contacts-mcp/index.ts'
       - 'supabase/migrations/*sherlock*'
       - '.github/workflows/sherlock-worker-tests.yml'
   pull_request:
@@ -32,3 +33,9 @@ jobs:
         run: python server/sherlock-worker/worker.py --self-test
       - name: Verify Sherlock CLI
         run: sherlock --version
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check contacts MCP Edge Function
+        run: deno check supabase/functions/contacts-mcp/index.ts
