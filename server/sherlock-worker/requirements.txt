@@ -1,2 +1,2 @@
-sherlock-project==0.16.0
+sherlock-project==0.16.2
 requests==2.32.5
