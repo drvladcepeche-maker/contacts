@@ -12,7 +12,9 @@ import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.Im
 import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
-data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "", val telegramId: String = "", val telegramUsername: String = "")
+data class ContactField(val mimetype: String, val values: Map<String, String>)
+
+data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "", val telegramId: String = "", val telegramUsername: String = "", val fields: List<ContactField> = emptyList())
 
 data class Acc(val type: String?, val name: String?) {
     val label: String get() = if (name == null && type == null) "Телефон (локально)" else "${name ?: "?"} (${type ?: "?"})"
@@ -82,8 +84,39 @@ class ContactRepo(private val cr: ContentResolver) {
                 sources.getOrPut(contactId) { LinkedHashSet() }.add(source)
             }
         }
+        // Read every textual ContactsContract.Data value, not only the standard
+        // phone/email/IM columns. Users sometimes store identifiers in the wrong
+        // field (for example a phone number in Email or a t.me URL in Website).
+        // Technical row IDs, raw-contact IDs, account metadata and binary photo
+        // payloads are deliberately excluded from the logical contact payload.
+        val fieldsByContact = HashMap<Long, MutableList<ContactField>>()
+        val dataColumns = (1..15).map { "data$it" }
+        val projection = arrayOf(CC.Data.CONTACT_ID, CC.Data.MIMETYPE, *dataColumns.toTypedArray())
+        cr.query(CC.Data.CONTENT_URI, projection, null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val contactId = c.getLong(0)
+                val mimetype = c.getString(1) ?: continue
+                val values = LinkedHashMap<String, String>()
+                for ((offset, column) in dataColumns.withIndex()) {
+                    val index = offset + 2
+                    if (c.getType(index) == Cursor.FIELD_TYPE_BLOB || c.isNull(index)) continue
+                    val value = c.getString(index) ?: continue
+                    if (value.isNotBlank()) values[column] = value
+                }
+                if (values.isNotEmpty()) {
+                    fieldsByContact.getOrPut(contactId) { mutableListOf() }
+                        .add(ContactField(mimetype, values))
+                }
+            }
+        } ?: throw IllegalStateException("Android не предоставил дополнительные поля контактов")
+
         return result.map { contact ->
-            contact.copy(accountSources = sources[contact.id]?.toList() ?: emptyList())
+            val fields = fieldsByContact[contact.id].orEmpty()
+                .sortedWith(compareBy<ContactField> { it.mimetype }.thenBy { it.values.toSortedMap().toString() })
+            contact.copy(
+                accountSources = sources[contact.id]?.toList() ?: emptyList(),
+                fields = fields
+            )
         }
     }
 

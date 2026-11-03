@@ -28,9 +28,39 @@ function stableJson(value: unknown): string {
 function contactCore(value: unknown): Record<string, unknown> {
   const data = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  // Telegram lookup fields are server-managed; they must not trigger a conflict
-  // when the handset has not yet received the corresponding write command.
-  return { name: data.name ?? null, phones: data.phones ?? [], accounts: data.accounts ?? [] };
+  // Compare the complete user-visible contact payload. Exclude only the local
+  // record ID and account metadata: those necessarily differ across accounts.
+  // Telegram fields and arbitrary typed Data values remain part of exact equality.
+  return Object.fromEntries(Object.entries(data).filter(([key]) =>
+    key !== "id" && key !== "accounts"
+  ));
+}
+
+function phoneCandidates(data: Record<string, unknown>): string[] {
+  const candidates = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value !== "string") return;
+    // Only international-format numbers are safe for automated Telegram lookup.
+    // Unprefixed numeric strings remain searchable but are not guessed into E.164.
+    const matches = value.match(/\+\s*\d[\d\s().-]{5,}\d/g) ?? [];
+    for (const match of matches) {
+      const digits = match.replace(/\D/g, "");
+      if (digits.length >= 8 && digits.length <= 15) candidates.add("+" + digits);
+    }
+  };
+  if (Array.isArray(data.phones)) data.phones.forEach(add);
+  // Inspect all captured typed fields, regardless of their Android MIME type.
+  // This finds phone numbers accidentally entered in Email, Website, Notes, etc.
+  if (Array.isArray(data.fields)) {
+    for (const field of data.fields) {
+      if (!field || typeof field !== "object" || Array.isArray(field)) continue;
+      const values = (field as Record<string, unknown>).values;
+      if (values && typeof values === "object" && !Array.isArray(values)) {
+        Object.values(values as Record<string, unknown>).forEach(add);
+      }
+    }
+  }
+  return Array.from(candidates);
 }
 
 Deno.serve(async (req: Request) => {
@@ -183,8 +213,9 @@ Deno.serve(async (req: Request) => {
             if (stableJson(contactCore(previous)) !== stableJson(contactCore(incoming))) {
               const left = contactCore(previous);
               const right = contactCore(incoming);
-              const fields = ["name", "phones", "accounts"].filter((key) =>
-                stableJson(left[key]) !== stableJson(right[key]));
+              const fields = Array.from(new Set([...Object.keys(left), ...Object.keys(right)]))
+                .filter((key) => stableJson(left[key]) !== stableJson(right[key]))
+                .sort();
               conflicts.push({ id, fields });
             }
           } else {
@@ -294,13 +325,8 @@ Deno.serve(async (req: Request) => {
         const data = row.contact_data && typeof row.contact_data === "object" && !Array.isArray(row.contact_data)
           ? row.contact_data as Record<string, unknown>
           : {};
-        const phones = Array.isArray(data.phones) ? data.phones : [];
-        for (const value of phones) {
-          const raw = typeof value === "string" ? value.trim() : "";
-          if (!raw.startsWith("+")) continue;
-          const digits = raw.replace(/\D/g, "");
-          if (digits.length < 8 || digits.length > 15) continue;
-          const phone = "+" + digits;
+        const phones = phoneCandidates(data);
+        for (const phone of phones) {
           const existing = byPhone.get(phone);
           if (!existing) {
             byPhone.set(phone, {
