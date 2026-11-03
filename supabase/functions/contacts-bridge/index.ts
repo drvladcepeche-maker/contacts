@@ -86,34 +86,34 @@ Deno.serve(async (req: Request) => {
     crypto.getRandomValues(randomBytes);
     const deviceToken = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     const deviceTokenHash = await sha256(deviceToken);
-    const requestedName = String(body.device_name ?? "MyContacts Recovery Android").trim();
-    const deviceName = (requestedName || "MyContacts Recovery Android").slice(0, 80);
+    const requestedName = String(body.device_name ?? "Android contacts app — refreshed sync").trim();
+    const deviceName = (requestedName || "Android contacts app — refreshed sync").slice(0, 80);
 
-    // Reuse the pre-created, never-connected recovery device so its restored
-    // contact snapshots remain attached to the same device ID.
-    const { data: pending, error: pendingError } = await supabase
+    // Reuse the original snapshot-owning device so restored contacts stay
+    // attached to their original device ID. Pairing rotates only its bearer hash.
+    const { data: existingDevice, error: lookupError } = await supabase
       .from("contact_bridge_devices")
       .select("id, device_name, created_at")
       .eq("device_name", deviceName)
-      .is("last_seen_at", null)
       .is("revoked_at", null)
+      .order("last_seen_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (pendingError) return json({ error: pendingError.message }, 500);
+    if (lookupError) return json({ error: lookupError.message }, 500);
 
-    let created = pending;
-    if (pending) {
+    let created = existingDevice;
+    const reusedExistingDevice = Boolean(existingDevice);
+    if (existingDevice) {
       const { data: updated, error: updateError } = await supabase
         .from("contact_bridge_devices")
         .update({ token_hash: deviceTokenHash })
-        .eq("id", pending.id)
-        .is("last_seen_at", null)
+        .eq("id", existingDevice.id)
         .is("revoked_at", null)
         .select("id, device_name, created_at")
         .maybeSingle();
       if (updateError) return json({ error: updateError.message }, 500);
-      if (!updated) return json({ error: "Recovery device is no longer available for pairing" }, 409);
+      if (!updated) return json({ error: "Existing device is no longer available for pairing" }, 409);
       created = updated;
     } else {
       const { data: inserted, error: createError } = await supabase
@@ -129,7 +129,7 @@ Deno.serve(async (req: Request) => {
       device: created,
       device_token: deviceToken,
       token_delivery: "shown_once",
-      reused_existing_device: Boolean(pending),
+      reused_existing_device: reusedExistingDevice,
     }, 201);
   }
 
