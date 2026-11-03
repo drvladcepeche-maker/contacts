@@ -153,19 +153,23 @@ def observation_rows(device_id, local_id, observations):
         })
     return rows
 
+def selected_catalog_sites(sites):
+    catalog=str(Path(sherlock_project.__file__).parent / "resources" / "data.json")
+    with open(catalog,encoding="utf-8") as f:
+        manifest=json.load(f)
+    available={name.casefold():name for name in manifest.keys()}
+    aliases={"twitter":"x"}
+    selected=[]
+    for site in sorted(set(sites) & set(SITES)):
+        actual=available.get(site.casefold())
+        if not actual and site.casefold() in aliases:
+            actual=available.get(aliases[site.casefold()])
+        if actual and actual not in selected: selected.append(actual)
+    return catalog, selected
+
 def run_sherlock(username, sites):
     with tempfile.TemporaryDirectory(prefix="contacts-sherlock-") as folder:
-        catalog=str(Path(sherlock_project.__file__).parent / "resources" / "data.json")
-        with open(catalog,encoding="utf-8") as f:
-            manifest=json.load(f)
-        available={name.casefold():name for name in manifest.keys()}
-        aliases={"twitter":"x"}
-        selected=[]
-        for site in sorted(set(sites) & set(SITES)):
-            actual=available.get(site.casefold())
-            if not actual and site.casefold() in aliases:
-                actual=available.get(aliases[site.casefold()])
-            if actual and actual not in selected: selected.append(actual)
+        catalog, selected = selected_catalog_sites(sites)
         if not selected:
             raise RuntimeError("No allowlisted sites are present in the pinned Sherlock catalog")
         cmd=["sherlock","--json",catalog,"--csv","--print-all","--no-color","--timeout",str(TIMEOUT),"--folderoutput",folder]
@@ -175,23 +179,26 @@ def run_sherlock(username, sites):
         proc=subprocess.run(cmd,capture_output=True,text=True,timeout=max(90,TIMEOUT*len(selected)+30))
         csv_path=os.path.join(folder,username+".csv")
         if proc.returncode != 0 or not os.path.exists(csv_path):
-            raise RuntimeError((proc.stderr or proc.stdout or "Sherlock produced no CSV")[-1000:])
+            raise RuntimeError("Sherlock command failed or produced no CSV")
         with open(csv_path,newline="",encoding="utf-8") as f:
             return list(csv.DictReader(f))
 
-def latest_cache(username):
+def latest_cache(username, selected_sites):
     rows=api("GET","contact_osint_profiles",params={
         "select":"platform,result_status,profile_url,http_status,response_time_s,checked_at,manifest_version,evidence",
         "normalized_username":"eq."+username,
         "order":"checked_at.desc","limit":"200"
     }) or []
-    cutoff=datetime.now(timezone.utc)-timedelta(days=CACHE_DAYS)
+    now=datetime.now(timezone.utc)
     cache={}
     for row in rows:
         platform=row.get("platform")
+        if platform not in selected_sites or platform in cache: continue
         try: checked=datetime.fromisoformat(row["checked_at"].replace("Z","+00:00"))
         except Exception: continue
-        if platform not in cache and checked >= cutoff: cache[platform]=row
+        status=str(row.get("result_status") or "")
+        ttl_days=CACHE_DAYS if status in {"CLAIMED","AVAILABLE","ILLEGAL"} else min(CACHE_DAYS,7)
+        if checked >= now-timedelta(days=ttl_days): cache[platform]=row
     return cache
 
 def upsert_profiles(associations, username, results, version):
@@ -269,11 +276,12 @@ def main():
     for (key, username), contacts in associations.items():
         if processed >= MAX_PER_RUN: break
         site_union=set().union(*(x["sites"] for x in contacts)) or set(SITES)
-        cached=latest_cache(username)
-        if set(site_union).issubset(cached):
+        _, selected_sites=selected_catalog_sites(site_union)
+        cached=latest_cache(username,selected_sites)
+        if selected_sites and set(selected_sites).issubset(cached):
             continue
         try:
-            results=run_sherlock(username,site_union)
+            results=run_sherlock(username,selected_sites)
             upsert_profiles(contacts,username,results,version)
             processed += 1
             print(f"Candidate {processed}: {len(results)} site results; linked_contact_rows={len(contacts)}")
