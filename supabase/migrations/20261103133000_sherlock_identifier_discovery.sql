@@ -63,3 +63,10 @@ revoke all on public.contact_identifier_observations from anon, authenticated;
 revoke all on public.contact_osint_profiles from anon, authenticated;
 grant all on public.contact_identifier_observations to service_role;
 grant all on public.contact_osint_profiles to service_role;
+
+drop policy if exists contact_identifier_observations_service_role on public.contact_identifier_observations;
+create policy contact_identifier_observations_service_role on public.contact_identifier_observations
+  for all to service_role using (true) with check (true);
+drop policy if exists contact_osint_profiles_service_role on public.contact_osint_profiles;
+create policy contact_osint_profiles_service_role on public.contact_osint_profiles
+  for all to service_role using (true) with check (true);
