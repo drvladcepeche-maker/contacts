@@ -84,8 +84,7 @@ Deno.serve(async (req: Request) => {
     if (role !== "assistant") return json({ error: "Administrative token required for device pairing" }, 403);
     const randomBytes = new Uint8Array(32);
     crypto.getRandomValues(randomBytes);
-    const deviceToken = btoa(String.fromCharCode(...randomBytes))
-      .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    const deviceToken = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     const deviceTokenHash = await sha256(deviceToken);
     const requestedName = String(body.device_name ?? "MyContacts Android").trim();
     const deviceName = (requestedName || "MyContacts Android").slice(0, 80);
