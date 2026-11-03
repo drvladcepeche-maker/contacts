@@ -53,6 +53,9 @@ def classify_value(value, path, mime=None):
     raw = value.strip()
     if not raw: return []
     expected = expected_for_mime(mime)
+    if path.startswith("phones["): expected = "phone"
+    if path.startswith("emails["): expected = "email"
+    if path.startswith("telegram_username"): expected = "username"
     if path == "telegram_id": expected = "telegram_id"
     found = []
     def add(kind, normalized, confidence="high", source_value=None):
