@@ -302,15 +302,23 @@ class MainActivity : Activity() {
                 val value = token.text.toString().trim()
                 if (value.isBlank()) { toast("Введите административный токен для привязки"); return@setPositiveButton }
                 bg {
+                    var paired = false
                     try {
                         bridge.pairDevice(value)
+                        paired = true
                         val n = bridge.sync(contactsForSync())
                         runOnUiThread {
                             showSyncResult(n)
                             startBridgeService()
                             toast("Устройство привязано. Административный токен не сохранён.")
                         }
-                    } catch (e: Exception) { runOnUiThread { toast("Ошибка привязки: ${e.message}") } }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            val prefix = if (paired) "Устройство привязано, но синхронизация не завершилась" else "Ошибка привязки"
+                            toast("$prefix: ${e.message}")
+                            if (paired) startBridgeService()
+                        }
+                    }
                 }
             }
             .setNeutralButton("Синхронизировать сейчас") { _, _ ->
