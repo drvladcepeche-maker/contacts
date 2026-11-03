@@ -6,6 +6,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+private class BridgeHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
+
 class ContactsBridge(context: Context) {
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
@@ -16,6 +18,7 @@ class ContactsBridge(context: Context) {
 
     fun token(): String = prefs.getString("device_token", "") ?: ""
     fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
+    fun clearToken() { prefs.edit().remove("device_token").apply() }
 
     private fun requestWithToken(token: String, body: JSONObject): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
@@ -32,7 +35,7 @@ class ContactsBridge(context: Context) {
             val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: "{}"
             val json = JSONObject(text)
-            if (conn.responseCode !in 200..299) throw IllegalStateException(json.optString("error", "HTTP ${conn.responseCode}"))
+            if (conn.responseCode !in 200..299) throw BridgeHttpException(conn.responseCode, json.optString("error", "HTTP ${conn.responseCode}"))
             return json
         } finally {
             conn.disconnect()
@@ -42,7 +45,16 @@ class ContactsBridge(context: Context) {
     fun request(body: JSONObject): JSONObject {
         val current = token()
         require(current.isNotBlank()) { "Сначала привяжите устройство" }
-        return requestWithToken(current, body)
+        return try {
+            requestWithToken(current, body)
+        } catch (e: BridgeHttpException) {
+            if (e.statusCode == 401) {
+                // A rejected device token must not be retried forever by the foreground poller.
+                clearToken()
+                throw IllegalStateException("Токен устройства отклонён сервером. Требуется повторная привязка.", e)
+            }
+            throw e
+        }
     }
 
     /** Exchanges an admin token for a new device token. The admin token is never persisted. */

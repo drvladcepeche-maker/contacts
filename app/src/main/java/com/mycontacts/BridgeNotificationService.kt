@@ -90,6 +90,11 @@ class BridgeNotificationService : Service() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Command polling or notification cycle failed", e)
                     recordDiagnostic("last_poll_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
+                    if (bridge.token().isBlank()) {
+                        // A 401 clears the rejected token in ContactsBridge; stop polling until re-paired.
+                        running = false
+                        stopSelf()
+                    }
                 } finally {
                     if (running) handler.postDelayed(this, POLL_MS)
                 }
