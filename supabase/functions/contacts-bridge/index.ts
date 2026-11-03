@@ -78,6 +78,30 @@ Deno.serve(async (req: Request) => {
   }
   const action = String(body.action ?? "");
 
+  // A valid admin token can exchange itself for a dedicated device token.
+  // The plaintext device token is returned exactly once; only its SHA-256 hash is stored.
+  if (action === "pair_device") {
+    if (role !== "assistant") return json({ error: "Administrative token required for device pairing" }, 403);
+    const randomBytes = new Uint8Array(32);
+    crypto.getRandomValues(randomBytes);
+    const deviceToken = Array.from(randomBytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    const deviceTokenHash = await sha256(deviceToken);
+    const requestedName = String(body.device_name ?? "MyContacts Android").trim();
+    const deviceName = (requestedName || "MyContacts Android").slice(0, 80);
+    const { data: created, error: createError } = await supabase
+      .from("contact_bridge_devices")
+      .insert({ device_name: deviceName, token_hash: deviceTokenHash })
+      .select("id, device_name, created_at")
+      .single();
+    if (createError) return json({ error: createError.message }, 500);
+    return json({
+      paired: true,
+      device: created,
+      device_token: deviceToken,
+      token_delivery: "shown_once",
+    }, 201);
+  }
+
   if (role === "device") {
     await supabase.from("contact_bridge_devices")
       .update({ last_seen_at: new Date().toISOString() }).eq("id", deviceId);
