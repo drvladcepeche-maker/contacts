@@ -17,9 +17,8 @@ class ContactsBridge(context: Context) {
     fun token(): String = prefs.getString("device_token", "") ?: ""
     fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
 
-    fun request(body: JSONObject): JSONObject {
-        val token = token()
-        require(token.isNotBlank()) { "Сначала укажите токен устройства" }
+    private fun requestWithToken(token: String, body: JSONObject): JSONObject {
+        require(token.isNotBlank()) { "Токен не указан" }
         val conn = (URL(BASE_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
@@ -38,6 +37,24 @@ class ContactsBridge(context: Context) {
         } finally {
             conn.disconnect()
         }
+    }
+
+    fun request(body: JSONObject): JSONObject {
+        val current = token()
+        require(current.isNotBlank()) { "Сначала привяжите устройство" }
+        return requestWithToken(current, body)
+    }
+
+    /** Exchanges an admin token for a new device token. The admin token is never persisted. */
+    fun pairDevice(adminToken: String, deviceName: String = "MyContacts Android"): JSONObject {
+        val response = requestWithToken(
+            adminToken.trim(),
+            JSONObject().put("action", "pair_device").put("device_name", deviceName)
+        )
+        val issued = response.optString("device_token").trim()
+        require(issued.isNotBlank()) { "Сервер не вернул токен устройства" }
+        saveToken(issued)
+        return response
     }
 
     @Volatile var lastSyncConflicts: List<String> = emptyList()
