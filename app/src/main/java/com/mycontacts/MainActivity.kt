@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var bridge: ContactsBridge
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
+    private var waitingForInstallPermission = false
     private val activeCommandIds = HashSet<String>()
 
     private lateinit var list: ListView
@@ -125,7 +126,7 @@ class MainActivity : Activity() {
         row7.addView(btn("Аккаунты синхронизации") { showAccountSyncSettings() })
         row8.addView(btn("Сохранить логи") { exportAppLogs() })
         row8.addView(btn("Файлы для Termux") { exportTermuxGuide() })
-        row9.addView(btn("Разрешить запрещённые настройки") { showRestrictedSettingsHelp() })
+        row9.addView(btn("Разрешить установку APK") { requestUnknownSourcesPermission() })
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
@@ -136,6 +137,14 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (waitingForInstallPermission) {
+            waitingForInstallPermission = false
+            if (android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) {
+                toast("Разрешение на установку APK выдано")
+            } else {
+                toast("Разрешение на установку APK не выдано")
+            }
+        }
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
@@ -1044,24 +1053,36 @@ class MainActivity : Activity() {
 
 
     /**
-     * Android does not let an app grant restricted settings to itself.
-     * This shortcut opens App info and explains the manual confirmation.
+     * Android requires the user to approve unknown-source installation per app.
+     * This opens the system page for this exact package; the app cannot grant it itself.
      */
-    private fun showRestrictedSettingsHelp() {
+    private fun requestUnknownSourcesPermission() {
+        if (android.os.Build.VERSION.SDK_INT < 26) {
+            toast("На этой версии Android отдельное разрешение не требуется")
+            return
+        }
+        if (packageManager.canRequestPackageInstalls()) {
+            toast("Разрешение на установку APK уже выдано")
+            return
+        }
         AlertDialog.Builder(this)
-            .setTitle("Разрешить запрещённые настройки")
+            .setTitle("Разрешить установку APK")
             .setMessage(
-                "Android не позволяет приложению включить это разрешение автоматически. " +
-                "На следующем экране откройте меню ⋮ в правом верхнем углу и выберите " +
-                "«Разрешить запрещённые настройки», затем подтвердите действие. " +
-                "Пункт доступен не на всех версиях Android. Разрешайте его только если доверяете приложению."
+                "Android откроет системную страницу разрешения для приложения «Мои контакты». " +
+                "Включите переключатель «Разрешить установку из этого источника», затем вернитесь в приложение."
             )
-            .setPositiveButton("Открыть настройки приложения") { _, _ ->
+            .setPositiveButton("Открыть настройки") { _, _ ->
                 try {
-                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        android.net.Uri.parse("package:" + packageName)))
+                    waitingForInstallPermission = true
+                    startActivity(
+                        Intent(
+                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
                 } catch (e: Exception) {
-                    toast("Не удалось открыть настройки: " + (e.message ?: e.javaClass.simpleName))
+                    waitingForInstallPermission = false
+                    toast("Не удалось открыть разрешение: " + (e.message ?: e.javaClass.simpleName))
                 }
             }
             .setNegativeButton("Отмена", null)
