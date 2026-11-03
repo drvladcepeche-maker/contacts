@@ -270,13 +270,12 @@ class MainActivity : Activity() {
     private fun bridgeDialog(name: String = "ChatGPT") {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 12, 40, 0) }
         val token = EditText(this).apply {
-            hint = "Токен устройства"
+            hint = "Административный токен для привязки"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(bridge.token())
         }
         val info = TextView(this).apply {
-            text = "После сохранения приложение будет синхронизировать список контактов с защищённым сервером и проверять команды, пока приложение открыто. Изменение и удаление потребуют подтверждения на телефоне."
+            text = "Для первичной привязки вставьте административный токен из защищённой настройки MCP. Он используется только один раз и не сохраняется. Сервер выдаст отдельный токен устройства; приложение сохранит только его. Не вставляйте сюда anon key, service_role key или токен устройства другого приложения."
             setPadding(0, 0, 0, 16)
         }
         box.addView(info)
@@ -297,20 +296,21 @@ class MainActivity : Activity() {
             box.addView(how); box.addView(copy)
         }
         box.addView(token)
-        AlertDialog.Builder(this).setTitle("Связь с " + name)
+        AlertDialog.Builder(this).setTitle("Привязка устройства — " + name)
             .setView(box)
-            .setPositiveButton("Сохранить и синхронизировать") { _, _ ->
+            .setPositiveButton("Привязать и синхронизировать") { _, _ ->
                 val value = token.text.toString().trim()
-                if (value.isBlank()) { toast("Введите токен устройства"); return@setPositiveButton }
-                bridge.saveToken(value)
+                if (value.isBlank()) { toast("Введите административный токен для привязки"); return@setPositiveButton }
                 bg {
                     try {
+                        bridge.pairDevice(value)
                         val n = bridge.sync(contactsForSync())
                         runOnUiThread {
                             showSyncResult(n)
                             startBridgeService()
+                            toast("Устройство привязано. Административный токен не сохранён.")
                         }
-                    } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
+                    } catch (e: Exception) { runOnUiThread { toast("Ошибка привязки: ${e.message}") } }
                 }
             }
             .setNeutralButton("Синхронизировать сейчас") { _, _ ->
