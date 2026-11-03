@@ -213,8 +213,9 @@ Deno.serve(async (req: Request) => {
             if (stableJson(contactCore(previous)) !== stableJson(contactCore(incoming))) {
               const left = contactCore(previous);
               const right = contactCore(incoming);
-              const fields = ["name", "phones", "accounts"].filter((key) =>
-                stableJson(left[key]) !== stableJson(right[key]));
+              const fields = Array.from(new Set([...Object.keys(left), ...Object.keys(right)]))
+                .filter((key) => stableJson(left[key]) !== stableJson(right[key]))
+                .sort();
               conflicts.push({ id, fields });
             }
           } else {
