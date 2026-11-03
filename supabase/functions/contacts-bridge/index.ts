@@ -128,7 +128,8 @@ Deno.serve(async (req: Request) => {
       paired: true,
       device: created,
       device_token: deviceToken,
-      token_delivery: "shown_once",\n      reused_existing_device: Boolean(pending),
+      token_delivery: "shown_once",
+      reused_existing_device: Boolean(pending),
     }, 201);
   }
 
