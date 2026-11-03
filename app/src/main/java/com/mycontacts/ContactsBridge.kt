@@ -84,6 +84,16 @@ class ContactsBridge(context: Context) {
                     .put("phones", JSONArray(c.phones))
                     .put("telegram_id", c.telegramId)
                     .put("telegram_username", c.telegramUsername)
+                    .put("fields", JSONArray().apply {
+                        c.fields.forEach { field ->
+                            put(JSONObject()
+                                .put("mimetype", field.mimetype)
+                                .put("values", JSONObject().apply {
+                                    field.values.toSortedMap().forEach { (key, value) -> put(key, value) }
+                                })
+                            )
+                        }
+                    })
                     .put("accounts", JSONArray().apply {
                         c.accountSources.forEach { account ->
                             put(JSONObject()
