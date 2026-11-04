@@ -97,11 +97,9 @@ function resolvedUserId(resolved: any): string | null {
 }
 function describeSession(value: string): string {
   const length = value.length;
-  const prefix = value.slice(0, 4);
-  const suffix = value.slice(-4);
   const hasWhitespace = /\s/.test(value);
   const printable = /^[A-Za-z0-9+/=_-]+$/.test(value);
-  return `len=${length} prefix=${prefix} suffix=${suffix} whitespace=${hasWhitespace} charset_ok=${printable}`;
+  return `len=${length} whitespace=${hasWhitespace} charset_ok=${printable}`;
 }
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const { error } = await supabase.from("telegram_match_jobs")
@@ -344,14 +342,24 @@ async function ensureTelegramConnected() {
     authorized = !!me;
     console.log("getMe OK, id:", String(me?.id));
   } catch (e: any) {
-    console.error("TG real error:", e?.errorMessage, "|", e?.message);
+    // Log the actual exception metadata without logging request payloads or credentials.
+    const cause = e?.cause;
+    console.error("TG getMe failure diagnostics:", {
+      name: e?.name ?? null,
+      message: e?.message ?? String(e),
+      errorMessage: e?.errorMessage ?? null,
+      code: e?.code ?? null,
+      errorCode: e?.errorCode ?? null,
+      causeName: cause?.name ?? null,
+      causeMessage: cause?.message ?? (cause == null ? null : String(cause)),
+      stack: typeof e?.stack === "string" ? e.stack : null,
+    });
   }
   if (!authorized) {
     await telegram.disconnect().catch(() => {});
     telegram = undefined;
     throw new Error(
-      `Telegram session is not authorized (${describeSession(sessionString)}). ` +
-      "Regenerate StringSession with the same TELEGRAM_API_ID/TELEGRAM_API_HASH secrets and replace TELEGRAM_SESSION."
+      `Telegram getMe request failed; session authorization is unconfirmed (${describeSession(sessionString)}). See the preceding TG getMe failure diagnostics.`
     );
   }
   ready = true;
