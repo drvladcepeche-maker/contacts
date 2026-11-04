@@ -23,24 +23,23 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** Always ask step-by-step so values can be typed from my.telegram.org. */
 async function resolveCredentials(): Promise<{ apiId: number; apiHash: string }> {
-  let apiId = Number(process.env.TELEGRAM_API_ID);
-  let apiHash = process.env.TELEGRAM_API_HASH?.trim() ?? "";
+  console.log("\nОткройте https://my.telegram.org/apps и вводите значения по одному.\n");
 
+  const apiIdRaw = await ask("1/5  App api_id (только цифры): ");
+  const apiId = Number(apiIdRaw.replace(/\s+/g, ""));
   if (!Number.isInteger(apiId) || apiId <= 0) {
-    const raw = await ask("Telegram API ID: ");
-    apiId = Number(raw);
+    throw new Error("api_id должен быть положительным целым числом.");
   }
-  if (!apiHash) {
-    apiHash = await ask("Telegram API HASH: ");
-  }
+  console.log(`   OK: api_id принят (длина ${String(apiId).length} цифр).\n`);
 
-  if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) {
-    throw new Error(
-      "TELEGRAM_API_ID and TELEGRAM_API_HASH are required. " +
-        "Get them at https://my.telegram.org or from your GitHub Actions secrets."
-    );
+  const apiHash = (await ask("2/5  App api_hash (строка из кабинета): ")).replace(/\s+/g, "");
+  if (apiHash.length < 16) {
+    throw new Error(`api_hash слишком короткий (длина ${apiHash.length}). Проверьте копирование.`);
   }
+  console.log(`   OK: api_hash принят (длина ${apiHash.length}).\n`);
+
   return { apiId, apiHash };
 }
 
@@ -48,21 +47,24 @@ try {
   if (await fileExists(sessionPath)) {
     if (!force) {
       const answer = await ask(
-        `Session file already exists at:\n  ${sessionPath}\n\nOverwrite it? (y/N): `
+        `Файл сессии уже есть:\n  ${sessionPath}\n\nПерезаписать? (y/N): `
       );
       if (!/^y(es)?$/i.test(answer)) {
-        console.log("Aborted. Existing session was left unchanged.");
+        console.log("Отменено. Старая сессия не изменена.");
         process.exit(0);
       }
     } else {
-      console.log(`--force: overwriting existing session at ${sessionPath}`);
+      console.log(`--force: перезапись ${sessionPath}`);
     }
   }
 
   const { apiId, apiHash } = await resolveCredentials();
 
-  const phone = await ask("Telegram account phone (international format, e.g. +79001234567): ");
-  if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error("Invalid international phone number.");
+  const phone = await ask("3/5  Номер телефона Telegram (+79001234567): ");
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+    throw new Error("Номер должен быть в международном формате, например +79001234567");
+  }
+  console.log("   OK: номер принят.\n");
 
   client = new TelegramClient(new StringSession(""), apiId, apiHash, {
     connectionRetries: 8,
@@ -72,28 +74,37 @@ try {
 
   await client.start({
     phoneNumber: async () => phone,
-    phoneCode: async () => ask("Telegram login code: "),
-    password: async () => ask("Telegram 2FA password (if enabled, otherwise press Enter): "),
-    onError: error => console.error("Telegram authorization error:", error.message),
+    phoneCode: async () => {
+      const code = await ask("4/5  Код из Telegram: ");
+      if (!code) throw new Error("Код не введён");
+      return code;
+    },
+    password: async () => {
+      const password = await ask("5/5  Пароль 2FA (если нет — просто Enter): ");
+      return password;
+    },
+    onError: (error) => console.error("Ошибка Telegram:", error.message),
   });
 
   if (!(await client.checkAuthorization())) {
-    throw new Error("Telegram authorization was not confirmed.");
+    throw new Error("Авторизация Telegram не подтверждена.");
   }
 
   const session = (client.session as StringSession).save();
   await mkdir(sessionDir, { recursive: true, mode: 0o700 });
   await chmod(sessionDir, 0o700);
-
-  // Use "w" so we can overwrite after explicit confirmation / --force.
   await writeFile(sessionPath, session + "\n", { encoding: "utf8", mode: 0o600, flag: "w" });
   await chmod(sessionPath, 0o600);
 
-  console.log("\nTelegram authorization successful.");
-  console.log("Session saved locally with restricted file permissions:");
+  console.log("\nГотово. Авторизация успешна.");
+  console.log("Сессия сохранена (значение не печатается):");
   console.log(sessionPath);
-  console.log("\nThe session value was NOT printed. Copy it locally into GitHub Actions secret TELEGRAM_SESSION.");
-  console.log("Never send it in chat, commit it, or expose it in terminal logs.");
+  console.log("\nДальше:");
+  console.log("  cat " + sessionPath);
+  console.log("  → вставьте строку в GitHub Secret TELEGRAM_SESSION");
+  console.log("  → обновите Secrets TELEGRAM_API_ID и TELEGRAM_API_HASH теми же значениями");
+  console.log("  → Run workflow Telegram Resolver Worker");
+  console.log("Не отправляйте сессию в чат.");
 } finally {
   if (client) await client.disconnect().catch(() => {});
   rl.close();
