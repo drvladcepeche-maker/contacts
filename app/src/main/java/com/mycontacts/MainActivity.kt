@@ -789,7 +789,7 @@ class MainActivity : Activity() {
             fun normalizedName(value: String) = value.trim().lowercase().replace(Regex("\\s+"), " ")
             fun addKeys(name: String, phones: List<String>) {
                 val keyName = normalizedName(name)
-                val digits = phones.map { it.filter(Char::isDigit) }.filter { it.isNotBlank() }
+                val digits = phones.map { it.filter(Char::isDigit).takeLast(10) }.filter { it.isNotBlank() }
                 if (digits.isEmpty()) existing.add("$keyName|")
                 else digits.forEach { existing.add("$keyName|$it") }
             }
@@ -799,7 +799,7 @@ class MainActivity : Activity() {
             var skipped = 0
             for (item in items) {
                 val keyName = normalizedName(item.name)
-                val digits = item.phones.map { it.filter(Char::isDigit) }.filter { it.isNotBlank() }.distinct()
+                val digits = item.phones.map { it.filter(Char::isDigit).takeLast(10) }.filter { it.isNotBlank() }.distinct()
                 val keys = if (digits.isEmpty()) listOf("$keyName|") else digits.map { "$keyName|$it" }
                 if (keys.any { it in existing }) {
                     skipped++
