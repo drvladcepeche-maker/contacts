@@ -131,7 +131,10 @@ class MainActivity : Activity() {
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, status).forEach { root.addView(it) }
+        root.addView(list, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
         setContentView(root)
     }
 
@@ -777,16 +780,40 @@ class MainActivity : Activity() {
     }
 
     private fun importFrom(uri: Uri) {
-        val text = contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: return
-        val items = if (text.contains("BEGIN:VCARD", true)) repo.parseVcf(text) else repo.parseCsv(text)
-        val existing = all.map { it.name.lowercase() + "|" + (it.phones.firstOrNull() ?: "") }.toSet()
-        var added = 0
-        for ((n, p) in items) {
-            if ((n.lowercase() + "|" + p) in existing) continue
-            repo.add(n, p); added++
+        toast("Чтение и проверка файла…")
+        bg {
+            val text = contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                ?: throw java.io.IOException("Не удалось открыть выбранный файл")
+            val items = if (text.contains("BEGIN:VCARD", true)) repo.parseVcf(text) else repo.parseCsv(text)
+            val existing = HashSet<String>()
+            fun normalizedName(value: String) = value.trim().lowercase().replace(Regex("\\s+"), " ")
+            fun addKeys(name: String, phones: List<String>) {
+                val keyName = normalizedName(name)
+                val digits = phones.map { it.filter(Char::isDigit) }.filter { it.isNotBlank() }
+                if (digits.isEmpty()) existing.add("$keyName|")
+                else digits.forEach { existing.add("$keyName|$it") }
+            }
+            repo.loadAll().forEach { addKeys(it.name, it.phones) }
+
+            var added = 0
+            var skipped = 0
+            for (item in items) {
+                val keyName = normalizedName(item.name)
+                val digits = item.phones.map { it.filter(Char::isDigit) }.filter { it.isNotBlank() }.distinct()
+                val keys = if (digits.isEmpty()) listOf("$keyName|") else digits.map { "$keyName|$it" }
+                if (keys.any { it in existing }) {
+                    skipped++
+                    continue
+                }
+                repo.addImported(item.copy(phones = item.phones.distinct()))
+                existing.addAll(keys)
+                added++
+            }
+            runOnUiThread {
+                refresh()
+                toast("Импорт завершён: добавлено $added, пропущено как дубликаты $skipped из ${items.size}")
+            }
         }
-        refresh()
-        toast("Импортировано: $added из ${items.size}")
     }
 
     private fun bg(work: () -> Unit) = Thread {
