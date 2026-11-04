@@ -16,8 +16,8 @@ android {
         applicationId = "com.mycontacts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3-fullfields"
     }
     signingConfigs {
         if (stableSigningEnabled) {
@@ -32,10 +32,12 @@ android {
     buildTypes {
         getByName("debug") {
             // Keep the recovery build installable beside an older APK signed with a different key.
-            applicationIdSuffix = ".pairing2"
+            applicationIdSuffix = ".fullfields"
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
+            // Stable install identity for all future signed updates.
+            applicationIdSuffix = ".fullfields"
             isMinifyEnabled = false
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
