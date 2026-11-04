@@ -24,7 +24,15 @@ object AppLog {
             write(app, "FATAL", "Uncaught exception on ${thread.name}", error)
             previous?.uncaughtException(thread, error)
         }
-        info(app, "AppLog", "Crash handler installed; versionCode=${app.packageManager.getPackageInfo(app.packageName, 0).versionCode}")
+        val versionLabel = try {
+            @Suppress("DEPRECATION")
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            "versionCode=$code versionName=${info.versionName}"
+        } catch (e: Exception) {
+            "version unknown (${e.javaClass.simpleName})"
+        }
+        info(app, "AppLog", "Crash handler installed; $versionLabel")
     }
 
     fun info(context: Context, tag: String, message: String) = write(context, "INFO", tag + ": " + message, null)
@@ -86,7 +94,7 @@ object AppLog {
 
             Обновление APK поверх установленного требует того же applicationId и той же подписи.
             Если сертификат подписи отличается, Android выдаст INSTALL_FAILED_UPDATE_INCOMPATIBLE.
-            Не удаляйте установленное приложение, пока не проверите резервную копию данных.
+            Не удаляйте установленное приложение, пока не проверьте резервную копию данных.
         """.trimIndent() + "\n"
         val name = "MyContacts-Termux-guide.txt"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
