@@ -338,7 +338,15 @@ async function ensureTelegramConnected() {
     connectionRetries: 3, autoReconnect: true, requestRetries: 0,
   });
   await telegram.connect();
-  if (!(await telegram.checkAuthorization())) {
+  let authorized = false;
+  try {
+    const me: any = await telegram.getMe();
+    authorized = !!me;
+    console.log("getMe OK, id:", String(me?.id));
+  } catch (e: any) {
+    console.error("TG real error:", e?.errorMessage, "|", e?.message);
+  }
+  if (!authorized) {
     await telegram.disconnect().catch(() => {});
     telegram = undefined;
     throw new Error(
