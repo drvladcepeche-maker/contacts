@@ -147,7 +147,7 @@ class ContactRepo(private val cr: ContentResolver) {
         val seenPhones = HashSet<String>()
         for (phone in contact.phones.map { it.trim() }.filter { it.isNotBlank() }) {
             val digits = phone.filter { it.isDigit() }
-            if (digits.isBlank() || !seenPhones.add(digits)) continue
+            if (digits.isBlank() || !seenPhones.add(digits.takeLast(10))) continue
             ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
                 .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
                 .withValue(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
