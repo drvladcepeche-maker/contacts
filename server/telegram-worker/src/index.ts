@@ -333,7 +333,7 @@ async function ensureTelegramConnected() {
     throw new Error(`TELEGRAM_SESSION looks too short (${sessionString.length} chars). Re-copy the full StringSession into the GitHub secret.`);
   }
   telegram = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
-    connectionRetries: 3, autoReconnect: true, requestRetries: 0,
+    connectionRetries: 3, autoReconnect: true, requestRetries: 3,
   });
   await telegram.connect();
   let authorized = false;
