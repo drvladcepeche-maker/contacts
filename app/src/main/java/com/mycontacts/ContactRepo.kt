@@ -735,7 +735,7 @@ class ContactRepo(private val cr: ContentResolver) {
         val physicalLines = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n').lines()
         val lines = ArrayList<String>()
         for (line in physicalLines) {
-            if ((line.startsWith(" ") || line.startsWith("\\t")) && lines.isNotEmpty()) {
+            if ((line.startsWith(" ") || line.startsWith("\t")) && lines.isNotEmpty()) {
                 lines[lines.lastIndex] = lines.last() + line.drop(1)
             } else {
                 lines.add(line)
