@@ -7,12 +7,6 @@ import { join } from "node:path";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 
-const apiId = Number(process.env.TELEGRAM_API_ID);
-const apiHash = process.env.TELEGRAM_API_HASH?.trim();
-if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) {
-  throw new Error("Set TELEGRAM_API_ID and TELEGRAM_API_HASH in the local environment.");
-}
-
 const force = process.argv.includes("--force");
 const sessionDir = join(homedir(), ".config", "contacts-telegram");
 const sessionPath = join(sessionDir, "TELEGRAM_SESSION");
@@ -27,6 +21,27 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function resolveCredentials(): Promise<{ apiId: number; apiHash: string }> {
+  let apiId = Number(process.env.TELEGRAM_API_ID);
+  let apiHash = process.env.TELEGRAM_API_HASH?.trim() ?? "";
+
+  if (!Number.isInteger(apiId) || apiId <= 0) {
+    const raw = await ask("Telegram API ID: ");
+    apiId = Number(raw);
+  }
+  if (!apiHash) {
+    apiHash = await ask("Telegram API HASH: ");
+  }
+
+  if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) {
+    throw new Error(
+      "TELEGRAM_API_ID and TELEGRAM_API_HASH are required. " +
+        "Get them at https://my.telegram.org or from your GitHub Actions secrets."
+    );
+  }
+  return { apiId, apiHash };
 }
 
 try {
@@ -44,7 +59,9 @@ try {
     }
   }
 
-  const phone = await ask("Telegram account phone (international format): ");
+  const { apiId, apiHash } = await resolveCredentials();
+
+  const phone = await ask("Telegram account phone (international format, e.g. +79001234567): ");
   if (!/^\+[1-9]\d{7,14}$/.test(phone)) throw new Error("Invalid international phone number.");
 
   client = new TelegramClient(new StringSession(""), apiId, apiHash, {
@@ -56,7 +73,7 @@ try {
   await client.start({
     phoneNumber: async () => phone,
     phoneCode: async () => ask("Telegram login code: "),
-    password: async () => ask("Telegram 2FA password (if enabled): "),
+    password: async () => ask("Telegram 2FA password (if enabled, otherwise press Enter): "),
     onError: error => console.error("Telegram authorization error:", error.message),
   });
 
