@@ -28,11 +28,15 @@ function stableJson(value: unknown): string {
 function contactCore(value: unknown): Record<string, unknown> {
   const data = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  // Compare the complete user-visible contact payload. Exclude only the local
-  // record ID and account metadata: those necessarily differ across accounts.
-  // Telegram fields and arbitrary typed Data values remain part of exact equality.
+  // Compare user-editable contact content, but exclude server-managed Telegram
+  // enrichment. Android may receive these fields later through queued commands;
+  // comparing them now would create false sync conflicts.
   return Object.fromEntries(Object.entries(data).filter(([key]) =>
-    key !== "id" && key !== "accounts"
+    key !== "id" &&
+    key !== "accounts" &&
+    key !== "telegram_id" &&
+    key !== "telegram_username" &&
+    !key.startsWith("telegram_match_")
   ));
 }
 
@@ -279,10 +283,7 @@ Deno.serve(async (req: Request) => {
             .from("contact_bridge_snapshots")
             .upsert(newRows, { onConflict: "device_id,local_contact_id", ignoreDuplicates: true })
             .select("local_contact_id");
-          if (insertError?.code === "23505") {
-        return json({ error: "A Telegram matching job is already queued or running" }, 409);
-      }
-      if (insertError) return json({ error: insertError.message }, 500);
+          if (insertError) return json({ error: insertError.message }, 500);
           insertedCount = inserted?.length ?? 0;
           skippedCount += newRows.length - insertedCount;
         }
@@ -414,6 +415,9 @@ Deno.serve(async (req: Request) => {
         })
         .select("id")
         .single();
+      if (insertError?.code === "23505") {
+        return json({ error: "A Telegram matching job is already queued or running" }, 409);
+      }
       if (insertError) return json({ error: insertError.message }, 500);
       return json({
         queued: true,

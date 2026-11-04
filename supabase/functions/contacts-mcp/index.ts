@@ -123,7 +123,7 @@ Deno.serve(async (req: Request) => {
       let rows: any[] = [];
       // Scan before filtering so account-scoped pagination covers the full device cache,
       // rather than only filtering the requested page.
-      for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
+      for (let scanOffset = 0; ; scanOffset += 500) {
         const { data: page, error } = await db.from("contact_bridge_snapshots")
           .select("local_contact_id, contact_data, synced_at, device_id")
           .eq("device_id", deviceId)
