@@ -4,6 +4,7 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
+import { calculateBatchResumeAt } from "./rate-limit.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -55,6 +56,7 @@ const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
 const port = Number(process.env.PORT) || 8080;
 const runOnce = process.env.RUN_ONCE === "true";
 const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
+const batchCooldownMs = Math.max(60_000, Number(process.env.BATCH_COOLDOWN_MS) || 60 * 60_000);
 
 let stopping = false;
 let ready = false;
@@ -187,18 +189,7 @@ async function resolvePhone(phone: string): Promise<{ id: string; username: stri
   if (!userId) return null;
   const users: any[] = Array.isArray(resolved?.users) ? resolved.users : [];
   const user = users.find((item) => String(item?.id) === userId);
-  // GramJS exposes User.usernames as Api.Username[], not TDLib's
-  // activeUsernames string array. Keep only active entries and include the
-  // legacy primary username for older Telegram user objects.
-  const usernameEntries: any[] = Array.isArray(user?.usernames) ? user.usernames : [];
-  const activeUsernames = usernameEntries
-    .filter((entry) => entry && typeof entry.username === "string" && entry.active !== false)
-    .map((entry) => entry.username);
-  const legacyUsername = typeof user?.username === "string" ? [user.username] : [];
-  const usernames = [...activeUsernames, ...legacyUsername]
-    .map((value) => String(value ?? "").trim().replace(/^@/, ""))
-    .filter(Boolean);
-  const username = [...new Set(usernames)].join(", ") || null;
+  const username = extractTelegramUsernames(user);
   return { id: userId, username };
 }
 async function waitForRateLimit(lastRequestAt?: string | null) {
@@ -218,7 +209,7 @@ async function processJob(job: Job) {
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
     if (index - startIndex >= maxCandidatesPerRun) {
-      const resumeAt = new Date(Date.now() + 60_000).toISOString();
+      const resumeAt = calculateBatchResumeAt(lastRequestAt, Date.now(), batchCooldownMs);
       await updateJob(job.id, {
         status: "queued", results, checked: results.length,
         matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
