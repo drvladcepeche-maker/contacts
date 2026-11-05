@@ -125,9 +125,16 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   // Never let a later non-match for a second number erase an already confirmed match.
   const alreadyMatched = existingStatus === "matched" || existingStatus === "username_missing";
   const samePhone = existingPhone === result.phone;
-  const priorUsernames = String(prior.telegram_username ?? "")
-    .split(",").map((value) => value.trim().replace(/^@/, ""))
-    .filter((value) => value && value.toUpperCase() !== "СКРЫТ");
+  // Usernames belong to a specific Telegram account. Merge aliases only when
+  // the newly resolved phone points to the same Telegram ID; otherwise stale
+  // aliases from a previous account would be attached to the new ID.
+  const existingTelegramId = String(prior.telegram_id ?? "");
+  const sameTelegramAccount = !!existingTelegramId && existingTelegramId === String(result.telegram_id ?? "");
+  const priorUsernames = sameTelegramAccount
+    ? String(prior.telegram_username ?? "")
+        .split(",").map((value) => value.trim().replace(/^@/, ""))
+        .filter((value) => value && value.toUpperCase() !== "СКРЫТ")
+    : [];
   const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
   const next: Record<string, unknown> = {
     ...prior,
