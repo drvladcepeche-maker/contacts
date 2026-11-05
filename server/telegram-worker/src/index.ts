@@ -3,6 +3,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
+import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
+import { calculateBatchResumeAt } from "./rate-limit.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -54,6 +56,7 @@ const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
 const port = Number(process.env.PORT) || 8080;
 const runOnce = process.env.RUN_ONCE === "true";
 const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
+const batchCooldownMs = Math.max(60_000, Number(process.env.BATCH_COOLDOWN_MS) || 60 * 60_000);
 
 let stopping = false;
 let ready = false;
@@ -125,9 +128,16 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   // Never let a later non-match for a second number erase an already confirmed match.
   const alreadyMatched = existingStatus === "matched" || existingStatus === "username_missing";
   const samePhone = existingPhone === result.phone;
-  const priorUsernames = String(prior.telegram_username ?? "")
-    .split(",").map((value) => value.trim().replace(/^@/, ""))
-    .filter((value) => value && value.toUpperCase() !== "СКРЫТ");
+  // Usernames belong to a specific Telegram account. Merge aliases only when
+  // the newly resolved phone points to the same Telegram ID; otherwise stale
+  // aliases from a previous account would be attached to the new ID.
+  const existingTelegramId = String(prior.telegram_id ?? "");
+  const mergedUsernames = mergeTelegramUsernames(
+    existingTelegramId,
+    String(result.telegram_id ?? ""),
+    prior.telegram_username,
+    result.username,
+  );
   const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
   const next: Record<string, unknown> = {
     ...prior,
@@ -138,15 +148,11 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   };
   if (result.status === "matched") {
     next.telegram_id = result.telegram_id;
-    const foundUsernames = String(result.username ?? "")
-      .split(",").map((value) => value.trim().replace(/^@/, "")).filter(Boolean);
-    next.telegram_username = [...new Set([...priorUsernames, ...foundUsernames])].join(", ");
+    next.telegram_username = mergedUsernames ?? "";
   } else if (result.status === "username_missing") {
     next.telegram_id = result.telegram_id;
     // A private/hidden current username must not erase previously discovered names.
-    next.telegram_username = priorUsernames.length
-      ? [...new Set(priorUsernames)].join(", ")
-      : "Скрыт";
+    next.telegram_username = mergedUsernames ?? "Скрыт";
   } else if (result.status === "not_resolved" && !alreadyMatched) {
     // An unresolved phone is not evidence that a previously confirmed Telegram match is invalid.
     if (samePhone) {
@@ -183,15 +189,7 @@ async function resolvePhone(phone: string): Promise<{ id: string; username: stri
   if (!userId) return null;
   const users: any[] = Array.isArray(resolved?.users) ? resolved.users : [];
   const user = users.find((item) => String(item?.id) === userId);
-  const usernameObject = user?.usernames && typeof user.usernames === "object"
-    ? user.usernames : null;
-  const activeUsernames = Array.isArray(usernameObject?.activeUsernames)
-    ? usernameObject.activeUsernames : [];
-  const legacyUsername = typeof user?.username === "string" ? [user.username] : [];
-  const usernames = [...activeUsernames, ...legacyUsername]
-    .map((value) => String(value ?? "").trim().replace(/^@/, ""))
-    .filter(Boolean);
-  const username = [...new Set(usernames)].join(", ") || null;
+  const username = extractTelegramUsernames(user);
   return { id: userId, username };
 }
 async function waitForRateLimit(lastRequestAt?: string | null) {
@@ -211,7 +209,7 @@ async function processJob(job: Job) {
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
     if (index - startIndex >= maxCandidatesPerRun) {
-      const resumeAt = new Date(Date.now() + 60_000).toISOString();
+      const resumeAt = calculateBatchResumeAt(lastRequestAt, Date.now(), batchCooldownMs);
       await updateJob(job.id, {
         status: "queued", results, checked: results.length,
         matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
