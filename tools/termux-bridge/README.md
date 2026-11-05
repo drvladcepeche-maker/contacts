@@ -1,94 +1,106 @@
-# Termux command bridge
+# Termux / Shizuku / Brave bridge
 
-This folder contains the Android-side worker for the Supabase Termux bridge. It supports authenticated shell execution as the ordinary Termux app user, bounded interactive sessions, scoped Shizuku file operations, APK updates, and private Storage uploads. It does not provide root access or automatically elevate shell commands through Shizuku.
+This branch extends the existing Supabase command bridge. It has three separate execution layers:
 
-## Command policy
+- **Termux:** shell commands, interactive pipe-based sessions, Git, builds, diagnostics, and file uploads.
+- **Shizuku (rish):** selected Android Shell operations, APK installation, and file operations in two dedicated shared-storage folders.
+- **AccessibilityService:** reads and operates the Brave UI only (com.brave.browser).
 
-Automatically executed:
-- `pwd`
-- `list_files` (names only, one directory at a time, workspace-confined)
-- `git_status`
-- `git_log` (at most 20 entries)
-- `git_diff_stat`
-- `apk_inventory` and `apk_inspect`
-- `shizuku_storage_check` (read-only; uses Shizuku `rish` to list `/sdcard/Download/PnS_APK`, without Termux shared-storage permission)
-- `install_apk` (only a named APK directly inside `~/storage/downloads/PnS_APK`, and only package `com.mycontacts`; requires Shizuku `rish` to run as Android shell)
+This is not root access. Shell commands run as the normal Termux app user; Shizuku commands run as Android Shell UID 2000.
 
-Requires an interactive confirmation in the Termux terminal (type exactly `YES`):
-- `gradle_test`
-- `gradle_assemble_debug`
+## Command types
 
-Terminal commands are intentionally powerful: they execute as the Termux app user and can access files and packages available to that user. Only queue commands from a trusted, authenticated controller. Commands do not run as root and do not inherit environment variables whose names contain token, secret, password, credential, or private-key markers. Pipe-based sessions are not a PTY, so full-screen terminal programs such as `vim`, `nano`, and `htop` are not supported. Sessions live only in memory and expire after 15 minutes of inactivity. Shizuku file operations are separately scoped to two dedicated shared-storage folders; deletion is non-recursive and requires explicit confirmation. File uploads use a short-lived signed URL for a private bucket; the raw device token is never sent to Storage. The Shizuku storage check remains fixed and read-only. The Gradle tasks execute repository build scripts, so they are treated as potentially unsafe. If the agent is not attached to an interactive terminal, it rejects these tasks. The APK installer is narrowly scoped: it validates a plain filename, rejects symlinks and oversized files, checks the APK package with `aapt`, requires Shizuku `rish` to report `uid=2000(shell)`, confirms the existing package is installed, then runs only `pm install -r --user 0`. Android PackageManager enforces signing-key compatibility; a mismatch fails without uninstalling the old app. No downgrade or signature-bypass flags are used. Install `aapt` in Termux with `pkg install aapt` if it is missing. Unknown command types are rejected. Do not add a generic shell, exec, or arbitrary command handler.
+### Termux
+- terminal_run: run a shell command with a 15-minute hard timeout, workspace-confined working directory, and bounded output.
+- terminal_start, terminal_input, terminal_read, terminal_stop: manage up to three in-memory interactive processes.
+- file_upload: upload a selected file to the private Supabase Storage bucket termux-bridge-artifacts using a short-lived signed URL (maximum 50 MiB).
+- Existing diagnostics: pwd, list_files, file_read, git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect, apk_inventory, apk_inspect.
 
-## 1. Install prerequisites in Termux
+### Shizuku
+- shizuku_storage_check: fixed read-only check of the APK folder.
+- install_apk: PackageManager update for com.mycontacts or com.mycontacts.pairing2; checks package metadata and signature compatibility; never uninstalls the old app.
+- shizuku_file_list, shizuku_file_mkdir, shizuku_file_copy, shizuku_file_move: paths are restricted to /sdcard/Download/TermuxBridge and /sdcard/Documents/TermuxBridge.
+- shizuku_file_delete: single-file deletion only; requires args.confirm=true; root folders cannot be deleted.
 
-Install Termux from the official sources linked by https://github.com/termux/termux-app, then run:
+### Brave Accessibility
+- brave_accessibility with actions snapshot, click, input, scroll, back, and open_url.
+- The Android companion app receiver accepts explicit broadcasts only from Android Shell UID 2000 (Shizuku).
+- Accessibility data is scoped to the Brave package. A single response file is written to Download/TermuxBridge/accessibility-result.json, then read by Termux.
 
-```sh
-pkg update
-pkg install nodejs git
-```
+## Security and runtime limits
 
-Clone the bridge branch (or use the branch after it is merged):
+- Terminal commands are powerful and can access files available to the Termux user. Only a trusted authenticated controller should be allowed to queue them.
+- Commands do not run as root and do not automatically inherit environment variables whose names contain token, secret, password, credential, or private-key markers. The device token is not sent to Supabase Storage.
+- Shell commands are limited to 8192 characters; one-shot commands have a 15-minute maximum; interactive sessions are capped at three and expire after 15 minutes of inactivity.
+- Interactive sessions use stdin/stdout pipes, not a PTY. Full-screen terminal programs such as vim, nano, and htop are not supported.
+- File uploads are limited to 50 MiB. Workspace paths are allowed; shared Downloads uploads must use @downloads/TermuxBridge/... or @downloads/PnS_APK/.... Sensitive filename patterns are blocked.
+- Shizuku file operations do not use arbitrary caller-supplied shell commands. Paths are limited to dedicated shared-storage folders. Delete is non-recursive and requires explicit confirmation.
+- Accessibility commands require the companion app to be installed and the Accessibility service manually enabled in Android Settings. The receiver rejects broadcasts not sent by UID 2000.
+- Revoking the device: set enabled=false or revoked_at=now() for its row in termux_bridge_devices.
 
-```sh
-git clone -b feature/termux-command-bridge https://github.com/drvladcepeche-maker/contacts.git
-cd contacts
-```
+## Install/update on the phone
 
-## 2. Create a device token locally
+Install prerequisites in Termux:
 
-```sh
-node tools/termux-bridge/setup.mjs
-```
+    pkg update
+    pkg install nodejs git aapt
+    termux-setup-storage
 
-The script writes the raw token only to:
-`~/.config/termux-bridge/device-token`
+If the repository is already cloned:
 
-It prints the SHA-256 hash, not the token. Copy the hash into Supabase SQL Editor and run the insert statement printed by the script. Only the hash is stored in Supabase. Never paste the raw token into ChatGPT or GitHub.
+    cd ~/contacts
+    git fetch origin
+    git checkout feature/brave-accessibility-control
+    git pull --ff-only origin feature/brave-accessibility-control
 
-If the device is already registered, do not run setup again. To rotate it, disable/revoke the old row first and then securely remove the local token file before regenerating.
+Otherwise:
 
-## 3. Start the agent
+    git clone -b feature/brave-accessibility-control https://github.com/drvladcepeche-maker/contacts.git ~/contacts
+    cd ~/contacts
 
-From the repository root:
+Do not run setup.mjs again if the device is already registered. Keep the existing token file at ~/.config/termux-bridge/device-token.
 
-```sh
-node tools/termux-bridge/bridge.mjs
-```
+Start the worker:
 
-Keep the Termux session running. Android battery management can stop background work; exempt Termux from battery optimization if you want the bridge to remain available. The agent polls every five seconds by default. Configure POLL_MS or WORKSPACE in the environment if needed.
+    node tools/termux-bridge/bridge.mjs
 
-## 4. Queue a command
+Keep the Termux session alive and exempt Termux from battery optimization if continuous access is required.
 
-The assistant can queue a command using the authenticated Supabase database connection. To queue a read-only status check for the most recently active enabled device:
+## Example queue payloads
 
-```sql
-insert into public.termux_bridge_jobs (device_id, command_type, args)
-select id, 'git_status', '{}'::jsonb
-from public.termux_bridge_devices
-where enabled = true and revoked_at is null
-order by last_seen_at desc nulls last, created_at desc
-limit 1
-returning id, status, command_type, created_at;
-```
+Insert a job into public.termux_bridge_jobs for the registered device. Example payloads:
 
-Allowed command types are constrained by the database. Example shell command: queue `terminal_run` with `{"command":"git status --short --branch","cwd":"."}`. For a long-running process, queue `terminal_start` with `{"command":"python -u -i"}`, then use `terminal_input` with the returned `session_id` and an `input` string, and poll with `terminal_read`. Stop it with `terminal_stop`. These are pipe sessions, not PTYs. For Brave, queue `brave_accessibility` with `{"action":"snapshot"}` to read the visible accessibility tree. Other actions: `{"action":"click","text":"Sign in"}`, `{"action":"input","view_id":"com.brave.browser:id/url_bar","value":"https://example.com"}`, `{"action":"scroll","direction":"down"}`, `{"action":"back"}`, or `{"action":"open_url","url":"https://example.com"}`. The companion APK must be installed and its Accessibility service manually enabled in Android Settings → Accessibility → Installed apps. It only observes `com.brave.browser`; the command receiver accepts broadcasts from Android Shell UID 2000 only. Termux must have shared-storage access to read the result file.\n\nQueue `shizuku_storage_check` with an empty JSON object to inspect the shared APK folder through Shizuku. The file-operation commands accept paths only under `/sdcard/Download/TermuxBridge` or `/sdcard/Documents/TermuxBridge`. Create these folders first with `shizuku_file_mkdir`. To upload a file in the workspace, queue `file_upload` with `{"path":"relative/path.zip"}`. To upload from Termux shared Downloads, use `{"path":"@downloads/TermuxBridge/report.zip"}`. Uploads are limited to 50 MiB and are stored privately in the `termux-bridge-artifacts` bucket under a device-specific prefix. Do not upload tokens, passwords, keystores, private keys, or personal files unless explicitly required. To install a specific APK already listed by `apk_inventory`, queue `install_apk` with `{"file":"app-debug.apk"}` (replace with the exact listed filename). Never insert raw shell commands. This operation updates `com.mycontacts` in place and does not uninstall it. To inspect a result, query the returned job ID:
+    {"command":"git status --short --branch","cwd":"."}
 
-```sql
-select id, status, output, error_text, exit_code, created_at, finished_at
-from public.termux_bridge_jobs
-where id = 'JOB_UUID';
-```
+Use this with command_type=terminal_run.
 
-## Security model
+For a persistent Python prompt:
+- terminal_start: {"command":"python -u -i"}
+- terminal_input: {"session_id":"<returned-session-id>","input":"print(1 + 1)\n"}
+- terminal_read: {"session_id":"<returned-session-id>"}
+- terminal_stop: {"session_id":"<returned-session-id>"}
 
-- Device authentication uses a random 256-bit token; only its SHA-256 hash is stored in Supabase.
-- The edge function checks device enablement and revocation on every request.
-- Row-level security is enabled and direct access is revoked from anon and authenticated roles.
-- The agent uses spawn with shell=false and fixed argument arrays; it does not interpret server-provided strings as shell commands.
-- File listing is restricted to the configured workspace and returns names only.
-- Output is bounded and sent only to the private Supabase queue.
-- Revoking a device: set enabled=false or revoked_at=now() for its row in termux_bridge_devices.
+For a file upload:
+- Workspace file: {"path":"relative/path/report.zip"}
+- Downloads artifact: {"path":"@downloads/TermuxBridge/report.zip"}
+- APK: {"path":"@downloads/PnS_APK/app-debug.apk"}
 
-This bridge is a user-authorized terminal for the current Termux account, not Android root. Treat repository contents and build scripts as untrusted code.
+For Shizuku file operations, create the dedicated folders first:
+- shizuku_file_mkdir: {"path":"/sdcard/Download/TermuxBridge"}
+- shizuku_file_list: {"path":"/sdcard/Download/TermuxBridge"}
+
+For Brave:
+- Snapshot: {"action":"snapshot"}
+- Click: {"action":"click","text":"Sign in"}
+- Input: {"action":"input","view_id":"com.brave.browser:id/url_bar","value":"https://example.com"}
+- Scroll: {"action":"scroll","direction":"down"}
+- Back: {"action":"back"}
+- Open URL: {"action":"open_url","url":"https://example.com"}
+
+After installing the updated APK, manually enable Settings → Accessibility → Installed apps → Мои контакты — привязка. The service is configured to observe Brave only.
+
+## Build approval
+
+gradle_test and gradle_assemble_debug still require typing exactly YES in an interactive Termux terminal because repository build scripts execute code. If no interactive terminal is attached, those tasks are rejected.
+
+The APK installer validates the APK package, checks that the target package is already installed, requires Shizuku to report uid=2000(shell), then runs only pm install -r --user 0. Android PackageManager enforces signing-key compatibility. No uninstall, downgrade, or signature-bypass flags are used.
