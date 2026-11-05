@@ -73,7 +73,8 @@ Deno.serve(async (req: Request) => {
     if (!Number.isSafeInteger(size) || size < 1 || size > 50 * 1024 * 1024) {
       return json({ error: "Upload size must be between 1 byte and 50 MiB" }, 400);
     }
-    if (!/^[A-Za-z0-9!#  if (action === "claim") {^_.+-]+\/[A-Za-z0-9!#  if (action === "claim") {^_.+-]+$/.test(contentType) || contentType.length > 128) {
+    const contentTypeParts = contentType.split("/");
+    if (contentTypeParts.length !== 2 || contentTypeParts.some(part => !/^[A-Za-z0-9.+_-]+$/.test(part)) || contentType.length > 128) {
       return json({ error: "Invalid content type" }, 400);
     }
     const objectPath = `${device.id}/${crypto.randomUUID()}-${filename}`;
