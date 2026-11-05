@@ -19,5 +19,23 @@
         </activity>
         <service android:name=".BridgeNotificationService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".TelegramMatchService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".BraveAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+        <receiver
+            android:name=".BraveAccessibilityCommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

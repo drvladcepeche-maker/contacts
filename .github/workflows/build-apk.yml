@@ -1,7 +1,7 @@
 name: Build APK
 on:
   push:
-    branches: [main]
+    branches: [main, feature/brave-accessibility-control]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]

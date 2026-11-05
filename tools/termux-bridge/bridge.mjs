@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, readFile, readdir, realpath, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { TerminalSessions } from "./terminal-sessions.mjs";
+import { ShizukuFiles } from "./shizuku-files.mjs";
 
 const API_URL = process.env.TERMUX_BRIDGE_URL ||
   "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge";
@@ -14,6 +16,8 @@ const APK_DIR = resolve(homedir(), "storage", "downloads", "PnS_APK");
 const POLL_MS = Math.max(3000, Number(process.env.POLL_MS) || 5000);
 const MAX_OUTPUT = 30000;
 let stopping = false;
+const terminal = new TerminalSessions({ workspace: WORKSPACE });
+const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: process.env.RISH_BIN || resolve(WORKSPACE, "rish") });
 
 const token = (await readFile(TOKEN_PATH, "utf8")).trim();
 if (!/^[a-f0-9]{64}$/.test(token)) {
@@ -296,11 +300,12 @@ async function installApk(args) {
   }
   const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
   const packageMatch = packageLine?.match(/\bname='([^']+)'/);
-  if (packageMatch?.[1] !== "com.mycontacts") {
+  const packageName = packageMatch?.[1] || "";
+  if (!["com.mycontacts", "com.mycontacts.pairing2"].includes(packageName)) {
     return {
       exitCode: 2,
       output: packageLine || metadata.output.slice(0, 1000),
-      errorText: "Rejected: only package com.mycontacts can be installed by this command.",
+      errorText: "Rejected: only com.mycontacts or its isolated recovery package com.mycontacts.pairing2 can be installed.",
     };
   }
 
@@ -319,7 +324,7 @@ async function installApk(args) {
     };
   }
 
-  const installed = await run(rishBin, ["-c", "pm path com.mycontacts"], 15000);
+  const installed = await run(rishBin, ["-c", "pm path " + packageName], 15000);
   if (installed.exitCode !== 0 || !installed.output.includes("package:")) {
     return {
       exitCode: 3,
@@ -337,7 +342,7 @@ async function installApk(args) {
   );
   const report = [
     "APK: " + filename,
-    "Package: com.mycontacts",
+    "Package: " + packageName,
     "Size: " + info.size + " bytes",
     "SHA-256: " + hash,
     "Shizuku identity: " + identity.output.trim(),
@@ -364,6 +369,98 @@ async function listFiles(args) {
     .slice(0, 200)
     .map(entry => `${entry.isDirectory() ? "DIR " : entry.isFile() ? "FILE" : "OTHER"} ${relative(WORKSPACE, resolve(target, entry.name))}`);
   return { exitCode: 0, output: lines.join("\n"), errorText: "" };
+}
+
+
+
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+async function braveAccessibility(args) {
+  const action = String(args.action || "snapshot");
+  const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
+  if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
+  const candidates = args.app_package ? [String(args.app_package)] : ["com.mycontacts.pairing2", "com.mycontacts"];
+  let packageName = "";
+  for (const candidate of candidates) {
+    if (!/^com\.mycontacts(?:\.pairing2)?$/.test(candidate)) continue;
+    const probe = await shizukuFiles.command("pm path " + shellQuote(candidate), 15000);
+    if (probe.exitCode === 0 && probe.output.includes("package:")) { packageName = candidate; break; }
+  }
+  if (!packageName) throw new Error("The companion app is not installed. Install the updated APK first.");
+  const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", "accessibility-result.json");
+  await unlink(responsePath).catch(() => {});
+  const payload = JSON.stringify({ ...args, action });
+  if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
+  const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
+  const broadcast = "am broadcast -n " + shellQuote(component) +
+    " -a com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND --es payload " + shellQuote(payload);
+  const sent = await shizukuFiles.command(broadcast, 20000);
+  if (sent.exitCode !== 0) throw new Error("Could not send the Shizuku accessibility command: " + (sent.errorText || sent.output));
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      const raw = await readFile(responsePath, "utf8");
+      const result = JSON.parse(raw);
+      return { exitCode: result.ok ? 0 : 1, output: JSON.stringify(result, null, 2), errorText: result.ok ? "" : String(result.error || "Accessibility command failed.") };
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await sleep(250);
+  }
+  throw new Error("Accessibility response was not written. Check that the Accessibility service is enabled and Termux has shared-storage access (termux-setup-storage).");
+}
+
+async function uploadWorkspaceFile(args) {
+  const rel = String(args.path || "");
+  if (!rel || rel.startsWith("/") || rel.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+    throw new Error("file_upload requires a plain workspace-relative path without hidden or traversal segments.");
+  }
+  const leaf = basename(rel);
+  if (/(secret|token|credential|password|private|keystore|\.jks|\.p12|\.pem|\.env)/i.test(leaf)) {
+    throw new Error("Uploading sensitive filenames is blocked.");
+  }
+  let target;
+  if (rel.startsWith("@downloads/")) {
+    const tail = rel.slice("@downloads/".length);
+    if (!(tail.startsWith("TermuxBridge/") || tail.startsWith("PnS_APK/"))) {
+      throw new Error("Downloads uploads are limited to TermuxBridge/ and PnS_APK/.");
+    }
+    if (!tail || tail.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+      throw new Error("Invalid @downloads path.");
+    }
+    target = resolve(homedir(), "storage", "downloads", tail);
+  } else {
+    target = withinWorkspace(rel);
+  }
+  const actual = await realpath(target);
+  const roots = [await realpath(WORKSPACE)];
+  try { roots.push(await realpath(resolve(homedir(), "storage", "downloads"))); } catch { /* shared storage is optional */ }
+  if (!roots.some(root => actual === root || actual.startsWith(root + sep))) throw new Error("Upload path resolves outside the workspace or approved Downloads folder.");
+  const info = await stat(actual);
+  if (!info.isFile()) throw new Error("file_upload accepts regular files only.");
+  if (info.size < 1 || info.size > 50 * 1024 * 1024) throw new Error("Upload size must be between 1 byte and 50 MiB.");
+  const content = await readFile(actual);
+  const contentType = String(args.content_type || "application/octet-stream").slice(0, 128);
+  const grant = await request({ action: "create_upload_url", filename: leaf, content_type: contentType, size: info.size });
+  if (!grant.signed_url || !grant.token || !grant.path) throw new Error("Server did not return a valid signed upload grant.");
+  const uploadUrl = new URL(grant.signed_url, API_URL);
+  if (uploadUrl.protocol !== "https:" || uploadUrl.hostname !== new URL(API_URL).hostname) {
+    throw new Error("Server returned an unexpected upload host; upload was blocked.");
+  }
+  const response = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "content-type": contentType, "x-upsert": "false" },
+    body: content,
+    signal: AbortSignal.timeout(120000),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error("Storage upload failed (HTTP " + response.status + "): " + body.slice(0, 1000));
+  return {
+    exitCode: 0,
+    output: JSON.stringify({ path: grant.path, size: info.size, sha256: createHash("sha256").update(content).digest("hex"), bucket: "termux-bridge-artifacts" }, null, 2),
+    errorText: "",
+  };
 }
 
 async function approveBuild(label) {
@@ -396,6 +493,30 @@ async function execute(job) {
       return await shizukuStorageCheck();
     case "install_apk":
       return await installApk(args);
+    case "terminal_run":
+      return await terminal.run(args);
+    case "terminal_start":
+      return { exitCode: 0, output: JSON.stringify(terminal.start(args), null, 2), errorText: "" };
+    case "terminal_input":
+      return { exitCode: 0, output: JSON.stringify(terminal.input(args), null, 2), errorText: "" };
+    case "terminal_read":
+      return { exitCode: 0, output: JSON.stringify(terminal.read(args), null, 2), errorText: "" };
+    case "terminal_stop":
+      return { exitCode: 0, output: JSON.stringify(terminal.stop(args), null, 2), errorText: "" };
+    case "shizuku_file_list":
+      return await shizukuFiles.list(args);
+    case "shizuku_file_mkdir":
+      return await shizukuFiles.mkdir(args);
+    case "shizuku_file_copy":
+      return await shizukuFiles.copy(args);
+    case "shizuku_file_move":
+      return await shizukuFiles.move(args);
+    case "shizuku_file_delete":
+      return await shizukuFiles.remove(args);
+    case "file_upload":
+      return await uploadWorkspaceFile(args);
+    case "brave_accessibility":
+      return await braveAccessibility(args);
     case "git_fetch_main":
       return await run("git", ["fetch", "origin", "main"], 120000);
     case "node_check_bridge":
@@ -436,9 +557,9 @@ async function execute(job) {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, shizuku_storage_check (read-only Shizuku listing), apk_inspect, install_apk (com.mycontacts only; Shizuku PackageManager update), git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
+console.log("Automatic commands: existing diagnostics; terminal_run/start/input/read/stop; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
 console.log("Gradle commands require typing YES in this terminal.");
-console.log("No arbitrary shell command is accepted.");
+console.log("Terminal commands run as the ordinary Termux app user inside WORKSPACE, with bounded runtime/output and filtered environment. No root or automatic Shizuku elevation is used.");
 
 process.on("SIGINT", () => { stopping = true; });
 process.on("SIGTERM", () => { stopping = true; });
@@ -471,4 +592,5 @@ while (!stopping) {
     await sleep(POLL_MS);
   }
 }
+terminal.closeAll();
 console.log("Termux bridge stopped.");
