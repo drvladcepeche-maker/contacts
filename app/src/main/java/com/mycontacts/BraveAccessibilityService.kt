@@ -79,15 +79,14 @@ class BraveAccessibilityService : AccessibilityService() {
             startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage(TARGET_PACKAGE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return JSONObject().put("ok", true).put("action", action).put("url", raw)
         }
-        if (action == "back") {
-            val ok = performGlobalAction(GLOBAL_ACTION_BACK)
-            return JSONObject().put("ok", ok).put("action", action)
-        }
-
         val root = rootInActiveWindow ?: throw IllegalStateException("No active accessibility window. Open Brave and retry.")
         val packageName = root.packageName?.toString().orEmpty()
         if (packageName != TARGET_PACKAGE) {
             throw IllegalStateException("Active window is not Brave (active package: $packageName).")
+        }
+        if (action == "back") {
+            val ok = performGlobalAction(GLOBAL_ACTION_BACK)
+            return JSONObject().put("ok", ok).put("action", action)
         }
 
         return when (action) {
@@ -149,7 +148,7 @@ class BraveAccessibilityService : AccessibilityService() {
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.add(root to 0)
         var visited = 0
-        while (queue.isNotEmpty() && visited < 350) {
+        while (queue.isNotEmpty() && visited < 100) {
             val (node, depth) = queue.removeFirst()
             visited++
             val bounds = Rect()
@@ -157,7 +156,7 @@ class BraveAccessibilityService : AccessibilityService() {
             result.put(JSONObject()
                 .put("depth", depth)
                 .put("class", node.className?.toString().orEmpty())
-                .put("text", node.text?.toString()?.take(500) ?: "")
+                .put("text", node.text?.toString()?.take(180) ?: "")
                 .put("description", node.contentDescription?.toString()?.take(500) ?: "")
                 .put("view_id", node.viewIdResourceName ?: "")
                 .put("clickable", node.isClickable)
