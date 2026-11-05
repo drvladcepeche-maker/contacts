@@ -8,7 +8,7 @@ on:
       - "supabase/migrations/*termux*"
       - ".github/workflows/termux-bridge-check.yml"
   push:
-    branches: [main]
+    branches: [main, feature/brave-accessibility-control]
     paths:
       - "tools/termux-bridge/**"
       - "supabase/functions/termux-bridge/**"
