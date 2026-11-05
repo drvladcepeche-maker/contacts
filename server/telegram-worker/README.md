@@ -5,6 +5,7 @@ A standalone Node.js MTProto worker for Hostless. It resolves phone numbers alre
 ## Behaviour
 
 - Calls `contacts.resolvePhone` one phone number at a time.
+- Reads GramJS `Api.User.usernames` entries, keeps active usernames, and also includes the legacy primary username; stores distinct values joined with comma + space.
 - Enforces a minimum 5-second interval between Telegram lookup requests, plus random additive jitter (default 0–3 seconds).
 - On Telegram FloodWait, stops processing the current job and re-queues it with `paused_until` set beyond the server-specified wait.
 - Persists each result and progress to Supabase immediately; a restarted worker resumes at the first unprocessed candidate.
@@ -73,7 +74,7 @@ This workflow does not require a laptop. Use the official Termux app and keep th
 
 ## GitHub Actions runtime (no separate worker host)
 
-The scheduled workflow processes up to 250 phone candidates per run, saves progress, and resumes on a later run. It runs every five minutes only when enabled.
+The scheduled workflow checks queue readiness every 10 minutes. A lightweight Supabase precheck avoids installing and building the worker unless a queued job is due or a stale `running` job needs recovery. Each worker run processes up to 20 phone candidates, saves progress, and sets `paused_until` to 60 minutes after the last Telegram lookup request. This cooldown is deliberately conservative: live `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a reported wait of about 58 minutes. The 10-minute checks resume the queue shortly after the cooldown expires. The run timeout is 20 minutes and overlapping runs are not cancelled.
 
 1. In repository Settings → Secrets and variables → Actions, add the four secrets listed above.
 2. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
