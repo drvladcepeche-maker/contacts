@@ -157,7 +157,7 @@ class BraveAccessibilityService : AccessibilityService() {
                 .put("depth", depth)
                 .put("class", node.className?.toString().orEmpty())
                 .put("text", node.text?.toString()?.take(180) ?: "")
-                .put("description", node.contentDescription?.toString()?.take(500) ?: "")
+                .put("description", node.contentDescription?.toString()?.take(180) ?: "")
                 .put("view_id", node.viewIdResourceName ?: "")
                 .put("clickable", node.isClickable)
                 .put("editable", node.isEditable)
