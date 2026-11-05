@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.os.Process
 import org.json.JSONObject
 
 class BraveAccessibilityCommandReceiver : BroadcastReceiver() {
@@ -22,9 +21,10 @@ class BraveAccessibilityCommandReceiver : BroadcastReceiver() {
         }
 
         try {
+            result.put("response_file", "Download/TermuxBridge/accessibility-result.json")
             BraveAccessibilityService.writeResponse(context, result)
         } catch (_: Exception) {
-            // The shell caller will still receive the broadcast's completion status.
+            // The bridge reports a missing response file as a storage/accessibility setup error.
         }
     }
 }
