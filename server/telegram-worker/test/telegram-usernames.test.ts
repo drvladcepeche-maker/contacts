@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "../src/telegram-usernames.js";
+import { calculateBatchResumeAt } from "../src/rate-limit.js";
 
 test("extracts active GramJS usernames and the legacy primary username", () => {
   assert.equal(extractTelegramUsernames({
@@ -35,4 +36,18 @@ test("does not carry usernames across different Telegram IDs", () => {
 
 test("does not preserve stale usernames when the Telegram ID is missing", () => {
   assert.equal(mergeTelegramUsernames("123", "", "old_alias", null), null);
+});
+
+test("batch cooldown is measured from the last Telegram request", () => {
+  assert.equal(
+    calculateBatchResumeAt("2026-11-05T17:59:18.951Z", 0),
+    "2026-11-05T18:59:18.951Z",
+  );
+});
+
+test("invalid-only batches use a short fallback pause", () => {
+  assert.equal(
+    calculateBatchResumeAt(null, 1000),
+    "1970-01-01T00:01:01.000Z",
+  );
 });
