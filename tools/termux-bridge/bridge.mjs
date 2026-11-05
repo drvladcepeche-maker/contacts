@@ -300,11 +300,12 @@ async function installApk(args) {
   }
   const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
   const packageMatch = packageLine?.match(/\bname='([^']+)'/);
-  if (packageMatch?.[1] !== "com.mycontacts") {
+  const packageName = packageMatch?.[1] || "";
+  if (!["com.mycontacts", "com.mycontacts.pairing2"].includes(packageName)) {
     return {
       exitCode: 2,
       output: packageLine || metadata.output.slice(0, 1000),
-      errorText: "Rejected: only package com.mycontacts can be installed by this command.",
+      errorText: "Rejected: only com.mycontacts or its isolated recovery package com.mycontacts.pairing2 can be installed.",
     };
   }
 
@@ -323,7 +324,7 @@ async function installApk(args) {
     };
   }
 
-  const installed = await run(rishBin, ["-c", "pm path com.mycontacts"], 15000);
+  const installed = await run(rishBin, ["-c", "pm path " + packageName], 15000);
   if (installed.exitCode !== 0 || !installed.output.includes("package:")) {
     return {
       exitCode: 3,
@@ -341,7 +342,7 @@ async function installApk(args) {
   );
   const report = [
     "APK: " + filename,
-    "Package: com.mycontacts",
+    "Package: " + packageName,
     "Size: " + info.size + " bytes",
     "SHA-256: " + hash,
     "Shizuku identity: " + identity.output.trim(),
