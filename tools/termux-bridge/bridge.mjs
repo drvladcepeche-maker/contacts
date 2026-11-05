@@ -383,7 +383,7 @@ async function braveAccessibility(args) {
   const candidates = args.app_package ? [String(args.app_package)] : ["com.mycontacts.pairing2", "com.mycontacts"];
   let packageName = "";
   for (const candidate of candidates) {
-    if (!/^com\\.mycontacts(?:\\.pairing2)?$/.test(candidate)) continue;
+    if (!/^com\.mycontacts(?:\.pairing2)?$/.test(candidate)) continue;
     const probe = await shizukuFiles.command("pm path " + shellQuote(candidate), 15000);
     if (probe.exitCode === 0 && probe.output.includes("package:")) { packageName = candidate; break; }
   }
