@@ -62,6 +62,36 @@ Deno.serve(async (req: Request) => {
 
   if (action === "heartbeat") return json({ ok: true, device_id: device.id });
 
+
+  if (action === "create_upload_url") {
+    const filename = String(body.filename ?? "");
+    const size = Number(body.size);
+    const contentType = String(body.content_type ?? "application/octet-stream");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(filename) || filename === "." || filename === "..") {
+      return json({ error: "Invalid upload filename" }, 400);
+    }
+    if (!Number.isSafeInteger(size) || size < 1 || size > 50 * 1024 * 1024) {
+      return json({ error: "Upload size must be between 1 byte and 50 MiB" }, 400);
+    }
+    if (!/^[A-Za-z0-9!#  if (action === "claim") {^_.+-]+\/[A-Za-z0-9!#  if (action === "claim") {^_.+-]+$/.test(contentType) || contentType.length > 128) {
+      return json({ error: "Invalid content type" }, 400);
+    }
+    const objectPath = `${device.id}/${crypto.randomUUID()}-${filename}`;
+    const { data, error } = await supabase.storage
+      .from("termux-bridge-artifacts")
+      .createSignedUploadUrl(objectPath, { upsert: false });
+    if (error || !data?.signedUrl || !data?.token) {
+      return json({ error: "Could not create a private upload grant" }, 500);
+    }
+    return json({
+      path: objectPath,
+      token: data.token,
+      signed_url: data.signedUrl,
+      bucket: "termux-bridge-artifacts",
+      expires_in: 7200,
+    });
+  }
+
   if (action === "claim") {
     const { data, error } = await supabase.rpc("claim_termux_bridge_job", {
       p_device_id: device.id,
