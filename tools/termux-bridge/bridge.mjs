@@ -423,6 +423,9 @@ async function uploadWorkspaceFile(args) {
   let target;
   if (rel.startsWith("@downloads/")) {
     const tail = rel.slice("@downloads/".length);
+    if (!(tail.startsWith("TermuxBridge/") || tail.startsWith("PnS_APK/"))) {
+      throw new Error("Downloads uploads are limited to TermuxBridge/ and PnS_APK/.");
+    }
     if (!tail || tail.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
       throw new Error("Invalid @downloads path.");
     }
