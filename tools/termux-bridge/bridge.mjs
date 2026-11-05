@@ -286,11 +286,11 @@ async function installApk(args) {
   const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
   const packageMatch = packageLine?.match(/\bname='([^']+)'/);
   const packageName = packageMatch?.[1] || "";
-  if (!["com.mycontacts", "com.mycontacts.pairing2"].includes(packageName)) {
+  if (!["com.mycontacts", "com.mycontacts.pairing2", "com.mycontacts.bridgefix4"].includes(packageName)) {
     return {
       exitCode: 2,
       output: packageLine || metadata.output.slice(0, 1000),
-      errorText: "Rejected: only com.mycontacts or its isolated recovery package com.mycontacts.pairing2 can be installed.",
+      errorText: "Rejected: only com.mycontacts, com.mycontacts.pairing2, or isolated recovery package com.mycontacts.bridgefix4 can be installed.",
     };
   }
 
@@ -362,14 +362,12 @@ async function braveAccessibility(args) {
   const action = String(args.action || "snapshot");
   const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
   if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
-  const candidates = args.app_package ? [String(args.app_package)] : ["com.mycontacts.pairing2", "com.mycontacts"];
-  let packageName = "";
-  for (const candidate of candidates) {
-    if (!/^com\.mycontacts(?:\.pairing2)?$/.test(candidate)) continue;
-    const probe = await run("pm", ["path", candidate], 15000);
-    if (probe.exitCode === 0 && probe.output.includes("package:")) { packageName = candidate; break; }
+  // Termux's app UID cannot reliably query PackageManager on some Android builds.
+  // Target the dedicated recovery package directly; the receiver validates the sender UID.
+  const packageName = String(args.app_package || "com.mycontacts.bridgefix4");
+  if (!["com.mycontacts.bridgefix4", "com.mycontacts.pairing2", "com.mycontacts"].includes(packageName)) {
+    throw new Error("Rejected companion package. Only approved My Contacts package IDs are allowed.");
   }
-  if (!packageName) throw new Error("The companion app is not installed. Install the updated APK first.");
   const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", "accessibility-result.json");
   await unlink(responsePath).catch(() => {});
   const payload = JSON.stringify({ ...args, action });
