@@ -35,14 +35,16 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          if ! response="$(curl -fsS --get \\
-            --header "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \\
-            --header "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \\
-            --data-urlencode "select=id" \\
-            --data-urlencode "status=eq.queued" \\
-            --data-urlencode "or=(paused_until.is.null,paused_until.lt.${now})" \\
-            --data-urlencode "limit=1" \\
-            "${SUPABASE_URL}/rest/v1/telegram_match_jobs")"; then
+          curl_args=(
+            --get
+            --header "apikey: ${SUPABASE_SERVICE_ROLE_KEY}"
+            --header "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}"
+            --data-urlencode "select=id"
+            --data-urlencode "status=eq.queued"
+            --data-urlencode "or=(paused_until.is.null,paused_until.lt.${now})"
+            --data-urlencode "limit=1"
+          )
+          if ! response="$(curl -fsS "${curl_args[@]}" "${SUPABASE_URL}/rest/v1/telegram_match_jobs")"; then
             echo "Queue precheck failed; falling back to the worker's own claim check."
             echo "ready=true" >> "$GITHUB_OUTPUT"
             exit 0
