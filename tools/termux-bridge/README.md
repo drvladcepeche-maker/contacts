@@ -66,38 +66,25 @@ Start the worker:
 
 Keep the Termux session alive and exempt Termux from battery optimization if continuous access is required.
 
-## Example queue payloads
+## Safe Brave command interface
 
-Insert a job into public.termux_bridge_jobs for the registered device. Example payloads:
+Do not insert Brave jobs directly into the database. Use the authenticated, allowlisted Edge Function interface through the local CLI.
 
-    {"command":"git status --short --branch","cwd":"."}
+Keep the normal worker running in one Termux session:
 
-Use this with command_type=terminal_run.
+    cd ~/contacts
+    node tools/termux-bridge/bridge.mjs
 
-For a persistent Python prompt:
-- terminal_start: {"command":"python -u -i"}
-- terminal_input: {"session_id":"<returned-session-id>","input":"print(1 + 1)\n"}
-- terminal_read: {"session_id":"<returned-session-id>"}
-- terminal_stop: {"session_id":"<returned-session-id>"}
+In a second Termux session, run one of the supported one-shot commands:
 
-For a file upload:
-- Workspace file: {"path":"relative/path/report.zip"}
-- Downloads artifact: {"path":"@downloads/TermuxBridge/report.zip"}
-- APK: {"path":"@downloads/PnS_APK/app-debug.apk"}
+    cd ~/contacts
+    node tools/termux-bridge/bridge.mjs brave snapshot
+    node tools/termux-bridge/bridge.mjs brave back
+    node tools/termux-bridge/bridge.mjs brave open_url https://www.reg.ru/
 
-For Shizuku file operations, create the dedicated folders first:
-- shizuku_file_mkdir: {"path":"/sdcard/Download/TermuxBridge"}
-- shizuku_file_list: {"path":"/sdcard/Download/TermuxBridge"}
+The one-shot command queues exactly one approved action, polls the authenticated status endpoint for that device's own job, prints the result, and exits. The server permits only snapshot, back, and the exact public URL https://www.reg.ru/. It rejects arbitrary URLs and other Brave actions. If the command times out, leave the worker running and inspect the worker session before retrying; do not queue duplicate commands while one is pending.
 
-For Brave:
-- Snapshot: {"action":"snapshot"}
-- Click: {"action":"click","text":"Sign in"}
-- Input: {"action":"input","view_id":"com.brave.browser:id/url_bar","value":"https://example.com"}
-- Scroll: {"action":"scroll","direction":"down"}
-- Back: {"action":"back"}
-- Open URL: {"action":"open_url","url":"https://example.com"}
-
-Install the com.mycontacts.bridgefix4 recovery APK alongside older companion variants, then manually enable Settings → Accessibility → Installed apps → Мои контакты — привязка. The service is configured to observe Brave only.
+The status endpoint requires the same registered device token and filters by both the authenticated device ID and command type. It returns only the matching job's status, output, error, and exit code.
 
 ## Build approval
 
