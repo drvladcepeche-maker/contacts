@@ -535,6 +535,57 @@ async function execute(job) {
   }
 }
 
+async function runBraveCli(argv) {
+  const command = String(argv[0] || "");
+  let body;
+
+  if (command === "snapshot" || command === "back") {
+    if (argv.length !== 1) throw new Error("Usage: node tools/termux-bridge/bridge.mjs brave snapshot|back");
+    body = { action: "enqueue_brave", brave_action: command };
+  } else if (command === "open_url") {
+    if (argv.length !== 2 || argv[1] !== "https://www.reg.ru/") {
+      throw new Error("Only this exact URL is allowed: https://www.reg.ru/");
+    }
+    body = { action: "enqueue_brave", brave_action: "open_url", url: "https://www.reg.ru/" };
+  } else {
+    throw new Error("Allowed commands: brave snapshot, brave back, brave open_url https://www.reg.ru/");
+  }
+
+  const queued = await request(body);
+  const jobId = queued?.job?.id;
+  if (!queued?.ok || !/^[0-9a-f-]{36}$/i.test(String(jobId || ""))) {
+    throw new Error("Server did not return a valid queued Brave job.");
+  }
+  console.log("Queued Brave command:", jobId);
+
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    const status = await requestOnce({ action: "brave_status", job_id: jobId });
+    const job = status?.job;
+    if (!job) throw new Error("Server did not return the Brave job status.");
+    if (job.status === "succeeded" || job.status === "failed") {
+      if (job.output) console.log(job.output);
+      if (job.error_text) console.error(job.error_text);
+      process.exitCode = Number.isInteger(job.exit_code) ? job.exit_code : (job.status === "succeeded" ? 0 : 1);
+      return;
+    }
+    if (job.status !== "queued" && job.status !== "running") {
+      throw new Error("Unexpected Brave job status: " + String(job.status));
+    }
+    await sleep(1500);
+  }
+  throw new Error("Timed out waiting for the phone worker. Keep the normal bridge worker running in another Termux session; job " + jobId + " may still finish.");
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs[0] === "brave") {
+  try {
+    await runBraveCli(cliArgs.slice(1));
+  } catch (error) {
+    console.error("Brave command failed:", String(error?.message || error));
+    process.exitCode = 1;
+  }
+} else {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
@@ -607,3 +658,5 @@ while (!stopping) {
 }
 terminal.closeAll();
 console.log("Termux bridge stopped.");
+
+}
