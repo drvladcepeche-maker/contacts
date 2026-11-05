@@ -77,7 +77,7 @@ async function requestViaCurlOnce(body) {
   if (status < 200 || status >= 300) throw makeHttpError(status, data);
   return data;
 }
-async function requestOnce(body) {
+async function requestOnce(body, allowFallback = true) {
   try {
     const response = await fetch(API_URL, {
       method: "POST",
@@ -91,21 +91,23 @@ async function requestOnce(body) {
     if (!response.ok) throw makeHttpError(response.status, data);
     return data;
   } catch (error) {
-    if (Number.isInteger(error?.status)) throw error;
+    if (Number.isInteger(error?.status) || !allowFallback) throw error;
     const reason = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 240);
     console.error("Node fetch transport failed; trying curl for this request: " + reason);
     return await requestViaCurlOnce(body);
   }
 }
 async function request(body) {
-  const maxAttempts = 5;
+  // Only claim/complete have server-side idempotency keys; never replay upload-grant creation.
+  const retrySafe = body.action === "claim" || body.action === "complete";
+  const maxAttempts = retrySafe ? 5 : 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const data = await requestOnce(body);
+      const data = await requestOnce(body, retrySafe);
       if (attempt > 1) console.error("Bridge request recovered on attempt " + attempt + "/" + maxAttempts + ".");
       return data;
     } catch (error) {
-      if (!transientTransportError(error) || attempt === maxAttempts) throw error;
+      if (!retrySafe || !transientTransportError(error) || attempt === maxAttempts) throw error;
       const delayMs = Math.min(8000, 750 * (2 ** (attempt - 1)));
       const detail = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 300);
       console.error("Transient bridge failure on attempt " + attempt + "/" + maxAttempts + ": " + detail + "; retrying in " + delayMs + " ms.");
