@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { access, readFile, readdir, realpath, stat, unlink } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
