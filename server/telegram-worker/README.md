@@ -74,7 +74,7 @@ This workflow does not require a laptop. Use the official Termux app and keep th
 
 ## GitHub Actions runtime (no separate worker host)
 
-The scheduled workflow processes up to 20 phone candidates per run, saves progress, and resumes on a later run. It runs hourly at minute 18 only when enabled, leaving a buffer beyond the observed cooldown plus the time needed to process a batch. The 20-candidate limit is deliberately conservative: observed Telegram `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a cooldown of about 58 minutes. The hourly schedule leaves a margin after that cooldown. The run timeout is 20 minutes and overlapping runs are not cancelled.
+The scheduled workflow processes up to 20 phone candidates per run, saves progress, and resumes on a later run. It runs hourly at minute 20 only when enabled, leaving a buffer beyond the observed cooldown plus the time needed to process a batch. The 20-candidate limit is deliberately conservative: observed Telegram `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a cooldown of about 58 minutes. The hourly schedule leaves a margin after that cooldown. The run timeout is 20 minutes and overlapping runs are not cancelled.
 
 1. In repository Settings → Secrets and variables → Actions, add the four secrets listed above.
 2. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
