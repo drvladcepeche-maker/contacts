@@ -63,8 +63,13 @@ Deno.serve(async (req: Request) => {
   if (action === "heartbeat") return json({ ok: true, device_id: device.id });
 
   if (action === "claim") {
+    const claimToken = String(body.claim_token ?? "");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claimToken)) {
+      return json({ error: "Invalid claim_token" }, 400);
+    }
     const { data, error } = await supabase.rpc("claim_termux_bridge_job", {
       p_device_id: device.id,
+      p_claim_token: claimToken,
     });
     if (error) return json({ error: "Could not claim command" }, 500);
     const job = Array.isArray(data) ? (data[0] ?? null) : data;
@@ -94,8 +99,24 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (error) return json({ error: "Could not save command result" }, 500);
-    if (!data) return json({ error: "Command not found or not running for this device" }, 404);
-    return json({ ok: true });
+    if (data) return json({ ok: true });
+
+    // A previous completion may have committed even when its HTTP response was lost.
+    // Accept an exact replay, but never overwrite a terminal or conflicting result.
+    const { data: existing, error: readError } = await supabase
+      .from("termux_bridge_jobs")
+      .select("status, output, error_text, exit_code")
+      .eq("id", id)
+      .eq("device_id", device.id)
+      .maybeSingle();
+    if (readError) return json({ error: "Could not verify command completion" }, 500);
+    const sameResult = existing &&
+      existing.status === patch.status &&
+      (existing.output ?? "") === patch.output &&
+      (existing.error_text ?? null) === patch.error_text &&
+      existing.exit_code === patch.exit_code;
+    if (sameResult) return json({ ok: true, already_completed: true });
+    return json({ error: "Command not found, not running, or has a conflicting result" }, 409);
   }
 
   return json({ error: "Unsupported action" }, 400);
