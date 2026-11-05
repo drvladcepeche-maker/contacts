@@ -16,10 +16,7 @@ class BraveAccessibilityCommandReceiver : BroadcastReceiver() {
             val raw = intent.getStringExtra("payload") ?: "{}"
             require(raw.length <= 12000) { "Command payload is too large." }
             val payload = JSONObject(raw)
-            val output = BraveAccessibilityService.executeFromShell(context, payload)
-            val path = BraveAccessibilityService.writeResponse(context, output)
-            output.put("response_file", path)
-            output
+            BraveAccessibilityService.executeFromShell(context, payload)
         } catch (error: Exception) {
             JSONObject().put("ok", false).put("error", error.message ?: "Accessibility command failed.")
         }
