@@ -552,7 +552,7 @@ async function runBraveCli(argv) {
   }
 
   const queued = await request(body);
-  const jobId = queued?.job?.id;
+  const jobId = queued?.job_id ?? queued?.job?.id;
   if (!queued?.ok || !/^[0-9a-f-]{36}$/i.test(String(jobId || ""))) {
     throw new Error("Server did not return a valid queued Brave job.");
   }
