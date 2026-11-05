@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -8,7 +8,9 @@ import { createInterface } from "node:readline/promises";
 
 const API_URL = process.env.TERMUX_BRIDGE_URL ||
   "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge";
-const TOKEN_PATH = resolve(homedir(), ".config/termux-bridge/device-token");
+const STATE_DIR = resolve(homedir(), ".config/termux-bridge");
+const TOKEN_PATH = resolve(STATE_DIR, "device-token");
+const STATE_PATH = resolve(STATE_DIR, "bridge-state.json");
 const WORKSPACE = resolve(process.env.WORKSPACE || process.cwd());
 const APK_DIR = resolve(homedir(), "storage", "downloads", "PnS_APK");
 const POLL_MS = Math.max(3000, Number(process.env.POLL_MS) || 5000);
@@ -26,125 +28,106 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-function curlConfigQuote(value) {
-  return '"' + String(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\n") + '"';
+function transientTransportError(error) {
+  if (Number.isInteger(error?.status)) return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  return /Bridge (?:fetch|curl) transport failed|AbortError|timed out|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|TLS connect error|unexpected eof while reading|curl fallback failed \(exit (?:5|6|7|18|28|35|52|55|56|92)\)/i.test(String(error?.message || error));
 }
-
+function makeHttpError(status, data) {
+  const error = new Error(data?.error || ("Bridge HTTP " + status));
+  error.status = status;
+  return error;
+}
+function curlConfigQuote(value) {
+  return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n") + '"';
+}
 async function requestViaCurlOnce(body) {
-  const payload = JSON.stringify(body);
-  const marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
+  const payload = JSON.stringify(body), marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
   const config = [
-    `url = ${curlConfigQuote(API_URL)}`,
-    'request = "POST"',
-    `header = ${curlConfigQuote("content-type: application/json")}`,
-    `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
-    `data = ${curlConfigQuote(payload)}`,
-    `max-time = "20"`,
+    "url = " + curlConfigQuote(API_URL), 'request = "POST"',
+    "header = " + curlConfigQuote("content-type: application/json"),
+    "header = " + curlConfigQuote("authorization: Bearer " + token),
+    "data = " + curlConfigQuote(payload), 'connect-timeout = "10"', 'max-time = "20"',
   ].join("\n") + "\n";
-
   const result = await new Promise((resolveRun) => {
-    const child = spawn("curl", [
-      "--silent", "--show-error", "--ipv4", "--http1.1",
-      "--connect-timeout", "10", "--max-time", "20",
-      "--write-out", "\n" + marker + "%{http_code}", "--config", "-"
-    ], {
-      cwd: WORKSPACE,
-      shell: false,
-      env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined },
-      stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn("curl", ["--silent", "--show-error", "--ipv4", "--http1.1", "--connect-timeout", "10", "--max-time", "20", "--write-out", "\n" + marker + "%{http_code}", "--config", "-"], {
+      cwd: WORKSPACE, shell: false, env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined }, stdio: ["pipe", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
+    let stdout = "", stderr = "", settled = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), 22000);
     child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-MAX_OUTPUT - 128); });
     child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    child.on("error", error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveRun({ code: 127, stdout, stderr: error.message });
-    });
-    child.on("close", code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveRun({ code: Number.isInteger(code) ? code : 1, stdout, stderr });
-    });
+    child.on("error", error => { if (settled) return; settled = true; clearTimeout(timer); resolveRun({ code: 127, stdout, stderr: error.message }); });
+    child.on("close", code => { if (settled) return; settled = true; clearTimeout(timer); resolveRun({ code: Number.isInteger(code) ? code : 1, stdout, stderr }); });
     child.stdin.end(config);
   });
-
   const markerAt = result.stdout.lastIndexOf(marker);
   if (result.code !== 0 || markerAt < 0) {
-    throw new Error(`Bridge curl fallback failed (exit ${result.code}): ${result.stderr || "no HTTP status received"}`);
+    const error = new Error("Bridge curl transport failed (exit " + result.code + "): " + (result.stderr || "no HTTP status received"));
+    error.transport = true; throw error;
   }
   const responseText = result.stdout.slice(0, markerAt).replace(/\n$/, "");
-  const statusText = result.stdout.slice(markerAt + marker.length).trim();
-  const status = Number(statusText);
+  const status = Number(result.stdout.slice(markerAt + marker.length).trim());
   let data;
   try { data = responseText ? JSON.parse(responseText) : {}; }
-  catch { throw new Error(`Bridge returned invalid JSON (HTTP ${status})`); }
-  if (status < 200 || status >= 300) throw new Error(data.error || `Bridge HTTP ${status}`);
+  catch { throw new Error("Bridge returned invalid JSON (HTTP " + status + ")"); }
+  if (status < 200 || status >= 300) throw makeHttpError(status, data);
   return data;
 }
-
-async function requestViaCurl(body) {
+async function requestOnce(body) {
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(20000),
+    });
+    const responseText = await response.text();
+    let data;
+    try { data = responseText ? JSON.parse(responseText) : {}; }
+    catch { throw new Error("Bridge returned invalid JSON (HTTP " + response.status + ")"); }
+    if (!response.ok) throw makeHttpError(response.status, data);
+    return data;
+  } catch (error) {
+    if (Number.isInteger(error?.status)) throw error;
+    const reason = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 240);
+    console.error("Node fetch transport failed; trying curl for this request: " + reason);
+    return await requestViaCurlOnce(body);
+  }
+}
+async function request(body) {
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const data = await requestViaCurlOnce(body);
-      if (attempt > 1) {
-        console.error(`Curl transport recovered on attempt ${attempt}/${maxAttempts}.`);
-      }
+      const data = await requestOnce(body);
+      if (attempt > 1) console.error("Bridge request recovered on attempt " + attempt + "/" + maxAttempts + ".");
       return data;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const transientTlsFailure =
-        /Bridge curl fallback failed \(exit 35\)/i.test(message) ||
-        /TLS connect error|unexpected eof while reading/i.test(message);
-      if (!transientTlsFailure || attempt >= maxAttempts) throw error;
-      const delayMs = Math.min(10000, 750 * (2 ** (attempt - 1)));
-      const detail = message.replace(/[\r\n]+/g, " ").slice(0, 300);
-      console.error(
-        `Transient TLS failure on attempt ${attempt}/${maxAttempts}: ${detail}; retrying in ${delayMs} ms.`
-      );
+      if (!transientTransportError(error) || attempt === maxAttempts) throw error;
+      const delayMs = Math.min(8000, 750 * (2 ** (attempt - 1)));
+      const detail = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 300);
+      console.error("Transient bridge failure on attempt " + attempt + "/" + maxAttempts + ": " + detail + "; retrying in " + delayMs + " ms.");
       await sleep(delayMs);
     }
   }
-  throw new Error("Curl transport exhausted its retry budget.");
+  throw new Error("Bridge request exhausted its retry budget.");
 }
-let preferCurlTransport = false;
-
-async function request(body) {
-  if (preferCurlTransport) return await requestViaCurl(body);
-  let response;
+async function loadBridgeState() {
+  await mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
   try {
-    response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20000),
-    });
+    const parsed = JSON.parse(await readFile(STATE_PATH, "utf8"));
+    if (!parsed || !/^[0-9a-f-]{36}$/i.test(parsed.claimToken || "")) throw new Error("Bridge state file has an invalid claim token; refusing to overwrite it.");
+    if (parsed.pending && (!parsed.pending.job || !/^[0-9a-f-]{36}$/i.test(parsed.pending.job.id || ""))) throw new Error("Bridge state file has an invalid pending job; refusing to overwrite it.");
+    return parsed;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    preferCurlTransport = true;
-    console.error(`Node fetch unavailable; using curl transport: ${reason}`);
-    return await requestViaCurl(body);
+    if (error?.code !== "ENOENT") throw error;
+    const initial = { claimToken: randomUUID(), pending: null };
+    await saveBridgeState(initial);
+    return initial;
   }
-
-  const text = await response.text();
-  let data;
-  try { data = text ? JSON.parse(text) : {}; }
-  catch { throw new Error(`Bridge returned invalid JSON (HTTP ${response.status})`); }
-  if (!response.ok) throw new Error(data.error || `Bridge HTTP ${response.status}`);
-  return data;
+}
+async function saveBridgeState(state) {
+  const temporaryPath = STATE_PATH + "." + process.pid + ".tmp";
+  await writeFile(temporaryPath, JSON.stringify(state), { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryPath, STATE_PATH);
 }
 
 function run(program, args, timeoutMs = 30000) {
@@ -443,29 +426,60 @@ console.log("No arbitrary shell command is accepted.");
 process.on("SIGINT", () => { stopping = true; });
 process.on("SIGTERM", () => { stopping = true; });
 
+let bridgeState = await loadBridgeState();
 while (!stopping) {
   try {
-    const response = await request({ action: "claim" });
-    const job = response.job;
-    if (!job) {
-      await sleep(POLL_MS);
+    if (!bridgeState.pending) {
+      const response = await request({ action: "claim", claim_token: bridgeState.claimToken });
+      if (!response.job) {
+        bridgeState.claimToken = randomUUID();
+        await saveBridgeState(bridgeState);
+        await sleep(POLL_MS);
+        continue;
+      }
+      bridgeState.pending = { job: response.job, phase: "claimed" };
+      await saveBridgeState(bridgeState);
+    }
+    const pending = bridgeState.pending;
+    if (pending.phase === "claimed" || pending.phase === "executing") {
+      pending.phase = "result";
+      pending.result = {
+        exitCode: 125, output: "",
+        errorText: "Bridge restarted while this job was in progress. Its execution outcome is unknown; the command was not automatically re-run.",
+      };
+      await saveBridgeState(bridgeState);
+    }
+    if (pending.phase === "result" && pending.result) {
+      await request({
+        action: "complete", job_id: pending.job.id,
+        output: String(pending.result.output || "").slice(0, MAX_OUTPUT),
+        error_text: String(pending.result.errorText || "").slice(0, 8000),
+        exit_code: Number.isInteger(pending.result.exitCode) ? pending.result.exitCode : 1,
+      });
+      console.log("Finished " + pending.job.id + " with exit code " + pending.result.exitCode);
+      bridgeState.pending = null;
+      bridgeState.claimToken = randomUUID();
+      await saveBridgeState(bridgeState);
       continue;
     }
-    console.log(`Received ${job.command_type} (${job.id})`);
-    let result;
-    try {
-      result = await execute(job);
-    } catch (error) {
-      result = { exitCode: 1, output: "", errorText: String(error?.message || error).slice(0, 8000) };
+    if (pending.phase === "claimed") {
+      pending.phase = "executing";
+      await saveBridgeState(bridgeState);
+      let result;
+      try {
+        console.log("Received " + pending.job.command_type + " (" + pending.job.id + ")");
+        result = await execute(pending.job);
+      } catch (error) {
+        result = { exitCode: 1, output: "", errorText: String(error?.message || error).slice(0, 8000) };
+      }
+      pending.result = {
+        exitCode: Number.isInteger(result.exitCode) ? result.exitCode : 1,
+        output: String(result.output || "").slice(0, MAX_OUTPUT),
+        errorText: String(result.errorText || "").slice(0, 8000),
+      };
+      pending.phase = "result";
+      await saveBridgeState(bridgeState);
     }
-    await request({
-      action: "complete",
-      job_id: job.id,
-      output: String(result.output || "").slice(0, MAX_OUTPUT),
-      error_text: String(result.errorText || "").slice(0, 8000),
-      exit_code: Number.isInteger(result.exitCode) ? result.exitCode : 1,
-    });
-    console.log(`Finished ${job.id} with exit code ${result.exitCode}`);
   } catch (error) {
     console.error("Bridge cycle failed:", String(error?.message || error));
     await sleep(POLL_MS);
