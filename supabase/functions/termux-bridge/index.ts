@@ -62,6 +62,37 @@ Deno.serve(async (req: Request) => {
 
   if (action === "heartbeat") return json({ ok: true, device_id: device.id });
 
+  if (action === "enqueue_brave") {
+    const braveAction = String(body.brave_action ?? "");
+    if (!["snapshot", "back", "open_url"].includes(braveAction)) {
+      return json({ error: "Unsupported Brave command" }, 400);
+    }
+
+    const args: Record<string, unknown> = { action: braveAction };
+    if (braveAction === "open_url") {
+      const targetUrl = String(body.url ?? "");
+      if (targetUrl !== "https://www.reg.ru/") {
+        return json({ error: "Only the approved public REG.RU URL is allowed" }, 400);
+      }
+      args.url = targetUrl;
+    } else if (body.url !== undefined) {
+      return json({ error: "URL is not allowed for this Brave command" }, 400);
+    }
+
+    const { data: job, error } = await supabase
+      .from("termux_bridge_jobs")
+      .insert({
+        device_id: device.id,
+        command_type: "brave_accessibility",
+        args,
+      })
+      .select("id")
+      .single();
+
+    if (error || !job) return json({ error: "Could not queue Brave command" }, 500);
+    return json({ job_id: job.id });
+  }
+
 
   if (action === "create_upload_url") {
     const filename = String(body.filename ?? "");
