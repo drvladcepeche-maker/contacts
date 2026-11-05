@@ -56,7 +56,7 @@ export class TerminalSessions {
     const dir = workspacePath(this.workspace, cwd);
     const timeout = Math.min(MAX_TIMEOUT, Math.max(1000, Number(timeout_ms) || DEFAULT_TIMEOUT));
     return await new Promise((resolveRun) => {
-      const child = spawn("bash", ["-lc", source], {
+      const child = spawn("bash", ["--noprofile", "--norc", "-c", source], {
         cwd: dir,
         shell: false,
         env: this.env,
@@ -176,6 +176,17 @@ export class TerminalSessions {
     }
     this.sessions.delete(session.id);
     return { session_id: session.id, state: "stop_requested" };
+  }
+
+
+  pruneExpired() {
+    const now = Date.now();
+    for (const [id, session] of this.sessions.entries()) {
+      if (now - session.lastActivity > SESSION_TTL) {
+        if (!session.closed) session.child.kill("SIGTERM");
+        this.sessions.delete(id);
+      }
+    }
   }
 
   get(id) {
