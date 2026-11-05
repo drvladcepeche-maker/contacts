@@ -93,6 +93,23 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  if (action === "brave_status") {
+    const id = String(body.job_id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Invalid job_id" }, 400);
+
+    const { data: job, error } = await supabase
+      .from("termux_bridge_jobs")
+      .select("id, status, output, error_text, exit_code, created_at, finished_at")
+      .eq("id", id)
+      .eq("device_id", device.id)
+      .eq("command_type", "brave_accessibility")
+      .maybeSingle();
+
+    if (error) return json({ error: "Could not read Brave command status" }, 500);
+    if (!job) return json({ error: "Brave command not found for this device" }, 404);
+    return json({ job });
+  }
+
   if (action === "claim") {
     const claimToken = String(body.claim_token ?? "");
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claimToken)) {
