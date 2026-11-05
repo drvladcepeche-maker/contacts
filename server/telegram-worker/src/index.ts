@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
+import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -129,12 +130,12 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   // the newly resolved phone points to the same Telegram ID; otherwise stale
   // aliases from a previous account would be attached to the new ID.
   const existingTelegramId = String(prior.telegram_id ?? "");
-  const sameTelegramAccount = !!existingTelegramId && existingTelegramId === String(result.telegram_id ?? "");
-  const priorUsernames = sameTelegramAccount
-    ? String(prior.telegram_username ?? "")
-        .split(",").map((value) => value.trim().replace(/^@/, ""))
-        .filter((value) => value && value.toUpperCase() !== "СКРЫТ")
-    : [];
+  const mergedUsernames = mergeTelegramUsernames(
+    existingTelegramId,
+    String(result.telegram_id ?? ""),
+    prior.telegram_username,
+    result.username,
+  );
   const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
   const next: Record<string, unknown> = {
     ...prior,
@@ -145,15 +146,11 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
   };
   if (result.status === "matched") {
     next.telegram_id = result.telegram_id;
-    const foundUsernames = String(result.username ?? "")
-      .split(",").map((value) => value.trim().replace(/^@/, "")).filter(Boolean);
-    next.telegram_username = [...new Set([...priorUsernames, ...foundUsernames])].join(", ");
+    next.telegram_username = mergedUsernames ?? "";
   } else if (result.status === "username_missing") {
     next.telegram_id = result.telegram_id;
     // A private/hidden current username must not erase previously discovered names.
-    next.telegram_username = priorUsernames.length
-      ? [...new Set(priorUsernames)].join(", ")
-      : "Скрыт";
+    next.telegram_username = mergedUsernames ?? "Скрыт";
   } else if (result.status === "not_resolved" && !alreadyMatched) {
     // An unresolved phone is not evidence that a previously confirmed Telegram match is invalid.
     if (samePhone) {
