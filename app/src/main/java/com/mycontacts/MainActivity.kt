@@ -22,6 +22,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import rikka.shizuku.Shizuku
 
 class MainActivity : Activity() {
 
@@ -30,6 +31,18 @@ class MainActivity : Activity() {
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
     private var waitingForInstallPermission = false
+    private lateinit var shizukuStatus: TextView
+    private val shizukuPermissionRequestCode = 101
+    private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+        if (requestCode == shizukuPermissionRequestCode) {
+            updateShizukuStatus()
+            toast(if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                "Shizuku разрешил доступ приложению «Мои контакты — привязка»."
+            } else {
+                "Shizuku не выдал разрешение приложению."
+            })
+        }
+    }
     private val activeCommandIds = HashSet<String>()
 
     private lateinit var list: ListView
@@ -49,6 +62,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
         AppLog.installCrashHandler(this)
         AppLog.info(this, "MainActivity", "onCreate")
         repo = ContactRepo(contentResolver)
@@ -101,6 +115,7 @@ class MainActivity : Activity() {
         val row7 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row8 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row9 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row10 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -127,16 +142,20 @@ class MainActivity : Activity() {
         row8.addView(btn("Сохранить логи") { exportAppLogs() })
         row8.addView(btn("Файлы для Termux") { exportTermuxGuide() })
         row9.addView(btn("Разрешить установку APK") { requestUnknownSourcesPermission() })
+        row10.addView(btn("Доступ Shizuku") { requestShizukuPermission() })
+        shizukuStatus = TextView(this)
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, row10, shizukuStatus, status, list).forEach { root.addView(it) }
         setContentView(root)
+        updateShizukuStatus()
     }
 
     override fun onResume() {
         super.onResume()
+        updateShizukuStatus()
         if (waitingForInstallPermission) {
             waitingForInstallPermission = false
             if (android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) {
@@ -148,6 +167,11 @@ class MainActivity : Activity() {
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
+    }
+
+    override fun onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        super.onDestroy()
     }
 
     override fun onPause() {
@@ -1051,6 +1075,56 @@ class MainActivity : Activity() {
         }
     }
 
+
+    private fun updateShizukuStatus() {
+        shizukuStatus.text = when {
+            !Shizuku.pingBinder() -> "Shizuku: не запущен или служба недоступна."
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED ->
+                "Shizuku: разрешение выдано этому приложению (UID ${Shizuku.getUid()})."
+            else -> "Shizuku: приложение ещё не авторизовано."
+        }
+    }
+
+    private fun requestShizukuPermission() {
+        if (Shizuku.isPreV11()) {
+            toast("Эта версия Shizuku не поддерживается. Обновите Shizuku.")
+            return
+        }
+        if (!Shizuku.pingBinder()) {
+            AlertDialog.Builder(this)
+                .setTitle("Shizuku недоступен")
+                .setMessage("Запустите службу Shizuku и вернитесь сюда. После запуска нажмите «Доступ Shizuku» ещё раз.")
+                .setPositiveButton("Открыть Shizuku") { _, _ ->
+                    val launch = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                    if (launch != null) startActivity(launch)
+                    else toast("Приложение Shizuku не найдено.")
+                }
+                .setNegativeButton("Закрыть", null)
+                .show()
+            updateShizukuStatus()
+            return
+        }
+        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            toast("Разрешение Shizuku уже выдано этому приложению.")
+            updateShizukuStatus()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Запросить доступ Shizuku")
+            .setMessage(
+                "Shizuku покажет системный запрос. Разрешение будет выдано приложению «Мои контакты — привязка» и позволит ему выполнять разрешённые команды с UID shell. " +
+                "Это отдельное разрешение: Termux должен быть авторизован в Shizuku независимо."
+            )
+            .setPositiveButton("Запросить") { _, _ ->
+                try {
+                    Shizuku.requestPermission(shizukuPermissionRequestCode)
+                } catch (error: Exception) {
+                    toast("Не удалось запросить Shizuku: " + (error.message ?: error.javaClass.simpleName))
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
 
     /**
      * Android requires the user to approve unknown-source installation per app.
