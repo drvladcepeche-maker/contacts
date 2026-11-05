@@ -31,8 +31,8 @@ android {
     }
     buildTypes {
         getByName("debug") {
-            // Keep the recovery build installable beside an older APK signed with a different key.
-            applicationIdSuffix = ".pairing2"
+            // Isolated package ID avoids signature conflicts with all existing companion variants.
+            applicationIdSuffix = ".bridgefix4"
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
