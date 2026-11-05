@@ -10,7 +10,7 @@ import org.json.JSONObject
 class BraveAccessibilityCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != BraveAccessibilityService.ACTION_COMMAND) return
-        if (Build.VERSION.SDK_INT < 34 || getSentFromUid() != Process.SHELL_UID) return
+        if (Build.VERSION.SDK_INT < 34 || getSentFromUid() != 2000) return
 
         val result = try {
             val raw = intent.getStringExtra("payload") ?: "{}"
