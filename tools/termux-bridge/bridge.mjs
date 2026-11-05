@@ -380,10 +380,20 @@ async function uploadWorkspaceFile(args) {
   if (/(secret|token|credential|password|private|keystore|\.jks|\.p12|\.pem|\.env)/i.test(leaf)) {
     throw new Error("Uploading sensitive filenames is blocked.");
   }
-  const target = withinWorkspace(rel);
+  let target;
+  if (rel.startsWith("@downloads/")) {
+    const tail = rel.slice("@downloads/".length);
+    if (!tail || tail.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+      throw new Error("Invalid @downloads path.");
+    }
+    target = resolve(homedir(), "storage", "downloads", tail);
+  } else {
+    target = withinWorkspace(rel);
+  }
   const actual = await realpath(target);
-  const root = await realpath(WORKSPACE);
-  if (actual !== root && !actual.startsWith(root + sep)) throw new Error("Upload path resolves outside the workspace.");
+  const roots = [await realpath(WORKSPACE)];
+  try { roots.push(await realpath(resolve(homedir(), "storage", "downloads"))); } catch { /* shared storage is optional */ }
+  if (!roots.some(root => actual === root || actual.startsWith(root + sep))) throw new Error("Upload path resolves outside the workspace or approved Downloads folder.");
   const info = await stat(actual);
   if (!info.isFile()) throw new Error("file_upload accepts regular files only.");
   if (info.size < 1 || info.size > 50 * 1024 * 1024) throw new Error("Upload size must be between 1 byte and 50 MiB.");
