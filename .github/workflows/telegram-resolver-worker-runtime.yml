@@ -5,7 +5,7 @@ on:
       - '.github/workflows/telegram-resolver-worker-runtime.yml'
       - 'server/telegram-worker/src/**'
   schedule:
-    - cron: "3,23,43 * * * *"
+    - cron: "15 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -47,7 +47,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           RUN_ONCE: "true"
-          MAX_CANDIDATES_PER_RUN: "75"
+          MAX_CANDIDATES_PER_RUN: "20"
           MIN_REQUEST_INTERVAL_MS: "5000"
           REQUEST_JITTER_MS: "3000"
         run: node dist/index.js 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
