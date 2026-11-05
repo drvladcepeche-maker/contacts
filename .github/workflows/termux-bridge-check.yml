@@ -26,6 +26,8 @@ jobs:
         run: |
           node --check tools/termux-bridge/setup.mjs
           node --check tools/termux-bridge/bridge.mjs
+          node --check tools/termux-bridge/terminal-sessions.mjs
+          node --check tools/termux-bridge/shizuku-files.mjs
           node --check tools/termux-bridge/apk-inspect.mjs
       - uses: denoland/setup-deno@v2
         with:
