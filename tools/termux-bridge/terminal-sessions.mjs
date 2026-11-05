@@ -95,6 +95,7 @@ export class TerminalSessions {
   }
 
   start({ command = "", cwd = "." }) {
+    this.pruneExpired();
     if (this.sessions.size >= MAX_SESSIONS) throw new Error("Maximum of 3 active terminal sessions reached.");
     const source = bounded(command, MAX_COMMAND);
     if (String(command).length > MAX_COMMAND) throw new Error("Initial command exceeds 8192 characters.");
