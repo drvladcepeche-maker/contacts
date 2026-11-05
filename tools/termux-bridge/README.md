@@ -4,7 +4,7 @@ This branch extends the existing Supabase command bridge. It has three separate 
 
 - **Termux:** shell commands, interactive pipe-based sessions, Git, builds, diagnostics, and file uploads.
 - **Shizuku (rish):** selected Android Shell operations, APK installation, and file operations in two dedicated shared-storage folders.
-- **AccessibilityService:** reads and operates the Brave UI only (com.brave.browser).
+- **AccessibilityService:** reads and operates the Brave UI only (com.brave.browser); the authenticated Termux app sends the command broadcast directly, so Brave control does not depend on launching rish from a non-interactive Node process.
 
 This is not root access. Shell commands run as the normal Termux app user; Shizuku commands run as Android Shell UID 2000.
 
@@ -24,7 +24,7 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 
 ### Brave Accessibility
 - brave_accessibility with actions snapshot, click, input, scroll, back, and open_url.
-- The Android companion app receiver accepts explicit broadcasts only from Android Shell UID 2000 (Shizuku).
+- The Android companion app receiver accepts explicit broadcasts only from Android Shell UID 2000 or the installed Termux app UID (resolved through PackageManager). Termux sends this restricted action payload directly; the receiver still rejects all other senders.
 - Accessibility data is scoped to the Brave package. A single response file is written to Download/TermuxBridge/accessibility-result.json, then read by Termux.
 
 ## Security and runtime limits
@@ -35,7 +35,7 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 - Interactive sessions use stdin/stdout pipes, not a PTY. Full-screen terminal programs such as vim, nano, and htop are not supported.
 - File uploads are limited to 50 MiB. Workspace paths are allowed; shared Downloads uploads must use @downloads/TermuxBridge/... or @downloads/PnS_APK/.... Sensitive filename patterns are blocked.
 - Shizuku file operations do not use arbitrary caller-supplied shell commands. Paths are limited to dedicated shared-storage folders. Delete is non-recursive and requires explicit confirmation.
-- Accessibility commands require the companion app to be installed and the Accessibility service manually enabled in Android Settings. The receiver rejects broadcasts not sent by UID 2000.
+- Accessibility commands require the updated companion app to be installed and the Accessibility service manually enabled in Android Settings. The receiver rejects broadcasts unless they originate from Android Shell UID 2000 or the exact UID assigned to package com.termux. The Termux bridge uses Android's pm/am client commands for this path; Shizuku remains required for the separate file and APK-install operations.
 - Revoking the device: set enabled=false or revoked_at=now() for its row in termux_bridge_devices.
 
 ## Install/update on the phone

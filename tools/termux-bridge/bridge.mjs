@@ -358,10 +358,6 @@ async function listFiles(args) {
 
 
 
-function shellQuote(value) {
-  return "'" + String(value).replace(/'/g, "'\\''") + "'";
-}
-
 async function braveAccessibility(args) {
   const action = String(args.action || "snapshot");
   const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
@@ -370,7 +366,7 @@ async function braveAccessibility(args) {
   let packageName = "";
   for (const candidate of candidates) {
     if (!/^com\.mycontacts(?:\.pairing2)?$/.test(candidate)) continue;
-    const probe = await shizukuFiles.command("pm path " + shellQuote(candidate), 15000);
+    const probe = await run("pm", ["path", candidate], 15000);
     if (probe.exitCode === 0 && probe.output.includes("package:")) { packageName = candidate; break; }
   }
   if (!packageName) throw new Error("The companion app is not installed. Install the updated APK first.");
@@ -379,10 +375,12 @@ async function braveAccessibility(args) {
   const payload = JSON.stringify({ ...args, action });
   if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
   const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
-  const broadcast = "am broadcast -n " + shellQuote(component) +
-    " -a com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND --es payload " + shellQuote(payload);
-  const sent = await shizukuFiles.command(broadcast, 20000);
-  if (sent.exitCode !== 0) throw new Error("Could not send the Shizuku accessibility command: " + (sent.errorText || sent.output));
+  const sent = await run("am", [
+    "broadcast", "-n", component,
+    "-a", "com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND",
+    "--es", "payload", payload,
+  ], 20000);
+  if (sent.exitCode !== 0) throw new Error("Could not send the Brave accessibility command from Termux: " + (sent.errorText || sent.output));
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       const raw = await readFile(responsePath, "utf8");
@@ -393,7 +391,7 @@ async function braveAccessibility(args) {
     }
     await sleep(250);
   }
-  throw new Error("Accessibility response was not written. Check that the Accessibility service is enabled and Termux has shared-storage access (termux-setup-storage).");
+  throw new Error("Accessibility response was not written. Confirm that the updated companion app is installed, its Accessibility service is enabled, and Termux has shared-storage access (termux-setup-storage).");
 }
 
 async function uploadWorkspaceFile(args) {
