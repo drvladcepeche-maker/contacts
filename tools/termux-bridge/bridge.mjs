@@ -429,6 +429,7 @@ process.on("SIGTERM", () => { stopping = true; });
 let bridgeState = await loadBridgeState();
 while (!stopping) {
   try {
+    const claimedThisCycle = !bridgeState.pending;
     if (!bridgeState.pending) {
       const response = await request({ action: "claim", claim_token: bridgeState.claimToken });
       if (!response.job) {
@@ -441,7 +442,7 @@ while (!stopping) {
       await saveBridgeState(bridgeState);
     }
     const pending = bridgeState.pending;
-    if (pending.phase === "claimed" || pending.phase === "executing") {
+    if (pending.phase === "executing" || (pending.phase === "claimed" && !claimedThisCycle)) {
       pending.phase = "result";
       pending.result = {
         exitCode: 125, output: "",
