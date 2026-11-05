@@ -18,7 +18,7 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 
 ### Shizuku
 - shizuku_storage_check: fixed read-only check of the APK folder.
-- install_apk: PackageManager update for com.mycontacts or com.mycontacts.pairing2; checks package metadata and signature compatibility; never uninstalls the old app.
+- install_apk: PackageManager install/update for com.mycontacts, com.mycontacts.pairing2, or isolated recovery package com.mycontacts.bridgefix4; checks package metadata and signature compatibility; never uninstalls the old app.
 - shizuku_file_list, shizuku_file_mkdir, shizuku_file_copy, shizuku_file_move: paths are restricted to /sdcard/Download/TermuxBridge and /sdcard/Documents/TermuxBridge.
 - shizuku_file_delete: single-file deletion only; requires args.confirm=true; root folders cannot be deleted.
 
@@ -35,7 +35,7 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 - Interactive sessions use stdin/stdout pipes, not a PTY. Full-screen terminal programs such as vim, nano, and htop are not supported.
 - File uploads are limited to 50 MiB. Workspace paths are allowed; shared Downloads uploads must use @downloads/TermuxBridge/... or @downloads/PnS_APK/.... Sensitive filename patterns are blocked.
 - Shizuku file operations do not use arbitrary caller-supplied shell commands. Paths are limited to dedicated shared-storage folders. Delete is non-recursive and requires explicit confirmation.
-- Accessibility commands require the updated companion app to be installed and the Accessibility service manually enabled in Android Settings. The receiver rejects broadcasts unless they originate from Android Shell UID 2000 or the exact UID assigned to package com.termux. The Termux bridge uses Android's pm/am client commands for this path; Shizuku remains required for the separate file and APK-install operations.
+- Accessibility commands require the updated companion app to be installed and the Accessibility service manually enabled in Android Settings. The receiver rejects broadcasts unless they originate from Android Shell UID 2000 or the exact UID assigned to package com.termux. The Termux bridge targets the isolated com.mycontacts.bridgefix4 receiver directly and sends the broadcast with am; it does not query PackageManager from the Termux app UID. Shizuku remains required for the separate file and APK-install operations.
 - Revoking the device: set enabled=false or revoked_at=now() for its row in termux_bridge_devices.
 
 ## Install/update on the phone
@@ -97,7 +97,7 @@ For Brave:
 - Back: {"action":"back"}
 - Open URL: {"action":"open_url","url":"https://example.com"}
 
-After installing the updated APK, manually enable Settings → Accessibility → Installed apps → Мои контакты — привязка. The service is configured to observe Brave only.
+Install the com.mycontacts.bridgefix4 recovery APK alongside older companion variants, then manually enable Settings → Accessibility → Installed apps → Мои контакты — привязка. The service is configured to observe Brave only.
 
 ## Build approval
 
