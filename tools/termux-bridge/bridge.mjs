@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, readFile, readdir, realpath, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -371,6 +371,45 @@ async function listFiles(args) {
 }
 
 
+
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+async function braveAccessibility(args) {
+  const action = String(args.action || "snapshot");
+  const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
+  if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
+  const candidates = args.app_package ? [String(args.app_package)] : ["com.mycontacts.pairing2", "com.mycontacts"];
+  let packageName = "";
+  for (const candidate of candidates) {
+    if (!/^com\\.mycontacts(?:\\.pairing2)?$/.test(candidate)) continue;
+    const probe = await shizukuFiles.command("pm path " + shellQuote(candidate), 15000);
+    if (probe.exitCode === 0 && probe.output.includes("package:")) { packageName = candidate; break; }
+  }
+  if (!packageName) throw new Error("The companion app is not installed. Install the updated APK first.");
+  const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", "accessibility-result.json");
+  await unlink(responsePath).catch(() => {});
+  const payload = JSON.stringify({ ...args, action });
+  if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
+  const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
+  const broadcast = "am broadcast -n " + shellQuote(component) +
+    " -a com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND --es payload " + shellQuote(payload);
+  const sent = await shizukuFiles.command(broadcast, 20000);
+  if (sent.exitCode !== 0) throw new Error("Could not send the Shizuku accessibility command: " + (sent.errorText || sent.output));
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      const raw = await readFile(responsePath, "utf8");
+      const result = JSON.parse(raw);
+      return { exitCode: result.ok ? 0 : 1, output: JSON.stringify(result, null, 2), errorText: result.ok ? "" : String(result.error || "Accessibility command failed.") };
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await sleep(250);
+  }
+  throw new Error("Accessibility response was not written. Check that the Accessibility service is enabled and Termux has shared-storage access (termux-setup-storage).");
+}
+
 async function uploadWorkspaceFile(args) {
   const rel = String(args.path || "");
   if (!rel || rel.startsWith("/") || rel.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
@@ -472,6 +511,8 @@ async function execute(job) {
       return await shizukuFiles.remove(args);
     case "file_upload":
       return await uploadWorkspaceFile(args);
+    case "brave_accessibility":
+      return await braveAccessibility(args);
     case "git_fetch_main":
       return await run("git", ["fetch", "origin", "main"], 120000);
     case "node_check_bridge":
