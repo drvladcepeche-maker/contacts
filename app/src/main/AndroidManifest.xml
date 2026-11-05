@@ -42,6 +42,7 @@
         </service>
         <receiver
             android:name=".BraveAccessibilityCommandReceiver"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND" />
