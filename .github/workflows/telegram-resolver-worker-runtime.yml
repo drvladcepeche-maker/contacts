@@ -5,12 +5,12 @@ on:
       - '.github/workflows/telegram-resolver-worker-runtime.yml'
       - 'server/telegram-worker/src/**'
   schedule:
-    - cron: "3-58/5 * * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 concurrency:
   group: telegram-resolver-worker
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -21,10 +21,56 @@ defaults:
     shell: bash
 
 jobs:
-  process-queue:
+  check-ready:
     if: vars.TELEGRAM_RESOLVER_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.queue.outputs.ready }}
+    steps:
+      - name: Check whether a Telegram batch is due
+        id: queue
+        env:
+          SUPABASE_URL: https://xevqbgjtxuveeqaiacvm.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          stale="$(date -u -d '30 minutes ago' +'%Y-%m-%dT%H:%M:%SZ')"
+          common_args=(
+            --get
+            --header "apikey: ${SUPABASE_SERVICE_ROLE_KEY}"
+            --header "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}"
+            --data-urlencode "select=id"
+            --data-urlencode "limit=1"
+          )
+          if ! queued="$(curl -fsS "${common_args[@]}" --data-urlencode "status=eq.queued" --data-urlencode "or=(paused_until.is.null,paused_until.lte.${now})" "${SUPABASE_URL}/rest/v1/telegram_match_jobs")"; then
+            echo "Queue precheck failed; falling back to the worker's own claim check."
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$queued" != "[]" ]; then
+            echo "A due queued Telegram batch exists."
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! stale_running="$(curl -fsS "${common_args[@]}" --data-urlencode "status=eq.running" --data-urlencode "claimed_at=lt.${stale}" --data-urlencode "or=(paused_until.is.null,paused_until.lte.${now})" "${SUPABASE_URL}/rest/v1/telegram_match_jobs")"; then
+            echo "Stale-job precheck failed; falling back to the worker's own claim check."
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$stale_running" = "[]" ]; then
+            echo "No due queued batch or stale running job."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "A stale running Telegram batch needs recovery."
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  process-queue:
+    needs: check-ready
+    if: vars.TELEGRAM_RESOLVER_ENABLED == 'true' && needs.check-ready.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +93,8 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           RUN_ONCE: "true"
-          MAX_CANDIDATES_PER_RUN: "250"
+          MAX_CANDIDATES_PER_RUN: "20"
+          BATCH_COOLDOWN_MS: "3600000"
           MIN_REQUEST_INTERVAL_MS: "5000"
           REQUEST_JITTER_MS: "3000"
         run: node dist/index.js 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
