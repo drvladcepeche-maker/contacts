@@ -46,15 +46,16 @@ export class ShizukuFiles {
   }
 
   async command(command, timeout = 30000) {
-    try { await access(this.rishBin); }
+    let executable = this.rishBin;
+    try { await access(executable); }
     catch {
-      if (this.rishBin !== "rish") throw new Error("Configured rish executable was not found.");
+      if (executable !== "rish") executable = "rish";
     }
-    const identity = await run(this.rishBin, ["-c", "id"], 15000);
+    const identity = await run(executable, ["-c", "id"], 15000);
     if (identity.exitCode !== 0 || !/uid=2000\(shell\)/.test(identity.output)) {
       throw new Error("Shizuku is not authorized. Expected rish to run as Android shell uid=2000.");
     }
-    return await run(this.rishBin, ["-c", command], timeout);
+    return await run(executable, ["-c", command], timeout);
   }
 
   async list({ path }) {
