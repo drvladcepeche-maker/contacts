@@ -183,10 +183,13 @@ async function resolvePhone(phone: string): Promise<{ id: string; username: stri
   if (!userId) return null;
   const users: any[] = Array.isArray(resolved?.users) ? resolved.users : [];
   const user = users.find((item) => String(item?.id) === userId);
-  const usernameObject = user?.usernames && typeof user.usernames === "object"
-    ? user.usernames : null;
-  const activeUsernames = Array.isArray(usernameObject?.activeUsernames)
-    ? usernameObject.activeUsernames : [];
+  // GramJS exposes User.usernames as Api.Username[], not TDLib's
+  // activeUsernames string array. Keep only active entries and include the
+  // legacy primary username for older Telegram user objects.
+  const usernameEntries: any[] = Array.isArray(user?.usernames) ? user.usernames : [];
+  const activeUsernames = usernameEntries
+    .filter((entry) => entry && typeof entry.username === "string" && entry.active !== false)
+    .map((entry) => entry.username);
   const legacyUsername = typeof user?.username === "string" ? [user.username] : [];
   const usernames = [...activeUsernames, ...legacyUsername]
     .map((value) => String(value ?? "").trim().replace(/^@/, ""))
