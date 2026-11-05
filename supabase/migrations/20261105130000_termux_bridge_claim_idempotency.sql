@@ -40,6 +40,17 @@ BEGIN
     RETURN;
   END IF;
 
+  -- A completed/failed job may still own this token if the client lost its
+  -- local state. Do not reuse that token for a different job.
+  IF EXISTS (
+    SELECT 1
+    FROM public.termux_bridge_jobs AS job
+    WHERE job.device_id = p_device_id
+      AND job.claim_token = p_claim_token
+  ) THEN
+    RETURN;
+  END IF;
+
   RETURN QUERY
     WITH next_job AS (
       SELECT job.id
