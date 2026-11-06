@@ -77,10 +77,11 @@ jobs:
         with:
           tag_name: mycontacts-app-${{ github.sha }}
           target_commitish: ${{ github.ref_name }}
-          name: Мои контакты — 0.6 (${{ github.sha }})
+          name: Мои контакты — 0.6.${{ github.run_number }}
           body: |
             Автоматическая подписанная сборка приложения.
-            Версия: 0.6
+            Версия: 0.6.${{ github.run_number }}
+            Version code: $((1000 + ${{ github.run_number }}))
             Commit: ${{ github.sha }}
           prerelease: true
           draft: false
