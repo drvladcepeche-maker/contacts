@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.ArrayDeque
@@ -23,6 +24,7 @@ class BraveAccessibilityService : AccessibilityService() {
         const val ACTION_COMMAND = "com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND"
         private const val DEFAULT_WAIT_MS = 15000L
         private const val MAX_WAIT_MS = 30000L
+        private const val WINDOW_POLL_MS = 250L
         @Volatile private var active: BraveAccessibilityService? = null
 
         fun enqueueFromShell(context: android.content.Context, payload: JSONObject) {
@@ -81,6 +83,12 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<PendingCommand>()
+    private val pollPending = object : Runnable {
+        override fun run() {
+            processPendingIfReady()
+            if (pending.isNotEmpty()) handler.postDelayed(this, WINDOW_POLL_MS)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -97,6 +105,7 @@ class BraveAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (active === this) active = null
+        handler.removeCallbacks(pollPending)
         while (pending.isNotEmpty()) {
             val command = pending.removeFirst()
             handler.removeCallbacks(command.timeout)
@@ -131,7 +140,7 @@ class BraveAccessibilityService : AccessibilityService() {
                 // forward so the accessibility service can obtain its active window.
                 val launchIntent = packageManager.getLaunchIntentForPackage(TARGET_PACKAGE)
                     ?: throw IllegalStateException("Brave is not installed or has no launch activity.")
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 startActivity(launchIntent)
             }
         } catch (error: Exception) {
@@ -139,15 +148,18 @@ class BraveAccessibilityService : AccessibilityService() {
             respond(failure(requestId, error.message ?: "Could not launch Brave."))
             return
         }
-        processPendingIfReady()
+        handler.removeCallbacks(pollPending)
+        handler.post(pollPending)
     }
 
     private fun expire(requestId: String) {
         val command = pending.firstOrNull { it.requestId == requestId } ?: return
         pending.remove(command)
         val currentPackage = rootInActiveWindow?.packageName?.toString().orEmpty().ifBlank { "none" }
+        val appWindows = applicationWindowPackages().joinToString(", ").ifBlank { "none" }
         respond(failure(requestId,
-            "Timed out waiting for Brave to become the active accessibility window (active package: $currentPackage)."))
+            "Timed out waiting for Brave's application window (active package: $currentPackage; application windows: $appWindows)."))
+        if (pending.isNotEmpty()) handler.post(pollPending)
     }
 
     private fun removePending(requestId: String) {
@@ -158,7 +170,7 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private fun processPendingIfReady() {
         if (pending.isEmpty()) return
-        val root = rootInActiveWindow ?: return
+        val root = findBraveWindowRoot() ?: return
         val packageName = root.packageName?.toString().orEmpty()
         if (packageName != TARGET_PACKAGE) return
 
@@ -173,6 +185,38 @@ class BraveAccessibilityService : AccessibilityService() {
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
         }
+        if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
+    }
+
+    private fun findBraveWindowRoot(): AccessibilityNodeInfo? {
+        val candidates = try {
+            windows.orEmpty()
+                .asSequence()
+                .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                .mapNotNull { window ->
+                    val root = window.root ?: return@mapNotNull null
+                    if (root.packageName?.toString() == TARGET_PACKAGE) window to root else null
+                }
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        return candidates.firstOrNull { it.first.isFocused }?.second
+            ?: candidates.maxByOrNull { it.first.layer }?.second
+            ?: candidates.firstOrNull { it.first.isActive }?.second
+            ?: rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+    }
+
+    private fun applicationWindowPackages(): List<String> = try {
+        windows.orEmpty()
+            .asSequence()
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .mapNotNull { it.root?.packageName?.toString() }
+            .distinct()
+            .toList()
+    } catch (_: Exception) {
+        emptyList()
     }
 
     private fun respond(result: JSONObject) {
