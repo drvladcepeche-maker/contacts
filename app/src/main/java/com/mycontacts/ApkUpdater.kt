@@ -56,14 +56,20 @@ object ApkUpdater {
                 require(expectedHash.matches(Regex("[0-9a-f]{64}"))) { "Некорректная SHA-256 контрольная сумма" }
                 require(sha256(apk) == expectedHash) { "Контрольная сумма APK не совпадает; установка отменена" }
 
+                @Suppress("DEPRECATION")
+                val packageFlags = if (Build.VERSION.SDK_INT >= 28) {
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                } else {
+                    PackageManager.GET_SIGNATURES
+                }
                 val archive = activity.packageManager.getPackageArchiveInfo(
-                    apk.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES
+                    apk.absolutePath, packageFlags
                 ) ?: throw IllegalStateException("Android не распознал APK")
                 require(archive.packageName == activity.packageName) {
                     "Пакет обновления не совпадает с установленным приложением"
                 }
                 val installed = activity.packageManager.getPackageInfo(
-                    activity.packageName, PackageManager.GET_SIGNING_CERTIFICATES
+                    activity.packageName, packageFlags
                 )
                 val archiveSigners = signerDigests(archive)
                 val installedSigners = signerDigests(installed)
