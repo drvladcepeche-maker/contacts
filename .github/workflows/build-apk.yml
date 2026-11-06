@@ -76,6 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-latest
+          target_commitish: feature/brave-accessibility-control
           name: Мои контакты — последняя сборка
           body: |
             Автоматическая подписанная сборка приложения.
