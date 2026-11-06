@@ -25,6 +25,9 @@ class BraveAccessibilityService : AccessibilityService() {
         private const val DEFAULT_WAIT_MS = 15000L
         private const val MAX_WAIT_MS = 30000L
         private const val WINDOW_POLL_MS = 250L
+        private const val VERIFY_POLL_MS = 150L
+        private const val VERIFY_MAX_MS = 1800L
+        private const val VERIFY_STABLE_SAMPLES = 3
         @Volatile private var active: BraveAccessibilityService? = null
 
         fun enqueueFromShell(context: android.content.Context, payload: JSONObject) {
@@ -83,6 +86,8 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<PendingCommand>()
+    private var verificationInProgress = false
+    private var verificationRunnable: Runnable? = null
     private val pollPending = object : Runnable {
         override fun run() {
             processPendingIfReady()
@@ -106,6 +111,9 @@ class BraveAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         if (active === this) active = null
         handler.removeCallbacks(pollPending)
+        verificationRunnable?.let(handler::removeCallbacks)
+        verificationRunnable = null
+        verificationInProgress = false
         while (pending.isNotEmpty()) {
             val command = pending.removeFirst()
             handler.removeCallbacks(command.timeout)
@@ -169,7 +177,7 @@ class BraveAccessibilityService : AccessibilityService() {
     }
 
     private fun processPendingIfReady() {
-        if (pending.isEmpty()) return
+        if (pending.isEmpty() || verificationInProgress) return
         val root = findBraveWindowRoot() ?: return
         val packageName = root.packageName?.toString().orEmpty()
         if (packageName != TARGET_PACKAGE) return
@@ -179,14 +187,92 @@ class BraveAccessibilityService : AccessibilityService() {
         val command = pending.removeFirst()
         handler.removeCallbacks(command.timeout)
         try {
+            val action = command.payload.optString("action")
+            val beforeFingerprint = if (action in setOf("click", "input", "scroll", "back")) {
+                treeFingerprint(root)
+            } else ""
             val result = executeAgainstRoot(command.payload, root)
                 .put("request_id", command.requestId)
-            respond(result)
+            if (result.optBoolean("ok") && action in setOf("click", "input", "scroll", "back")) {
+                verifyAfterAction(command.payload, result, beforeFingerprint)
+            } else {
+                respond(result)
+                if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
+            }
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
+            if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
         }
-        if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
     }
+
+    /**
+     * Accessibility actions are asynchronous: ACTION_CLICK/ACTION_SET_TEXT returning true
+     * only means Android accepted the request. Re-read the Brave window until its tree
+     * stabilizes, then report whether the requested state change is observable.
+     */
+    private fun verifyAfterAction(payload: JSONObject, result: JSONObject, beforeFingerprint: String) {
+        verificationInProgress = true
+        val startedAt = android.os.SystemClock.uptimeMillis()
+        var lastFingerprint = ""
+        var stableSamples = 0
+        var latestRootAvailable = false
+
+        val verifier = object : Runnable {
+            override fun run() {
+                val now = android.os.SystemClock.uptimeMillis()
+                val root = findBraveWindowRoot()
+                val fingerprint = root?.let(::treeFingerprint).orEmpty()
+                latestRootAvailable = root != null
+
+                if (fingerprint.isNotBlank() && fingerprint == lastFingerprint) {
+                    stableSamples++
+                } else {
+                    stableSamples = if (fingerprint.isNotBlank()) 1 else 0
+                    lastFingerprint = fingerprint
+                }
+
+                val elapsed = now - startedAt
+                val settled = stableSamples >= VERIFY_STABLE_SAMPLES
+                if (!settled && elapsed < VERIFY_MAX_MS) {
+                    handler.postDelayed(this, VERIFY_POLL_MS)
+                    return
+                }
+
+                val action = payload.optString("action")
+                val stateChanged = fingerprint.isNotBlank() && fingerprint != beforeFingerprint
+                result.put("verification", when {
+                    !latestRootAvailable -> "window_unavailable"
+                    settled && stateChanged -> "state_changed"
+                    settled -> "no_change_detected"
+                    stateChanged -> "changed_but_not_settled"
+                    else -> "no_change_detected"
+                })
+                result.put("state_changed", stateChanged)
+                result.put("settled", settled)
+                result.put("verification_elapsed_ms", elapsed)
+                if (action == "input") {
+                    val currentNode = root?.let { findNode(it, payload) }
+                    val expected = payload.optString("value")
+                    val actual = currentNode?.text?.toString()
+                    val valuePresent = actual == expected
+                    result.put("value_present", valuePresent)
+                    result.put("verified", valuePresent)
+                } else {
+                    result.put("verified", settled && stateChanged)
+                }
+
+                verificationRunnable = null
+                verificationInProgress = false
+                respond(result)
+                if (pending.isNotEmpty()) handler.post(pollPending)
+            }
+        }
+        verificationRunnable = verifier
+        handler.postDelayed(verifier, VERIFY_POLL_MS)
+    }
+
+    private fun treeFingerprint(root: AccessibilityNodeInfo): String =
+        snapshot(root).toString()
 
     private fun findBraveWindowRoot(): AccessibilityNodeInfo? {
         val applicationWindows = try {
