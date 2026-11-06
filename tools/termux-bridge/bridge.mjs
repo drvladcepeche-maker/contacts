@@ -454,7 +454,12 @@ async function uploadWorkspaceFile(args) {
   }
   const response = await fetch(uploadUrl, {
     method: "POST",
-    headers: {\n    "apikey": SUPABASE_PUBLISHABLE_KEY,\n    "authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY,\n    "content-type": contentType,\n    "x-upsert": "false",\n  },
+    headers: {
+      "apikey": SUPABASE_PUBLISHABLE_KEY,
+      "authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY,
+      "content-type": contentType,
+      "x-upsert": "false",
+    },
     body: content,
     signal: AbortSignal.timeout(120000),
   });
