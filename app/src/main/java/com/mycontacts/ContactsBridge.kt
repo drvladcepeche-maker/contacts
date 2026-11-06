@@ -9,13 +9,19 @@ import java.net.URL
 data class SyncSummary(
     val attempted: Int = 0, val unique: Int = 0, val inserted: Int = 0,
     val updated: Int = 0, val skipped: Int = 0, val duplicates: Int = 0,
-    val conflicts: Map<String, List<String>> = emptyMap()
+    val conflicts: Map<String, List<String>> = emptyMap(),
+    val manifestRecorded: Boolean = false,
+    val manifestError: String? = null,
+    val syncId: String? = null
 ) {
     val synced: Int get() = inserted + updated
     fun toJson(): JSONObject = JSONObject().put("attempted", attempted)
         .put("unique_contacts", unique).put("inserted", inserted)
         .put("updated_existing", updated).put("skipped_existing", skipped)
         .put("duplicate_ids_in_batch_removed", duplicates)
+        .put("manifest_recorded", manifestRecorded)
+        .put("manifest_error", manifestError ?: JSONObject.NULL)
+        .put("sync_id", syncId ?: JSONObject.NULL)
         .put("conflicts", JSONArray().apply { conflicts.forEach { (id, fields) ->
             put(JSONObject().put("id", id).put("fields", JSONArray(fields)))
         } })
@@ -92,9 +98,12 @@ class ContactsBridge(context: Context) {
         var attempted = 0; var unique = 0; var inserted = 0; var updated = 0
         var skipped = 0; var duplicates = 0
         val conflicts = LinkedHashMap<String, LinkedHashSet<String>>()
+        val localContactIds = LinkedHashSet<String>()
+        val syncId = java.util.UUID.randomUUID().toString()
         for (contacts in batches) for (batch in contacts.chunked(100)) {
             if (batch.isEmpty()) continue
             attempted += batch.size
+            batch.forEach { localContactIds.add(it.id.toString()) }
             val arr = JSONArray()
             batch.forEach { c ->
                 arr.put(JSONObject()
@@ -125,7 +134,32 @@ class ContactsBridge(context: Context) {
                 for (j in 0 until names.length()) names.optString(j).takeIf { it.isNotBlank() }?.let(fields::add)
             }
         }
-        val summary = SyncSummary(attempted, unique, inserted, updated, skipped, duplicates, conflicts.mapValues { it.value.toList() })
+
+        var manifestRecorded = false
+        var manifestError: String? = null
+        try {
+            val manifestResponse = request(JSONObject()
+                .put("action", "record_sync_manifest")
+                .put("sync_id", syncId)
+                .put("local_contact_ids", JSONArray(localContactIds))
+                .put("sync_summary", JSONObject()
+                    .put("attempted", attempted)
+                    .put("unique_contacts", unique)
+                    .put("inserted", inserted)
+                    .put("updated_existing", updated)
+                    .put("skipped_existing", skipped)
+                    .put("conflicts", conflicts.size)
+                    .put("duplicates", duplicates)))
+            manifestRecorded = manifestResponse.optBoolean("recorded", false)
+            if (!manifestRecorded) manifestError = "Сервер не подтвердил запись реестра"
+        } catch (error: Exception) {
+            manifestError = error.message ?: error.javaClass.simpleName
+        }
+
+        val summary = SyncSummary(
+            attempted, unique, inserted, updated, skipped, duplicates,
+            conflicts.mapValues { it.value.toList() }, manifestRecorded, manifestError, syncId
+        )
         lastSyncSummary = summary
         return summary
     }
