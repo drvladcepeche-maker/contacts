@@ -92,7 +92,7 @@ class BraveAccessibilityService : AccessibilityService() {
     private val pollPending = object : Runnable {
         override fun run() {
             processPendingIfReady()
-            if (pending.isNotEmpty()) handler.postDelayed(this, WINDOW_POLL_MS)
+            if (pending.isNotEmpty() && !verificationInProgress) handler.postDelayed(this, WINDOW_POLL_MS)
         }
     }
 
@@ -172,7 +172,6 @@ class BraveAccessibilityService : AccessibilityService() {
         val appWindows = applicationWindowPackages().joinToString(", ").ifBlank { "none" }
         respond(failure(requestId,
             "Timed out waiting for Brave's application window (active package: $currentPackage; application windows: $appWindows)."))
-        if (pending.isNotEmpty()) handler.post(pollPending)
     }
 
     private fun removePending(requestId: String) {
@@ -208,11 +207,9 @@ class BraveAccessibilityService : AccessibilityService() {
                 verifyAfterAction(verificationPayload, result, beforeFingerprint, command.requestId)
             } else {
                 respond(result)
-                if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
             }
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
-            if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
         }
     }
 
