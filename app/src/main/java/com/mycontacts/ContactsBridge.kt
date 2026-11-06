@@ -149,7 +149,12 @@ class ContactsBridge(context: Context) {
                     .put("updated_existing", updated)
                     .put("skipped_existing", skipped)
                     .put("conflicts", conflicts.size)
-                    .put("duplicates", duplicates)))
+                    .put("duplicates", duplicates))
+                .put("conflict_details", JSONArray().apply {
+                    conflicts.forEach { (id, fields) ->
+                        put(JSONObject().put("id", id).put("fields", JSONArray(fields)))
+                    }
+                }))
             manifestRecorded = manifestResponse.optBoolean("recorded", false)
             if (!manifestRecorded) manifestError = "Сервер не подтвердил запись реестра"
         } catch (error: Exception) {
