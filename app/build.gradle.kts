@@ -3,6 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+val appVersionCode = ciRunNumber?.let { 1000 + it } ?: 6
+val appVersionName = ciRunNumber?.let { "0.6.$it" } ?: "0.6"
+
 val stableStorePath = System.getenv("MYCONTACTS_KEYSTORE_PATH")
 val stableStorePassword = System.getenv("MYCONTACTS_KEYSTORE_PASSWORD")
 val stableKeyAlias = System.getenv("MYCONTACTS_KEY_ALIAS")
@@ -16,8 +20,8 @@ android {
         applicationId = "com.mycontacts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.6"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
     signingConfigs {
         if (stableSigningEnabled) {
