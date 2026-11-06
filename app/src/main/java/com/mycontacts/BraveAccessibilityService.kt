@@ -118,19 +118,26 @@ class BraveAccessibilityService : AccessibilityService() {
         pending.addLast(command)
         handler.postDelayed(timeout, waitMs)
 
-        if (action == "open_url") {
-            try {
+        try {
+            if (action == "open_url") {
                 val raw = payload.optString("url")
                 val uri = Uri.parse(raw)
                 require(uri.scheme == "https" || uri.scheme == "http") { "Only HTTP(S) URLs can be opened." }
                 startActivity(Intent(Intent.ACTION_VIEW, uri)
                     .setPackage(TARGET_PACKAGE)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (error: Exception) {
-                removePending(requestId)
-                respond(failure(requestId, error.message ?: "Could not launch Brave."))
-                return
+            } else {
+                // Shell commands arrive while Termux is foreground. Bring Brave's task
+                // forward so the accessibility service can obtain its active window.
+                val launchIntent = packageManager.getLaunchIntentForPackage(TARGET_PACKAGE)
+                    ?: throw IllegalStateException("Brave is not installed or has no launch activity.")
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                startActivity(launchIntent)
             }
+        } catch (error: Exception) {
+            removePending(requestId)
+            respond(failure(requestId, error.message ?: "Could not launch Brave."))
+            return
         }
         processPendingIfReady()
     }
