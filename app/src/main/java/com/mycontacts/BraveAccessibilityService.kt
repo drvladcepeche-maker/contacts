@@ -89,7 +89,8 @@ class BraveAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.packageName?.toString() != TARGET_PACKAGE) return
+        // Inspect the current window set on every event. The event source can be
+        // a system window even while Brave remains available as another window.
         processPendingIfReady()
     }
 
@@ -145,9 +146,56 @@ class BraveAccessibilityService : AccessibilityService() {
     private fun expire(requestId: String) {
         val command = pending.firstOrNull { it.requestId == requestId } ?: return
         pending.remove(command)
-        val currentPackage = rootInActiveWindow?.packageName?.toString().orEmpty().ifBlank { "none" }
         respond(failure(requestId,
-            "Timed out waiting for Brave to become the active accessibility window (active package: $currentPackage)."))
+            "Timed out waiting for a Brave accessibility window. " + activeWindowSummary()))
+    }
+
+    /**
+     * Select Brave from the complete accessibility window set, preferring its
+     * focused window and then its active window. rootInActiveWindow alone can
+     * refer to Termux or a system overlay while Brave is present in getWindows().
+     */
+    private fun targetWindowRoot(): AccessibilityNodeInfo? {
+        val candidates = try {
+            windows.mapNotNull { window ->
+                val root = try { window.root } catch (_: Exception) { null } ?: return@mapNotNull null
+                if (root.packageName?.toString() == TARGET_PACKAGE) window to root else null
+            }.sortedWith(
+                compareByDescending<Pair<android.view.accessibility.AccessibilityWindowInfo, AccessibilityNodeInfo>> {
+                    it.first.isFocused
+                }.thenByDescending { it.first.isActive }
+            )
+        } catch (error: Exception) {
+            android.util.Log.w("BraveAccessibilityService", "Could not enumerate accessibility windows.", error)
+            emptyList()
+        }
+
+        candidates.firstOrNull()?.second?.let { return it }
+
+        // Compatibility fallback for devices that expose the active root but
+        // return an incomplete window list.
+        return try {
+            rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun activeWindowSummary(): String {
+        val windowDetails = try {
+            windows.joinToString(separator = ", ") { window ->
+                val packageName = try { window.root?.packageName?.toString().orEmpty() } catch (_: Exception) { "" }
+                "${packageName.ifBlank { "unknown" }}(focused=${window.isFocused},active=${window.isActive})"
+            }.ifBlank { "none" }
+        } catch (_: Exception) {
+            "unavailable"
+        }
+        val activePackage = try {
+            rootInActiveWindow?.packageName?.toString().orEmpty().ifBlank { "none" }
+        } catch (_: Exception) {
+            "unavailable"
+        }
+        return "rootInActiveWindow package: $activePackage; accessibility windows: $windowDetails."
     }
 
     private fun removePending(requestId: String) {
@@ -158,9 +206,7 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private fun processPendingIfReady() {
         if (pending.isEmpty()) return
-        val root = rootInActiveWindow ?: return
-        val packageName = root.packageName?.toString().orEmpty()
-        if (packageName != TARGET_PACKAGE) return
+        val root = targetWindowRoot() ?: return
 
         // Execute one command per event/root snapshot; later commands will be
         // picked up by the next accessibility event or by the next enqueue.
@@ -169,6 +215,7 @@ class BraveAccessibilityService : AccessibilityService() {
         try {
             val result = executeAgainstRoot(command.payload, root)
                 .put("request_id", command.requestId)
+                .put("window_source", "accessibility_windows")
             respond(result)
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
