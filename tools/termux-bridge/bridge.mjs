@@ -366,7 +366,7 @@ async function braveAccessibility(args) {
   const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
   if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
   // Termux's app UID cannot reliably query PackageManager on some Android builds.
-  // Target the dedicated recovery package directly; the receiver validates the sender UID.
+  // Target the dedicated recovery package directly; Android enforces the receiver permission.
   const packageName = String(args.app_package || "com.mycontacts.bridgefix4");
   if (!["com.mycontacts.bridgefix4", "com.mycontacts.pairing2", "com.mycontacts"].includes(packageName)) {
     throw new Error("Rejected companion package. Only approved My Contacts package IDs are allowed.");
