@@ -381,7 +381,7 @@ async function braveAccessibility(args) {
   let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
   try { await access(rishBin); } catch { rishBin = "rish"; }
   const identity = await run(rishBin, ["-c", "id"], 15000);
-  if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identity.output)) {
+  if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
     throw new Error("Shizuku is unavailable or not authorized; expected rish to run as Android shell (uid=2000). " +
       (identity.errorText || identity.output || ""));
   }
