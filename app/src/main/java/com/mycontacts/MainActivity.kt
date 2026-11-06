@@ -371,7 +371,7 @@ class MainActivity : Activity() {
         val manifestStatus = if (summary.manifestRecorded) {
             "Реестр ID: записан."
         } else {
-            "Реестр ID: не записан (${summary.manifestError ?: \"ошибка\"})."
+            "Реестр ID: не записан (${summary.manifestError ?: "ошибка"})."
         }
         val message = "Проверено: ${summary.attempted}. Уникальных: ${summary.unique}. Добавлено: ${summary.inserted}. Обновлено: ${summary.updated}. Без изменений: ${summary.skipped}. Конфликтов: ${conflicts.size}. Повторов в пакетах: ${summary.duplicates}. $manifestStatus"
         status.text = message
