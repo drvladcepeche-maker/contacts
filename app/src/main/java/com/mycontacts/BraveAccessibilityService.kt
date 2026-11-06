@@ -87,6 +87,7 @@ class BraveAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<PendingCommand>()
     private var verificationInProgress = false
+    private var verificationRequestId = ""
     private var verificationRunnable: Runnable? = null
     private val pollPending = object : Runnable {
         override fun run() {
@@ -113,6 +114,10 @@ class BraveAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(pollPending)
         verificationRunnable?.let(handler::removeCallbacks)
         verificationRunnable = null
+        if (verificationInProgress && verificationRequestId.isNotBlank()) {
+            respond(failure(verificationRequestId, "Accessibility service was disconnected during UI verification."))
+        }
+        verificationRequestId = ""
         verificationInProgress = false
         while (pending.isNotEmpty()) {
             val command = pending.removeFirst()
@@ -191,10 +196,16 @@ class BraveAccessibilityService : AccessibilityService() {
             val beforeFingerprint = if (action in setOf("click", "input", "scroll", "back")) {
                 treeFingerprint(root)
             } else ""
+            val verificationPayload = JSONObject(command.payload.toString())
+            if (action == "input") {
+                val originalNode = findNode(root, command.payload)
+                val originalViewId = originalNode?.viewIdResourceName.orEmpty()
+                if (originalViewId.isNotBlank()) verificationPayload.put("view_id", originalViewId)
+            }
             val result = executeAgainstRoot(command.payload, root)
                 .put("request_id", command.requestId)
             if (result.optBoolean("ok") && action in setOf("click", "input", "scroll", "back")) {
-                verifyAfterAction(command.payload, result, beforeFingerprint)
+                verifyAfterAction(verificationPayload, result, beforeFingerprint, command.requestId)
             } else {
                 respond(result)
                 if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
@@ -210,8 +221,9 @@ class BraveAccessibilityService : AccessibilityService() {
      * only means Android accepted the request. Re-read the Brave window until its tree
      * stabilizes, then report whether the requested state change is observable.
      */
-    private fun verifyAfterAction(payload: JSONObject, result: JSONObject, beforeFingerprint: String) {
+    private fun verifyAfterAction(payload: JSONObject, result: JSONObject, beforeFingerprint: String, requestId: String) {
         verificationInProgress = true
+        verificationRequestId = requestId
         val startedAt = android.os.SystemClock.uptimeMillis()
         var lastFingerprint = ""
         var stableSamples = 0
@@ -262,6 +274,7 @@ class BraveAccessibilityService : AccessibilityService() {
                 }
 
                 verificationRunnable = null
+                verificationRequestId = ""
                 verificationInProgress = false
                 respond(result)
                 if (pending.isNotEmpty()) handler.post(pollPending)
