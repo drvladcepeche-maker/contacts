@@ -127,7 +127,9 @@ class ContactRepo(private val cr: ContentResolver) {
      */
     fun syncBatches(allowedAccounts: Set<Acc>, batchSize: Int = 100): Sequence<List<Contact>> = sequence {
         require(batchSize in 1..300) { "Размер пакета должен быть от 1 до 300" }
-        if (allowedAccounts.isEmpty()) return@sequence
+        require(allowedAccounts.isNotEmpty()) {
+            "Нет аккаунтов, разрешённых для чтения и синхронизации; реестр полного снимка не записан"
+        }
         val eligible = loadAll(includeFields = false).filter { contact ->
             contact.accountSources.isNotEmpty() && contact.accountSources.all { it in allowedAccounts }
         }
