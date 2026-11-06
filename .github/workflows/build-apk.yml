@@ -64,7 +64,7 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Prepare signed update assets
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/brave-accessibility-control' && steps.signing.outputs.stable_signing == 'true'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
         shell: bash
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -72,19 +72,19 @@ jobs:
           cd "$RUNNER_TEMP"
           sha256sum moi-kontakty.apk > moi-kontakty.apk.sha256
       - name: Publish latest signed update
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/brave-accessibility-control' && steps.signing.outputs.stable_signing == 'true'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: app-latest
-          target_commitish: feature/brave-accessibility-control
-          name: Мои контакты — последняя сборка
+          tag_name: mycontacts-app-${{ github.sha }}
+          target_commitish: ${{ github.ref_name }}
+          name: Мои контакты — 0.6 (${{ github.sha }})
           body: |
             Автоматическая подписанная сборка приложения.
             Версия: 0.6
             Commit: ${{ github.sha }}
           prerelease: true
+          draft: false
           make_latest: false
-          overwrite_files: true
           files: |
             ${{ runner.temp }}/moi-kontakty.apk
             ${{ runner.temp }}/moi-kontakty.apk.sha256
