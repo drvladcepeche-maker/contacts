@@ -45,7 +45,11 @@ The branch is isolated. It does not modify the existing working branch unless th
 - Workflow: Build APK
 - Run ID: `42223646794`
 - Run number: `350`
-- Status at last check: in progress
+- Status: success (all build steps completed)
+- Artifact ID: `13503798957`
+- APK size: 93,049,169 bytes
+- APK SHA-256: `8173fc5aef06c18bee2f7f1882c6ef3fcca549060f9454f3683d2e54e20145c4`
+- Stable Android signing secrets: configured in CI
 - Commit: `1b16b628970af8cf5b2523ad3462593c656c448a`
 
 Do not treat the APK as ready until the workflow completes successfully and the artifact is downloaded and verified.
