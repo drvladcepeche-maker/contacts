@@ -1,9 +1,12 @@
 package com.mycontacts
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Toast
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
@@ -51,7 +54,7 @@ object ApkUpdater {
                 download(downloadUrl, apk)
                 val expectedHash = downloadText(checksumUrl).trim().substringBefore(' ').lowercase()
                 require(expectedHash.matches(Regex("[0-9a-f]{64}"))) { "Некорректная SHA-256 контрольная сумма" }
-                require(sha256(apk.readBytes()) == expectedHash) { "Контрольная сумма APK не совпадает; установка отменена" }
+                require(sha256(apk) == expectedHash) { "Контрольная сумма APK не совпадает; установка отменена" }
 
                 val archive = activity.packageManager.getPackageArchiveInfo(
                     apk.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES
@@ -83,7 +86,8 @@ object ApkUpdater {
                         Toast.LENGTH_LONG
                     ).show()
                 }
-                val command = "pm install -r --user 0 ${shellQuote(apk.absolutePath)}"
+                val installFile = publishToDownloads(activity, apk)
+                val command = "pm install -r --user 0 ${shellQuote(installFile.absolutePath)}"
                 val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
                 process.outputStream.close()
                 val stdout = process.inputStream.bufferedReader().use { it.readText() }
@@ -165,11 +169,62 @@ object ApkUpdater {
         return signatures?.map { sha256(it.toByteArray()) }?.toSet() ?: emptySet()
     }
 
+    @Suppress("DEPRECATION")
     private fun versionCode(info: PackageInfo): Long =
-        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
 
-    private fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** Shell UID cannot read app-private cache files; publish the verified APK in Downloads. */
+    private fun publishToDownloads(activity: Activity, source: File): File {
+        if (Build.VERSION.SDK_INT < 29) {
+            throw IllegalStateException("Автоустановка через Shizuku требует Android 10 или новее")
+        }
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val directory = File(downloads, "MyContacts")
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException("Не удалось создать Download/MyContacts")
+        }
+        val destination = File(directory, APK_ASSET)
+        val relativePath = Environment.DIRECTORY_DOWNLOADS + "/MyContacts/"
+        val resolver = activity.contentResolver
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        resolver.delete(
+            collection,
+            "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+            arrayOf(APK_ASSET, relativePath)
+        )
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, APK_ASSET)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/vnd.android.package-archive")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(collection, values)
+            ?: throw IllegalStateException("Android не создал файл обновления в Downloads")
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output ->
+                source.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("Не удалось записать APK в Downloads")
+            val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            resolver.update(uri, ready, null, null)
+        } catch (error: Exception) {
+            resolver.delete(uri, null, null)
+            throw error
+        }
+        return destination
+    }
 
     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 }
