@@ -99,3 +99,29 @@ This is not evidence that Brave is absent or that its launch Activity is invalid
 ## Foreground-safety clarification
 
 The implementation experiment selects the focused application window across **all** application windows first, then the highest-layer application window, then an active application window. It accepts the result only when that selected foreground root belongs to Brave. This avoids a false positive where Brave remains in a background window while Termux is actually focused.
+
+
+## Implemented device-test build (updated 2026-11-06)
+
+The initial implementation was refined to follow the safer foreground selection described above:
+
+- Enumerate all `TYPE_APPLICATION` windows.
+- Select the foreground candidate globally: focused first, then highest `layer`, then active.
+- Only proceed if that selected window's root package is `com.brave.browser`. A background Brave window is not accepted while Termux or another app is focused.
+- If no application window is exposed, fall back to `rootInActiveWindow` only when it belongs to Brave.
+- Poll pending requests every 250 ms, bounded by the existing per-request timeout, rather than relying only on a new accessibility event.
+- Include package, type, focused, layer and active flags in timeout diagnostics.
+
+Implementation branch: `fix/brave-focused-accessibility-window`  
+Final implementation commit: `646c0c22eb09ad7a2635813f7247c103f58b5abf`  
+Changed file: `app/src/main/java/com/mycontacts/BraveAccessibilityService.kt`
+
+### Build #355
+
+- [GitHub Actions run #355](https://github.com/drvladcepeche-maker/contacts/actions/runs/42225373150) — completed successfully.
+- Artifact ID: `13505486421`
+- APK SHA-256: `0cdb406f552f0e512b72abc9eedd2a5b8599c91fc75cb7ab1ab30f82316ac82a`
+- Stable signing secrets were confirmed present in the build log.
+- Runtime test on the user's phone is still pending.
+
+The APK is ready for controlled installation and testing. Do not interpret CI success as runtime validation.
