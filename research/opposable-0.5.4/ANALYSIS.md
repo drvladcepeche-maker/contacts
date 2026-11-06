@@ -182,3 +182,126 @@ APK является ZIP-контейнером, содержит один `clas
 
 Для сопоставления исходного APK с будущими копиями использовать SHA-256 из начала документа. Сам бинарный APK в эту ветку не включён: файл около 41 MiB, а запись бинарного объекта через текущий GitHub workflow не настроена на Git LFS. Исходный файл остаётся в текущем диалоге; при повторном анализе в другом чате его можно идентифицировать по SHA-256.
 
+
+
+---
+
+# Дополнение 1. Углублённый разбор DEX и ресурсов (2026-11-06)
+
+Это дополнение основано на извлечении строк и идентификаторов методов из `classes.dex`, чтении code_item для выбранных методов и разборе бинарного XML `res/az.xml`. Это уже глубже простого просмотра строк, но не полная декомпиляция в исходный Kotlin.
+
+## 12. Реальная конфигурация Accessibility Service
+
+Извлечён файл `res/az.xml`, на который ссылается `PhoneControlService` в манифесте:
+
+- `accessibilityEventTypes = 0x401860`: window state changed, view focused, window content changed, view scrolled, windows changed.
+- `accessibilityFeedbackType = 0x10`: generic feedback.
+- `notificationTimeout = 50 ms`.
+- `accessibilityFlags = 0x52`: include not-important views (0x02), report view IDs (0x10), retrieve interactive windows (0x40).
+- `canRetrieveWindowContent = true`.
+- `canPerformGestures = true`.
+- `canTakeScreenshot = true`.
+- `isAccessibilityTool = true`.
+- Package allowlist в XML не задана: служба не ограничена одним приложением через `android:packageNames`.
+
+Последний пункт важен: Opposable рассчитан на управление разными приложениями. Наша служба намеренно ограничена Brave через `android:packageNames=com.brave.browser`, что уменьшает область доступа.
+
+## 13. Подтверждённая логика выбора активного окна
+
+В `PhoneControlService` найдены методы `frontAppWindow`, `frontPackage`, `appRootFallback`, `windowPackageAt`, `activeWindowQuiet`.
+
+Алгоритм `frontAppWindow` по инструкциям DEX:
+
+1. Получить `AccessibilityService.getWindows()`.
+2. Оставить окна типа `TYPE_APPLICATION`.
+3. Выбрать первое сфокусированное окно.
+4. Если сфокусированного нет — выбрать окно с наибольшим `layer`.
+5. Если подходящее окно всё ещё не выбрано — использовать активное окно.
+
+`frontPackage` получает root выбранного окна и читает `root.packageName`. Дополнительный fallback — `getRootInActiveWindow()`, но он отбрасывает окно `com.android.systemui`.
+
+Метод `launchApp`:
+
+- вызывает `PackageManager.getLaunchIntentForPackage(app)`;
+- запускает Activity через `startActivity`;
+- добавляет флаги `0x10200000` (NEW_TASK + RESET_TASK_IF_NEEDED);
+- после запуска в течение примерно 4 секунд опрашивает Accessibility windows, отбирает application windows, получает их root и ищет нужный package name.
+
+**Это ключевое архитектурное отличие от нашей текущей Brave-реализации.** Мы используем только `rootInActiveWindow`, который в последнем тесте возвращал Termux. Opposable не ограничивается этим одним root: он сканирует доступные окна и отдельно определяет окно приложения.
+
+## 14. Стабилизация интерфейса и проверка действий
+
+В DEX подтверждены:
+
+- `fingerprint` и `settleAfter`: снимают отпечаток текущего UI, ждут изменения/стабилизации и учитывают недавние Accessibility events и возраст активного окна.
+- `waitForPageContent`: циклически ищет узлы и ожидает появления содержимого.
+- `captureBitmap`: использует системный `AccessibilityService.takeScreenshot`, ждёт асинхронный callback через `CompletableFuture` (таймаут ожидания в коде — 10 секунд).
+- `elements`, `findNodes`, `readText`: строят структурированное представление UI-дерева.
+- `tapElement`, `tap`, `swipe`, `typeText`, `pressKey`: отдельные исполнительные методы, а не один общий универсальный tap.
+- `typedCheck` в `OwlAgent`: после ввода проверяет, появился ли текст в поле; если не появился, может повторить ввод и сообщить, что поле не подтвердило результат.
+
+Это не просто «отправить действие и вернуть boolean». Архитектура предусматривает чтение состояния до действия, паузу на стабилизацию и проверку результата.
+
+## 15. Запуск сервиса, watchdog и модели
+
+При `onServiceConnected` Opposable:
+
+1. запускает `AppEvents`;
+2. обновляет сведения о версии, в которой Accessibility Service запускалась;
+3. создаёт notification channel;
+4. перезапускает локальный MCP-сервер;
+5. запускает `RelayClient`;
+6. прогревает `OwlBrain`;
+7. запускает watchdog MCP.
+
+В коде `PhoneControlService` есть методы `restartMcp`, `startWatchdog`, `mcpStatus`. Это объясняет, почему локальный сервер и relay тесно связаны с жизненным циклом Accessibility Service.
+
+## 16. Локальный MCP: фактическая схема
+
+Код `McpHttpServer` подтверждает:
+
+- отдельный accept-thread с именем `mcp-accept`;
+- попытку привязки ServerSocket к `0.0.0.0`, с fallback на loopback;
+- для каждого принятого соединения создаётся обработчик в executor;
+- HTTP socket timeout задаётся примерно на 120 секунд;
+- запросы к защищённым маршрутам проверяются по Bearer token;
+- авторизация сравнивает байтовые значения через `MessageDigest.isEqual`;
+- поддерживаются `Authorization: Bearer <token>` и query-параметр `token`;
+- `GET /` возвращает справку;
+- `GET /api` возвращает описание REST API;
+- `/api/*` направляется в `PhoneApi.rest`;
+- `POST /mcp` принимает JSON-RPC; SSE-поток не поддерживается;
+- обрабатывается заголовок `Mcp-Session-Id`.
+
+Справка API содержит endpoints для health, screen, do, tasks, recipes, audit, code и schedules. Следовательно, локальный MCP — не только транспорт для UI-команд, но и общий API телефона.
+
+**Замечание безопасности:** привязка к `0.0.0.0` может сделать порт доступным с других устройств той же сети. Встроенная Bearer-проверка — обязательный барьер, но точный порт, сетевые ACL и способ хранения локального токена требуют отдельной проверки. Query-token менее предпочтителен, чем заголовок, поскольку URL может попадать в логи.
+
+## 17. Relay: регистрация и сопряжение
+
+Из тела методов `RelayClient` подтверждены следующие операции:
+
+- регистрация телефона: `POST /v1/phones`; передаются signup key и имя; в ответе сохраняются `phone_id`, `phone_secret`, `client_token`;
+- старт pairing: `POST /v1/pair/start`, Bearer phone_secret и `phone_id`; возвращаются pairing `code`, `expires_in`, `connect_url`, `cli`;
+- проверка pairing: `/v1/pair/status?code=`;
+- WebSocket-соединение: `/v1/phone/connect`, Bearer phone_secret и заголовок `X-Opposable-Device`;
+- ротация client token: `POST /v1/phones/{phone_id}/token/rotate`;
+- при регистрации код явно отвергает relay URL, который не начинается с `https://`.
+
+Это подтверждает двухуровневую модель: локальный MCP на телефоне и отдельный relay для доступа извне. Не следует путать `client_token` и `phone_secret`: в изученных методах они используются для разных операций.
+
+## 18. Guard и платежные подтверждения
+
+В классе `Guard` подтверждены методы `isPayment`, `paymentShown`, `payment`, `assess`, `check`, `ownScreen`, `cover`, `coverRefusal`.
+
+Строки и регулярные выражения показывают эвристическую классификацию финансового действия по нескольким группам признаков: слова purchase/pay/transfer/subscribe/donate/top up; платёжные кнопки и формулировки; суммы, валюта, получатель, IBAN, checkout, order summary и др. Есть отдельная проверка «скользящего подтверждения» и действий вроде swipe to pay.
+
+`ownScreen` блокирует действия агента на экранах самого Opposable: настройки, задачи и экран Approve/Deny. Владелец телефона должен ответить сам. После изменения платёжного экрана прежнее одобрение становится недействительным и запрашивается заново.
+
+Это важный пример принципа безопасности: агент может подготовить действие, но не должен сам подтверждать критическое действие на экране владельца.
+
+## 19. Обновлённый статус анализа
+
+Подтверждены на уровне DEX-инструкций и ресурсов: Accessibility configuration, выбор окна, запуск приложений, стабилизация UI, screenshot API, основные методы RelayClient, локальный HTTP/MCP и часть Guard.
+
+Не подтверждены: полная семантика каждого obfuscated метода, точный порт локального MCP, внутренний формат всех WebSocket сообщений, точное содержимое отправляемой телеметрии, фактическое шифрование локального хранилища токенов и поведение сетевых запросов в runtime.
