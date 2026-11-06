@@ -47,7 +47,7 @@ class TelegramMatchService : Service() {
         if (!initialized.compareAndSet(false, true)) return START_NOT_STICKY
         io.execute {
             try {
-                val all = repo.loadAll()
+                val all = repo.loadAll(includeFields = false)
                 val phoneRows = all.flatMap { contact ->
                     contact.phones.mapNotNull { raw ->
                         normalizeInternationalPhone(raw).takeIf { it.isNotBlank() }
