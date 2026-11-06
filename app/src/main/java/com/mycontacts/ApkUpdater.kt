@@ -11,6 +11,7 @@ import android.os.Environment
 import android.os.IBinder
 import android.provider.MediaStore
 import android.widget.Toast
+import org.json.JSONArray
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import java.io.File
@@ -22,8 +23,8 @@ import java.util.concurrent.TimeUnit
 
 /** Verified, Shizuku-backed in-place updater for this exact application package. */
 object ApkUpdater {
-    private const val RELEASE_API =
-        "https://api.github.com/repos/drvladcepeche-maker/contacts/releases/tags/app-latest"
+    private const val RELEASES_API =
+        "https://api.github.com/repos/drvladcepeche-maker/contacts/releases?per_page=100"
     private const val APK_ASSET = "moi-kontakty.apk"
     private const val HASH_ASSET = "moi-kontakty.apk.sha256"
 
@@ -39,8 +40,21 @@ object ApkUpdater {
         Toast.makeText(activity, "Проверяю подписанное обновление…", Toast.LENGTH_LONG).show()
         Thread {
             try {
-                val release = JSONObject(downloadText(RELEASE_API))
-                val assets = release.optJSONArray("assets")
+                val releases = JSONArray(downloadText(RELEASES_API))
+                var release: JSONObject? = null
+                var newestPublishedAt = ""
+                for (i in 0 until releases.length()) {
+                    val candidate = releases.optJSONObject(i) ?: continue
+                    if (!candidate.optBoolean("prerelease") || candidate.optBoolean("draft")) continue
+                    if (!candidate.optString("tag_name").startsWith("mycontacts-app-")) continue
+                    val publishedAt = candidate.optString("published_at", candidate.optString("created_at"))
+                    if (publishedAt > newestPublishedAt) {
+                        newestPublishedAt = publishedAt
+                        release = candidate
+                    }
+                }
+                val latestRelease = release ?: throw IllegalStateException("Подписанный релиз приложения ещё не опубликован")
+                val assets = latestRelease.optJSONArray("assets")
                     ?: throw IllegalStateException("В релизе нет списка файлов")
                 var apkUrl: String? = null
                 var hashUrl: String? = null
