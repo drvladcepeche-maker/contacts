@@ -49,6 +49,7 @@ class MainActivity : Activity() {
     private lateinit var search: EditText
     private lateinit var status: TextView
     private var all: List<Contact> = emptyList()
+    private var refreshGeneration = 0
     private var shown: List<Contact> = emptyList()
     private var pendingXlsxExport: List<Contact>? = null
 
@@ -422,13 +423,13 @@ class MainActivity : Activity() {
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        val current = if (contactId > 0) repo.loadAll().firstOrNull { it.id == contactId } else null
+                                        val current = if (contactId > 0) repo.loadAll(includeFields = false).firstOrNull { it.id == contactId } else null
                                         if (contactId > 0 && current == null) throw IllegalStateException("Контакт не найден")
                                         val target = writableAccountFor(current)
                                             ?: throw IllegalStateException("Нет разрешённого для записи аккаунта. Проверьте настройки аккаунтов синхронизации.")
                                         if (current != null) repo.updateInAccount(contactId, name, phone, target)
                                         else repo.addToAccount(name, phone, target)
-                                        val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
+                                        val found = repo.loadAll(includeFields = false).firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
                                     } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка записи") } catch (_: Exception) {} }
@@ -446,7 +447,7 @@ class MainActivity : Activity() {
                         require(contactId > 0) { "Некорректный ID контакта" }
                         val telegramId = payload.optString("telegram_id", "")
                         val username = payload.optString("telegram_username", "")
-                        val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                        val contact = repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
                             ?: throw IllegalStateException("Контакт не найден")
                         val target = writableAccountFor(contact)
                             ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
@@ -461,7 +462,7 @@ class MainActivity : Activity() {
             "delete_contact" -> {
                 runOnUiThread {
                     val contactId = payload.optLong("id", -1)
-                    val c = repo.loadAll().firstOrNull { it.id == contactId }
+                    val c = repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
                     if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
@@ -482,7 +483,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     val ids = payload.optJSONArray("ids") ?: JSONArray()
                     val group = (0 until ids.length()).mapNotNull { ix ->
-                        val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
+                        val cid = ids.optLong(ix, -1); repo.loadAll(includeFields = false).firstOrNull { it.id == cid }
                     }.distinctBy { it.id }
                     if (group.size < 2) bg { try { completeBridgeCommand(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
@@ -532,7 +533,7 @@ class MainActivity : Activity() {
             .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }
             .toSet()
         if (allowed.isEmpty()) return emptyList()
-        return repo.loadAll().filter { contact ->
+        return repo.loadAll(includeFields = true).filter { contact ->
             contact.accountSources.isNotEmpty() && contact.accountSources.all { it in allowed }
         }
     }
@@ -594,9 +595,26 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
-        try { all = repo.loadAll() } catch (e: Exception) { toast("Ошибка: ${e.message}") }
-        selected.retainAll(all.map { it.id }.toSet())
-        applyFilter()
+        val generation = ++refreshGeneration
+        status.text = "Загрузка контактов…"
+        bg {
+            try {
+                val loaded = repo.loadAll(includeFields = false)
+                runOnUiThread {
+                    if (isFinishing || isDestroyed || generation != refreshGeneration) return@runOnUiThread
+                    all = loaded
+                    val ids = loaded.asSequence().map { it.id }.toHashSet()
+                    selected.retainAll(ids)
+                    applyFilter()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && generation == refreshGeneration) {
+                        toast("Ошибка загрузки контактов: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 
     private fun applyFilter() {
