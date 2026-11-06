@@ -1,0 +1,21 @@
+{
+  "repository": "drvladcepeche-maker/contacts",
+  "branch": "feature/brave-accessibility-opposable-window-detection",
+  "pull_request": 67,
+  "base_branch": "feature/brave-accessibility-control",
+  "commit": "1b16b628970af8cf5b2523ad3462593c656c448a",
+  "workflow": "Build APK",
+  "workflow_run_id": 42223646794,
+  "workflow_run_number": 350,
+  "workflow_conclusion": "success",
+  "artifact_id": 13503798957,
+  "artifact_name": "moi-kontakty-apk",
+  "apk_filename": "app-debug.apk",
+  "apk_size_bytes": 93049169,
+  "apk_sha256": "8173fc5aef06c18bee2f7f1882c6ef3fcca549060f9454f3683d2e54e20145c4",
+  "package": "com.mycontacts.bridgefix4",
+  "version_name": "0.5",
+  "version_code": 5,
+  "stable_signing_configured": true,
+  "runtime_tested_on_phone": false
+}
