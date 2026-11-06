@@ -189,23 +189,21 @@ class BraveAccessibilityService : AccessibilityService() {
     }
 
     private fun findBraveWindowRoot(): AccessibilityNodeInfo? {
-        val candidates = try {
-            windows.orEmpty()
-                .asSequence()
-                .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-                .mapNotNull { window ->
-                    val root = window.root ?: return@mapNotNull null
-                    if (root.packageName?.toString() == TARGET_PACKAGE) window to root else null
-                }
-                .toList()
+        val applicationWindows = try {
+            windows.orEmpty().filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
         } catch (_: Exception) {
             emptyList()
         }
 
-        return candidates.firstOrNull { it.first.isFocused }?.second
-            ?: candidates.maxByOrNull { it.first.layer }?.second
-            ?: candidates.firstOrNull { it.first.isActive }?.second
-            ?: rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+        // Match Opposable's foreground selection order across ALL app windows.
+        // Do not choose a background Brave window while Termux or another app is focused.
+        val foregroundWindow = applicationWindows.firstOrNull { it.isFocused }
+            ?: applicationWindows.maxByOrNull { it.layer }
+            ?: applicationWindows.firstOrNull { it.isActive }
+        val foregroundRoot = foregroundWindow?.root
+        if (foregroundRoot?.packageName?.toString() == TARGET_PACKAGE) return foregroundRoot
+
+        return rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
     }
 
     private fun applicationWindowPackages(): List<String> = try {
