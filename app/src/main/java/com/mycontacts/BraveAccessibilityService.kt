@@ -23,6 +23,7 @@ class BraveAccessibilityService : AccessibilityService() {
         const val ACTION_COMMAND = "com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND"
         private const val DEFAULT_WAIT_MS = 15000L
         private const val MAX_WAIT_MS = 30000L
+        private const val WINDOW_POLL_MS = 250L
         @Volatile private var active: BraveAccessibilityService? = null
 
         fun enqueueFromShell(context: android.content.Context, payload: JSONObject) {
@@ -81,6 +82,12 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<PendingCommand>()
+    private val windowPoll = object : Runnable {
+        override fun run() {
+            processPendingIfReady()
+            if (pending.isNotEmpty()) handler.postDelayed(this, WINDOW_POLL_MS)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -98,6 +105,7 @@ class BraveAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (active === this) active = null
+        handler.removeCallbacks(windowPoll)
         while (pending.isNotEmpty()) {
             val command = pending.removeFirst()
             handler.removeCallbacks(command.timeout)
@@ -118,6 +126,8 @@ class BraveAccessibilityService : AccessibilityService() {
             android.os.SystemClock.uptimeMillis() + waitMs, timeout)
         pending.addLast(command)
         handler.postDelayed(timeout, waitMs)
+        handler.removeCallbacks(windowPoll)
+        handler.postDelayed(windowPoll, WINDOW_POLL_MS)
 
         try {
             if (action == "open_url") {
@@ -146,34 +156,39 @@ class BraveAccessibilityService : AccessibilityService() {
     private fun expire(requestId: String) {
         val command = pending.firstOrNull { it.requestId == requestId } ?: return
         pending.remove(command)
+        if (pending.isEmpty()) handler.removeCallbacks(windowPoll)
         respond(failure(requestId,
-            "Timed out waiting for a Brave accessibility window. " + activeWindowSummary()))
+            "Timed out waiting for a foreground Brave accessibility window. " + activeWindowSummary()))
     }
 
     /**
-     * Select Brave from the complete accessibility window set, preferring its
-     * focused window and then its active window. rootInActiveWindow alone can
-     * refer to Termux or a system overlay while Brave is present in getWindows().
+     * Match Opposable's foreground-window selection: enumerate application
+     * windows globally, prefer focused, then highest layer, then active.
+     * Only accept the selected foreground root if it belongs to Brave. This
+     * deliberately avoids controlling a background Brave window while Termux
+     * or another app is actually focused.
      */
     private fun targetWindowRoot(): AccessibilityNodeInfo? {
-        val candidates = try {
-            windows.mapNotNull { window ->
-                val root = try { window.root } catch (_: Exception) { null } ?: return@mapNotNull null
-                if (root.packageName?.toString() == TARGET_PACKAGE) window to root else null
+        val appWindows = try {
+            windows.filter {
+                it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
             }.sortedWith(
-                compareByDescending<Pair<android.view.accessibility.AccessibilityWindowInfo, AccessibilityNodeInfo>> {
-                    it.first.isFocused
-                }.thenByDescending { it.first.isActive }
+                compareByDescending<android.view.accessibility.AccessibilityWindowInfo> { it.isFocused }
+                    .thenByDescending { it.layer }
+                    .thenByDescending { it.isActive }
             )
         } catch (error: Exception) {
             android.util.Log.w("BraveAccessibilityService", "Could not enumerate accessibility windows.", error)
             emptyList()
         }
 
-        candidates.firstOrNull()?.second?.let { return it }
+        val selectedWindow = appWindows.firstOrNull()
+        if (selectedWindow != null) {
+            val selectedRoot = try { selectedWindow.root } catch (_: Exception) { null }
+            return selectedRoot?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+        }
 
-        // Compatibility fallback for devices that expose the active root but
-        // return an incomplete window list.
+        // Compatibility fallback only when no application window was exposed.
         return try {
             rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
         } catch (_: Exception) {
@@ -185,7 +200,7 @@ class BraveAccessibilityService : AccessibilityService() {
         val windowDetails = try {
             windows.joinToString(separator = ", ") { window ->
                 val packageName = try { window.root?.packageName?.toString().orEmpty() } catch (_: Exception) { "" }
-                "${packageName.ifBlank { "unknown" }}(focused=${window.isFocused},active=${window.isActive})"
+                "${packageName.ifBlank { "unknown" }}(type=${window.type},focused=${window.isFocused},layer=${window.layer},active=${window.isActive})"
             }.ifBlank { "none" }
         } catch (_: Exception) {
             "unavailable"
@@ -220,6 +235,8 @@ class BraveAccessibilityService : AccessibilityService() {
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
         }
+        handler.removeCallbacks(windowPoll)
+        if (pending.isNotEmpty()) handler.postDelayed(windowPoll, WINDOW_POLL_MS)
     }
 
     private fun respond(result: JSONObject) {
