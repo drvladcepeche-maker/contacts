@@ -94,3 +94,8 @@ The last observed response from our branch was:
 ```
 
 This is not evidence that Brave is absent or that its launch Activity is invalid. It proves only that, at timeout, `rootInActiveWindow` belonged to Termux.
+
+
+## Foreground-safety clarification
+
+The implementation experiment selects the focused application window across **all** application windows first, then the highest-layer application window, then an active application window. It accepts the result only when that selected foreground root belongs to Brave. This avoids a false positive where Brave remains in a background window while Termux is actually focused.
