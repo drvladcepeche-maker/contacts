@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.ArrayDeque
@@ -23,6 +24,10 @@ class BraveAccessibilityService : AccessibilityService() {
         const val ACTION_COMMAND = "com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND"
         private const val DEFAULT_WAIT_MS = 15000L
         private const val MAX_WAIT_MS = 30000L
+        private const val WINDOW_POLL_MS = 250L
+        private const val VERIFY_POLL_MS = 150L
+        private const val VERIFY_MAX_MS = 1800L
+        private const val VERIFY_STABLE_SAMPLES = 3
         @Volatile private var active: BraveAccessibilityService? = null
 
         fun enqueueFromShell(context: android.content.Context, payload: JSONObject) {
@@ -81,6 +86,15 @@ class BraveAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val pending = ArrayDeque<PendingCommand>()
+    private var verificationInProgress = false
+    private var verificationRequestId = ""
+    private var verificationRunnable: Runnable? = null
+    private val pollPending = object : Runnable {
+        override fun run() {
+            processPendingIfReady()
+            if (pending.isNotEmpty()) handler.postDelayed(this, WINDOW_POLL_MS)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -97,6 +111,14 @@ class BraveAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (active === this) active = null
+        handler.removeCallbacks(pollPending)
+        verificationRunnable?.let(handler::removeCallbacks)
+        verificationRunnable = null
+        if (verificationInProgress && verificationRequestId.isNotBlank()) {
+            respond(failure(verificationRequestId, "Accessibility service was disconnected during UI verification."))
+        }
+        verificationRequestId = ""
+        verificationInProgress = false
         while (pending.isNotEmpty()) {
             val command = pending.removeFirst()
             handler.removeCallbacks(command.timeout)
@@ -131,7 +153,7 @@ class BraveAccessibilityService : AccessibilityService() {
                 // forward so the accessibility service can obtain its active window.
                 val launchIntent = packageManager.getLaunchIntentForPackage(TARGET_PACKAGE)
                     ?: throw IllegalStateException("Brave is not installed or has no launch activity.")
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 startActivity(launchIntent)
             }
         } catch (error: Exception) {
@@ -139,15 +161,18 @@ class BraveAccessibilityService : AccessibilityService() {
             respond(failure(requestId, error.message ?: "Could not launch Brave."))
             return
         }
-        processPendingIfReady()
+        handler.removeCallbacks(pollPending)
+        handler.post(pollPending)
     }
 
     private fun expire(requestId: String) {
         val command = pending.firstOrNull { it.requestId == requestId } ?: return
         pending.remove(command)
         val currentPackage = rootInActiveWindow?.packageName?.toString().orEmpty().ifBlank { "none" }
+        val appWindows = applicationWindowPackages().joinToString(", ").ifBlank { "none" }
         respond(failure(requestId,
-            "Timed out waiting for Brave to become the active accessibility window (active package: $currentPackage)."))
+            "Timed out waiting for Brave's application window (active package: $currentPackage; application windows: $appWindows)."))
+        if (pending.isNotEmpty()) handler.post(pollPending)
     }
 
     private fun removePending(requestId: String) {
@@ -157,8 +182,8 @@ class BraveAccessibilityService : AccessibilityService() {
     }
 
     private fun processPendingIfReady() {
-        if (pending.isEmpty()) return
-        val root = rootInActiveWindow ?: return
+        if (pending.isEmpty() || verificationInProgress) return
+        val root = findBraveWindowRoot() ?: return
         val packageName = root.packageName?.toString().orEmpty()
         if (packageName != TARGET_PACKAGE) return
 
@@ -167,12 +192,132 @@ class BraveAccessibilityService : AccessibilityService() {
         val command = pending.removeFirst()
         handler.removeCallbacks(command.timeout)
         try {
+            val action = command.payload.optString("action")
+            val beforeFingerprint = if (action in setOf("click", "input", "scroll", "back")) {
+                treeFingerprint(root)
+            } else ""
+            val verificationPayload = JSONObject(command.payload.toString())
+            if (action == "input") {
+                val originalNode = findNode(root, command.payload)
+                val originalViewId = originalNode?.viewIdResourceName.orEmpty()
+                if (originalViewId.isNotBlank()) verificationPayload.put("view_id", originalViewId)
+            }
             val result = executeAgainstRoot(command.payload, root)
                 .put("request_id", command.requestId)
-            respond(result)
+            if (result.optBoolean("ok") && action in setOf("click", "input", "scroll", "back")) {
+                verifyAfterAction(verificationPayload, result, beforeFingerprint, command.requestId)
+            } else {
+                respond(result)
+                if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
+            }
         } catch (error: Exception) {
             respond(failure(command.requestId, error.message ?: "Accessibility command failed."))
+            if (pending.isNotEmpty()) handler.postDelayed(pollPending, 150L)
         }
+    }
+
+    /**
+     * Accessibility actions are asynchronous: ACTION_CLICK/ACTION_SET_TEXT returning true
+     * only means Android accepted the request. Re-read the Brave window until its tree
+     * stabilizes, then report whether the requested state change is observable.
+     */
+    private fun verifyAfterAction(payload: JSONObject, result: JSONObject, beforeFingerprint: String, requestId: String) {
+        verificationInProgress = true
+        verificationRequestId = requestId
+        val startedAt = android.os.SystemClock.uptimeMillis()
+        var lastFingerprint = ""
+        var stableSamples = 0
+        var latestRootAvailable = false
+
+        val verifier = object : Runnable {
+            override fun run() {
+                val now = android.os.SystemClock.uptimeMillis()
+                val root = findBraveWindowRoot()
+                val fingerprint = root?.let(::treeFingerprint).orEmpty()
+                latestRootAvailable = root != null
+
+                if (fingerprint.isNotBlank() && fingerprint == lastFingerprint) {
+                    stableSamples++
+                } else {
+                    stableSamples = if (fingerprint.isNotBlank()) 1 else 0
+                    lastFingerprint = fingerprint
+                }
+
+                val elapsed = now - startedAt
+                val settled = stableSamples >= VERIFY_STABLE_SAMPLES
+                if (!settled && elapsed < VERIFY_MAX_MS) {
+                    handler.postDelayed(this, VERIFY_POLL_MS)
+                    return
+                }
+
+                val action = payload.optString("action")
+                val stateChanged = fingerprint.isNotBlank() && fingerprint != beforeFingerprint
+                result.put("verification", when {
+                    !latestRootAvailable -> "window_unavailable"
+                    settled && stateChanged -> "state_changed"
+                    settled -> "no_change_detected"
+                    stateChanged -> "changed_but_not_settled"
+                    else -> "no_change_detected"
+                })
+                result.put("state_changed", stateChanged)
+                result.put("settled", settled)
+                result.put("verification_elapsed_ms", elapsed)
+                if (action == "input") {
+                    val currentNode = root?.let { findNode(it, payload) }
+                    val expected = payload.optString("value")
+                    val actual = currentNode?.text?.toString()
+                    val valuePresent = actual == expected
+                    result.put("value_present", valuePresent)
+                    result.put("verified", valuePresent)
+                } else {
+                    result.put("verified", settled && stateChanged)
+                }
+
+                verificationRunnable = null
+                verificationRequestId = ""
+                verificationInProgress = false
+                respond(result)
+                if (pending.isNotEmpty()) handler.post(pollPending)
+            }
+        }
+        verificationRunnable = verifier
+        handler.postDelayed(verifier, VERIFY_POLL_MS)
+    }
+
+    private fun treeFingerprint(root: AccessibilityNodeInfo): String =
+        snapshot(root).toString()
+
+    private fun findBraveWindowRoot(): AccessibilityNodeInfo? {
+        val applicationWindows = try {
+            windows.orEmpty().filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        // Match Opposable's foreground selection order across ALL app windows.
+        // Do not choose a background Brave window while Termux or another app is focused.
+        val foregroundWindow = applicationWindows.firstOrNull { it.isFocused }
+            ?: applicationWindows.maxByOrNull { it.layer }
+            ?: applicationWindows.firstOrNull { it.isActive }
+        if (foregroundWindow != null) {
+            val foregroundRoot = foregroundWindow.root
+            if (foregroundRoot != null) {
+                return foregroundRoot.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+            }
+        }
+
+        return rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+    }
+
+    private fun applicationWindowPackages(): List<String> = try {
+        windows.orEmpty()
+            .asSequence()
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .mapNotNull { it.root?.packageName?.toString() }
+            .distinct()
+            .toList()
+    } catch (_: Exception) {
+        emptyList()
     }
 
     private fun respond(result: JSONObject) {
