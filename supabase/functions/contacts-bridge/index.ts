@@ -249,7 +249,7 @@ Deno.serve(async (req: Request) => {
         }
         const detail = item as Record<string, unknown>;
         const id = typeof detail.id === "string" ? detail.id.trim() : "";
-        if (!/^[1-9]\\d*$/.test(id)) {
+        if (!/^[1-9]\d*$/.test(id)) {
           return json({ error: "Conflict IDs must be positive Android contact IDs" }, 400);
         }
         if (!Array.isArray(detail.fields) || detail.fields.length > 64 ||
