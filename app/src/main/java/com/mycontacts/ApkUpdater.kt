@@ -47,6 +47,15 @@ object ApkUpdater {
                     val candidate = releases.optJSONObject(i) ?: continue
                     if (!candidate.optBoolean("prerelease") || candidate.optBoolean("draft")) continue
                     if (!candidate.optString("tag_name").startsWith("mycontacts-app-")) continue
+                    val candidateAssets = candidate.optJSONArray("assets") ?: continue
+                    var hasApkAsset = false
+                    var hasHashAsset = false
+                    for (assetIndex in 0 until candidateAssets.length()) {
+                        val assetName = candidateAssets.optJSONObject(assetIndex)?.optString("name")
+                        if (assetName == APK_ASSET) hasApkAsset = true
+                        if (assetName == HASH_ASSET) hasHashAsset = true
+                    }
+                    if (!hasApkAsset || !hasHashAsset) continue
                     val publishedAt = candidate.optString("published_at", candidate.optString("created_at"))
                     if (publishedAt > newestPublishedAt) {
                         newestPublishedAt = publishedAt
