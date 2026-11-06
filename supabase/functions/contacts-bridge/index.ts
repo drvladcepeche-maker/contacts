@@ -238,6 +238,28 @@ Deno.serve(async (req: Request) => {
         conflicts: safeCount(rawSummary.conflicts, 0),
         duplicates: safeCount(rawSummary.duplicates, 0),
       };
+      const rawConflictDetails = Array.isArray(body.conflict_details) ? body.conflict_details : [];
+      if (rawConflictDetails.length > 25000) {
+        return json({ error: "Conflict report exceeds the 25000 item safety limit" }, 413);
+      }
+      const conflictDetails: Array<{ id: string; fields: string[] }> = [];
+      for (const item of rawConflictDetails) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return json({ error: "Each conflict detail must be an object" }, 400);
+        }
+        const detail = item as Record<string, unknown>;
+        const id = typeof detail.id === "string" ? detail.id.trim() : "";
+        if (!/^[1-9]\\d*$/.test(id)) {
+          return json({ error: "Conflict IDs must be positive Android contact IDs" }, 400);
+        }
+        if (!Array.isArray(detail.fields) || detail.fields.length > 64 ||
+            detail.fields.some((field) => typeof field !== "string" || !field.trim())) {
+          return json({ error: "Conflict fields must be an array of non-empty strings (max 64)" }, 400);
+        }
+        const fields = Array.from(new Set((detail.fields as string[])
+          .map((field) => field.trim().slice(0, 100)))).sort();
+        conflictDetails.push({ id, fields });
+      }
 
       const { data: manifest, error: manifestError } = await supabase
         .from("contact_bridge_sync_manifests")
@@ -247,6 +269,7 @@ Deno.serve(async (req: Request) => {
           local_contact_ids: localContactIds,
           contact_count: localContactIds.length,
           sync_summary: syncSummary,
+          conflict_details: conflictDetails,
         }, { onConflict: "device_id,sync_id" })
         .select("sync_id, contact_count, created_at")
         .single();
