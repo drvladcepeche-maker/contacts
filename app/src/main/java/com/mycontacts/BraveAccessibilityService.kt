@@ -200,8 +200,12 @@ class BraveAccessibilityService : AccessibilityService() {
         val foregroundWindow = applicationWindows.firstOrNull { it.isFocused }
             ?: applicationWindows.maxByOrNull { it.layer }
             ?: applicationWindows.firstOrNull { it.isActive }
-        val foregroundRoot = foregroundWindow?.root
-        if (foregroundRoot?.packageName?.toString() == TARGET_PACKAGE) return foregroundRoot
+        if (foregroundWindow != null) {
+            val foregroundRoot = foregroundWindow.root
+            if (foregroundRoot != null) {
+                return foregroundRoot.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
+            }
+        }
 
         return rootInActiveWindow?.takeIf { it.packageName?.toString() == TARGET_PACKAGE }
     }
