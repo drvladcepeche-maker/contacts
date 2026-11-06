@@ -192,11 +192,7 @@ object ApkUpdater {
             throw IllegalStateException("Автоустановка через Shizuku требует Android 10 или новее")
         }
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val directory = File(downloads, "MyContacts")
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw IllegalStateException("Не удалось создать Download/MyContacts")
-        }
-        val destination = File(directory, APK_ASSET)
+        val destination = File(File(downloads, "MyContacts"), APK_ASSET)
         val relativePath = Environment.DIRECTORY_DOWNLOADS + "/MyContacts/"
         val resolver = activity.contentResolver
         val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
