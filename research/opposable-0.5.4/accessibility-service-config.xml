@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Extracted from Opposable 0.5.4 APK: res/az.xml -->
+<accessibility-service
+    description="@0x7f0a0050"
+    accessibilityEventTypes="0x401860"
+    accessibilityFeedbackType="0x10"
+    notificationTimeout="50"
+    accessibilityFlags="0x52"
+    canRetrieveWindowContent="true"
+    canPerformGestures="true"
+    canTakeScreenshot="true"
+    isAccessibilityTool="true" />
