@@ -368,7 +368,12 @@ class MainActivity : Activity() {
 
     private fun showSyncResult(summary: SyncSummary) {
         val conflicts = summary.conflicts
-        val message = "Проверено: ${summary.attempted}. Уникальных: ${summary.unique}. Добавлено: ${summary.inserted}. Обновлено: ${summary.updated}. Без изменений: ${summary.skipped}. Конфликтов: ${conflicts.size}. Повторов в пакетах: ${summary.duplicates}."
+        val manifestStatus = if (summary.manifestRecorded) {
+            "Реестр ID: записан."
+        } else {
+            "Реестр ID: не записан (${summary.manifestError ?: \"ошибка\"})."
+        }
+        val message = "Проверено: ${summary.attempted}. Уникальных: ${summary.unique}. Добавлено: ${summary.inserted}. Обновлено: ${summary.updated}. Без изменений: ${summary.skipped}. Конфликтов: ${conflicts.size}. Повторов в пакетах: ${summary.duplicates}. $manifestStatus"
         status.text = message
         toast(message)
         if (conflicts.isNotEmpty() && !isFinishing && !isDestroyed) {
