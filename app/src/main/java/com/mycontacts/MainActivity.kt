@@ -340,9 +340,9 @@ class MainActivity : Activity() {
                     try {
                         bridge.pairDevice(value)
                         paired = true
-                        val n = bridge.sync(contactsForSync())
+                        val summary = syncContacts()
                         runOnUiThread {
-                            showSyncResult(n)
+                            showSyncResult(summary)
                             startBridgeService()
                             toast("Устройство привязано. Административный токен не сохранён.")
                         }
@@ -358,20 +358,26 @@ class MainActivity : Activity() {
             .setNeutralButton("Синхронизировать сейчас") { _, _ ->
                 bg {
                     try {
-                        val n = bridge.sync(contactsForSync())
-                        runOnUiThread { showSyncResult(n) }
+                        val summary = syncContacts()
+                        runOnUiThread { showSyncResult(summary) }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
                 }
             }
             .setNegativeButton("Закрыть", null).show()
     }
 
-    private fun showSyncResult(count: Int) {
-        val conflicts = bridge.lastSyncConflicts
-        val message = if (conflicts.isEmpty()) "Новых контактов передано: $count. Повторные ID пропущены." else "Новых: $count. Конфликтов ID: ${conflicts.size}. Существующие записи не перезаписаны. ID: ${conflicts.take(8).joinToString(", ")}"
+    private fun showSyncResult(summary: SyncSummary) {
+        val conflicts = summary.conflicts
+        val message = "Проверено: ${summary.attempted}. Уникальных: ${summary.unique}. Добавлено: ${summary.inserted}. Обновлено: ${summary.updated}. Без изменений: ${summary.skipped}. Конфликтов: ${conflicts.size}. Повторов в пакетах: ${summary.duplicates}."
         status.text = message
         toast(message)
-        if (conflicts.isNotEmpty()) AlertDialog.Builder(this).setTitle("Расхождения данных по ID").setMessage(conflicts.take(50).joinToString("\n")).setPositiveButton("Закрыть", null).show()
+        if (conflicts.isNotEmpty() && !isFinishing && !isDestroyed) {
+            val details = conflicts.entries.take(50).joinToString("\n") { (id, fields) ->
+                if (fields.isEmpty()) id else "$id — ${fields.joinToString(", ")}"
+            }
+            AlertDialog.Builder(this).setTitle("Расхождения данных (${conflicts.size})")
+                .setMessage(details).setPositiveButton("Закрыть", null).show()
+        }
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
@@ -504,7 +510,11 @@ class MainActivity : Activity() {
                 }
             }
             "sync_contacts" -> bg {
-                try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)); runOnUiThread { showSyncResult(n) } }
+try {
+                    val summary = syncContacts()
+                    completeBridgeCommand(id, summary.toJson())
+                    runOnUiThread { showSyncResult(summary) }
+                }
                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
             }
             else -> bg { try { completeBridgeCommand(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
@@ -528,15 +538,22 @@ class MainActivity : Activity() {
     private fun accountFlag(account: Acc, flag: String, defaultValue: Boolean = true): Boolean =
         accountSyncPrefs.getBoolean(accountKey(account) + "_" + flag, defaultValue)
 
+    private fun allowedReadAccounts(): Set<Acc> = repo.accounts().map { it.first }
+        .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }
+        .toSet()
+
+    /** Lightweight contact rows for remote list/search commands. */
     private fun contactsForSync(): List<Contact> {
-        val allowed = repo.accounts().map { it.first }
-            .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }
-            .toSet()
+        val allowed = allowedReadAccounts()
         if (allowed.isEmpty()) return emptyList()
-        return repo.loadAll(includeFields = true).filter { contact ->
+        return repo.loadAll(includeFields = false).filter { contact ->
             contact.accountSources.isNotEmpty() && contact.accountSources.all { it in allowed }
         }
     }
+
+    /** Full-field sync is paged at the provider and HTTP layers. */
+    private fun syncContacts(): SyncSummary =
+        bridge.syncBatches(repo.syncBatches(allowedReadAccounts(), batchSize = 100))
 
     private fun writableAccountFor(contact: Contact?): Acc? =
         repo.accounts().map { it.first }.firstOrNull { account ->
@@ -1046,13 +1063,13 @@ class MainActivity : Activity() {
     private fun queueTelegramMatch() {
         bg {
             try {
-                val synced = bridge.sync(contactsForSync())
+                val summary = syncContacts()
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
-                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
+                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing ${summary.synced} contacts")
                 runOnUiThread {
-                    showSyncResult(synced)
+                    showSyncResult(summary)
                     if (result.optBoolean("queued")) {
                         toast("Серверная проверка поставлена в очередь: $count уникальных номеров. Обработка начнётся после настройки Telegram-сессии и GitHub Actions.")
                     } else {
