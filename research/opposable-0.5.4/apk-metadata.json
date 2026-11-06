@@ -1,0 +1,16 @@
+{
+  "file": "opposable-0.5.4.apk",
+  "size_bytes": 43101026,
+  "sha256": "7132e9ebfc5f5bdc7b89287ec50b32a42f302d6c54a9dad4ad23e348b888578b",
+  "package": "com.getopposable.app",
+  "version_name": "0.5.4",
+  "version_code": 19,
+  "min_sdk": 30,
+  "target_sdk": 35,
+  "compile_sdk": 35,
+  "main_activity": "dev.phoneuse.agent.MainActivity",
+  "accessibility_service": "dev.phoneuse.agent.PhoneControlService",
+  "abi_found": ["arm64-v8a"],
+  "analysis_type": "static preliminary; no runtime execution",
+  "branch": "research/opposable-0.5.4"
+}
