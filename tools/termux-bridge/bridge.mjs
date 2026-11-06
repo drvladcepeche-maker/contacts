@@ -453,7 +453,7 @@ async function uploadWorkspaceFile(args) {
     throw new Error("Server returned an unexpected upload host; upload was blocked.");
   }
   const response = await fetch(uploadUrl, {
-    method: "POST",
+    method: "PUT",
     headers: {
       "apikey": SUPABASE_PUBLISHABLE_KEY,
       "authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY,
