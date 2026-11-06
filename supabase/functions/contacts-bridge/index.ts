@@ -209,7 +209,7 @@ Deno.serve(async (req: Request) => {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
       // Android Contacts._ID is the stable per-contact key for this device.
-      // Existing IDs are immutable here: skip them, and report data divergence.
+      // Existing IDs are merged with the incoming Android snapshot; report divergent fields.
       const byLocalId = new Map<string, Record<string, unknown>>();
       const conflicts: Array<{ id: string; fields: string[] }> = [];
       for (const item of contacts as any[]) {
