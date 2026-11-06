@@ -238,7 +238,7 @@ object ApkUpdater {
             .version(BuildConfig.VERSION_CODE)
 
         val latch = CountDownLatch(1)
-        @Volatile var service: IApkInstallService? = null
+        var service: IApkInstallService? = null
         val connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
                 service = IApkInstallService.Stub.asInterface(binder)
