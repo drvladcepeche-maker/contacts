@@ -8,7 +8,8 @@ import { createInterface } from "node:readline/promises";
 import { TerminalSessions } from "./terminal-sessions.mjs";
 import { ShizukuFiles } from "./shizuku-files.mjs";
 
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SJMrOazzL4h91DQ2nQaeaQ_FRyGSP7Y";\nconst API_URL = process.env.TERMUX_BRIDGE_URL ||
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SJMrOazzL4h91DQ2nQaeaQ_FRyGSP7Y";
+const API_URL = process.env.TERMUX_BRIDGE_URL ||
   "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge";
 const STATE_DIR = resolve(homedir(), ".config/termux-bridge");
 const TOKEN_PATH = resolve(STATE_DIR, "device-token");
