@@ -84,8 +84,19 @@ jobs:
             Version code: 1000 + ${{ github.run_number }}
             Commit: ${{ github.sha }}
           prerelease: true
-          draft: false
+          draft: true
           make_latest: false
           files: |
             ${{ runner.temp }}/moi-kontakty.apk
             ${{ runner.temp }}/moi-kontakty.apk.sha256
+
+      - name: Publish immutable signed update release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: mycontacts-app-${{ github.sha }}
+        shell: bash
+        run: |
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
+          test -n "$release_id"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false
