@@ -2,10 +2,13 @@ package com.mycontacts
 
 import android.app.Activity
 import android.content.ContentValues
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.os.IBinder
 import android.provider.MediaStore
 import android.widget.Toast
 import org.json.JSONObject
@@ -14,6 +17,8 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Verified, Shizuku-backed in-place updater for this exact application package. */
 object ApkUpdater {
@@ -93,16 +98,9 @@ object ApkUpdater {
                     ).show()
                 }
                 val installFile = publishToDownloads(activity, apk)
-                val command = "pm install -r --user 0 ${shellQuote(installFile.absolutePath)}"
-                val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-                process.outputStream.close()
-                val stdout = process.inputStream.bufferedReader().use { it.readText() }
-                val stderr = process.errorStream.bufferedReader().use { it.readText() }
-                val exit = process.waitFor()
-                if (exit != 0 || !stdout.contains("Success")) {
-                    throw IllegalStateException(
-                        "Android не подтвердил установку (код $exit): " + (stderr.ifBlank { stdout }).take(500)
-                    )
+                val installResult = installViaUserService(activity, installFile, expectedHash)
+                if (!installResult.contains("Success")) {
+                    throw IllegalStateException("Android не подтвердил установку: " + installResult.take(500))
                 }
                 activity.runOnUiThread {
                     Toast.makeText(
@@ -228,5 +226,43 @@ object ApkUpdater {
         return destination
     }
 
-    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+    private fun installViaUserService(activity: Activity, apk: File, expectedHash: String): String {
+        if (Shizuku.getVersion() < 10) {
+            throw IllegalStateException("Нужен Shizuku API 10 или новее")
+        }
+        val args = Shizuku.UserServiceArgs(
+            ComponentName(activity.packageName, ApkInstallUserService::class.java.name)
+        ).daemon(false)
+            .processNameSuffix("apk-installer")
+            .debuggable(BuildConfig.DEBUG)
+            .version(BuildConfig.VERSION_CODE)
+
+        val latch = CountDownLatch(1)
+        @Volatile var service: IApkInstallService? = null
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+                service = IApkInstallService.Stub.asInterface(binder)
+                latch.countDown()
+            }
+
+            override fun onServiceDisconnected(name: ComponentName) {
+                service = null
+                latch.countDown()
+            }
+        }
+        Shizuku.bindUserService(args, connection)
+        try {
+            if (!latch.await(20, TimeUnit.SECONDS)) {
+                throw IllegalStateException("Shizuku UserService не подключился за 20 секунд")
+            }
+            val remote = service ?: throw IllegalStateException("Shizuku UserService вернул пустой Binder")
+            return remote.installApk(apk.absolutePath, expectedHash)
+        } finally {
+            try {
+                Shizuku.unbindUserService(args, connection, true)
+            } catch (_: Exception) {
+                // The app may already be replaced and its process may be shutting down.
+            }
+        }
+    }
 }
