@@ -44,6 +44,9 @@ function makeHttpError(status, data) {
 function curlConfigQuote(value) {
   return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n") + '"';
 }
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
 async function requestViaCurlOnce(body) {
   const payload = JSON.stringify(body), marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
   const config = [
@@ -373,11 +376,22 @@ async function braveAccessibility(args) {
   const payload = JSON.stringify({ ...args, action });
   if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
   const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
-  const sent = await run("am", [
-    "broadcast", "-n", component,
-    "-a", "com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND",
-    "--es", "payload", payload,
-  ], 20000);
+  // The exported receiver is protected by WRITE_SECURE_SETTINGS. Send as
+  // Android shell through Shizuku, not as the ordinary Termux app UID.
+  let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
+  try { await access(rishBin); } catch { rishBin = "rish"; }
+  const identity = await run(rishBin, ["-c", "id"], 15000);
+  if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identity.output)) {
+    throw new Error("Shizuku is unavailable or not authorized; expected rish to run as Android shell (uid=2000). " +
+      (identity.errorText || identity.output || ""));
+  }
+  const broadcastCommand = [
+    "am", "broadcast",
+    "-n", shellQuote(component),
+    "-a", shellQuote("com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND"),
+    "--es", shellQuote("payload"), shellQuote(payload),
+  ].join(" ");
+  const sent = await run(rishBin, ["-c", broadcastCommand], 20000);
   if (sent.exitCode !== 0) throw new Error("Could not send the Brave accessibility command from Termux: " + (sent.errorText || sent.output));
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
