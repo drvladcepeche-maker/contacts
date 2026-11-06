@@ -216,7 +216,7 @@ Deno.serve(async (req: Request) => {
 
       const normalizedIds: string[] = [];
       for (const value of rawIds) {
-        if (typeof value !== "string" || !/^[1-9]\\d*$/.test(value.trim())) {
+        if (typeof value !== "string" || !/^[1-9]\d*$/.test(value.trim())) {
           return json({ error: "local_contact_ids must contain positive Android contact IDs as strings" }, 400);
         }
         normalizedIds.push(value.trim());
