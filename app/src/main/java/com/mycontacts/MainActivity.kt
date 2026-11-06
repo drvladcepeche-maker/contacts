@@ -144,12 +144,14 @@ class MainActivity : Activity() {
         row8.addView(btn("Файлы для Termux") { exportTermuxGuide() })
         row9.addView(btn("Разрешить установку APK") { requestUnknownSourcesPermission() })
         row10.addView(btn("Доступ Shizuku") { requestShizukuPermission() })
+        val row11 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row11.addView(btn("Проверить обновления") { ApkUpdater.checkAndInstall(this@MainActivity) })
         shizukuStatus = TextView(this)
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, row10, shizukuStatus, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, row10, row11, shizukuStatus, status, list).forEach { root.addView(it) }
         setContentView(root)
         updateShizukuStatus()
     }
