@@ -38,7 +38,7 @@ data class TransferResult(
 
 class ContactRepo(private val cr: ContentResolver) {
 
-    fun loadAll(): List<Contact> {
+    fun loadAll(includeFields: Boolean = false): List<Contact> {
         val phones = HashMap<Long, MutableList<String>>()
         cr.query(Phone.CONTENT_URI, arrayOf(Phone.CONTACT_ID, Phone.NUMBER), null, null, null)?.use { c ->
             while (c.moveToNext()) {
@@ -89,34 +89,35 @@ class ContactRepo(private val cr: ContentResolver) {
         // field (for example a phone number in Email or a t.me URL in Website).
         // Technical row IDs, raw-contact IDs, account metadata and binary photo
         // payloads are deliberately excluded from the logical contact payload.
-        val fieldsByContact = HashMap<Long, MutableList<ContactField>>()
-        val dataColumns = (1..15).map { "data$it" }
-        val projection = arrayOf(CC.Data.CONTACT_ID, CC.Data.MIMETYPE, *dataColumns.toTypedArray())
-        cr.query(CC.Data.CONTENT_URI, projection, null, null, null)?.use { c ->
-            while (c.moveToNext()) {
-                val contactId = c.getLong(0)
-                val mimetype = c.getString(1) ?: continue
-                val values = LinkedHashMap<String, String>()
-                for ((offset, column) in dataColumns.withIndex()) {
-                    val index = offset + 2
-                    if (c.getType(index) == Cursor.FIELD_TYPE_BLOB || c.isNull(index)) continue
-                    val value = c.getString(index) ?: continue
-                    if (value.isNotBlank()) values[column] = value
+        // Full DATA1..DATA15 payloads can be very large. Load them only for an
+        // explicit server sync; UI, search and Telegram matching need only core fields.
+        val fieldsByContact = if (includeFields) HashMap<Long, MutableList<ContactField>>() else null
+        if (fieldsByContact != null) {
+            val dataColumns = (1..15).map { "data$it" }
+            val projection = arrayOf(CC.Data.CONTACT_ID, CC.Data.MIMETYPE, *dataColumns.toTypedArray())
+            cr.query(CC.Data.CONTENT_URI, projection, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val contactId = c.getLong(0)
+                    val mimetype = c.getString(1) ?: continue
+                    val values = LinkedHashMap<String, String>()
+                    for ((offset, column) in dataColumns.withIndex()) {
+                        val index = offset + 2
+                        if (c.getType(index) == Cursor.FIELD_TYPE_BLOB || c.isNull(index)) continue
+                        val value = c.getString(index) ?: continue
+                        if (value.isNotBlank()) values[column] = value
+                    }
+                    if (values.isNotEmpty()) {
+                        fieldsByContact.getOrPut(contactId) { mutableListOf() }
+                            .add(ContactField(mimetype, values))
+                    }
                 }
-                if (values.isNotEmpty()) {
-                    fieldsByContact.getOrPut(contactId) { mutableListOf() }
-                        .add(ContactField(mimetype, values))
-                }
-            }
-        } ?: throw IllegalStateException("Android не предоставил дополнительные поля контактов")
+            } ?: throw IllegalStateException("Android не предоставил дополнительные поля контактов")
+        }
 
         return result.map { contact ->
-            val fields = fieldsByContact[contact.id].orEmpty()
+            val fields = fieldsByContact?.get(contact.id).orEmpty()
                 .sortedWith(compareBy<ContactField> { it.mimetype }.thenBy { it.values.toSortedMap().toString() })
-            contact.copy(
-                accountSources = sources[contact.id]?.toList() ?: emptyList(),
-                fields = fields
-            )
+            contact.copy(accountSources = sources[contact.id]?.toList() ?: emptyList(), fields = fields)
         }
     }
 
