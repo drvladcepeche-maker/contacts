@@ -365,26 +365,26 @@ async function braveAccessibility(args) {
   const action = String(args.action || "snapshot");
   const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
   if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
-  // Termux's app UID cannot reliably query PackageManager on some Android builds.
-  // Target the dedicated recovery package directly; Android enforces the receiver permission.
   const packageName = String(args.app_package || "com.mycontacts.bridgefix4");
   if (!["com.mycontacts.bridgefix4", "com.mycontacts.pairing2", "com.mycontacts"].includes(packageName)) {
     throw new Error("Rejected companion package. Only approved My Contacts package IDs are allowed.");
   }
-  const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", "accessibility-result.json");
-  await unlink(responsePath).catch(() => {});
-  const payload = JSON.stringify({ ...args, action });
+
+  const requestId = randomUUID();
+  const fileName = "accessibility-result-" + requestId + ".json";
+  const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", fileName);
+  const payload = JSON.stringify({ ...args, action, request_id: requestId, wait_ms: args.wait_ms || 15000 });
   if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
   const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
-  // The exported receiver is protected by WRITE_SECURE_SETTINGS. Send as
-  // Android shell through Shizuku, not as the ordinary Termux app UID.
+
   let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
   try { await access(rishBin); } catch { rishBin = "rish"; }
   const identity = await run(rishBin, ["-c", "id"], 15000);
   if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
-    throw new Error("Shizuku is unavailable or not authorized; expected rish to run as Android shell (uid=2000). " +
+    throw new Error("Shizuku is unavailable or not authorized; expected Android shell uid=2000. " +
       (identity.errorText || identity.output || ""));
   }
+
   const broadcastCommand = [
     "am", "broadcast",
     "-n", shellQuote(component),
@@ -393,17 +393,25 @@ async function braveAccessibility(args) {
   ].join(" ");
   const sent = await run(rishBin, ["-c", broadcastCommand], 20000);
   if (sent.exitCode !== 0) throw new Error("Could not send the Brave accessibility command from Termux: " + (sent.errorText || sent.output));
-  for (let attempt = 0; attempt < 30; attempt++) {
+
+  const deadline = Date.now() + Math.min(35000, Math.max(5000, Number(args.wait_ms) || 15000) + 5000);
+  while (Date.now() < deadline) {
     try {
       const raw = await readFile(responsePath, "utf8");
       const result = JSON.parse(raw);
-      return { exitCode: result.ok ? 0 : 1, output: JSON.stringify(result, null, 2), errorText: result.ok ? "" : String(result.error || "Accessibility command failed.") };
+      if (result.request_id !== requestId) throw new Error("Accessibility response request_id mismatch; stale response rejected.");
+      return {
+        exitCode: result.ok ? 0 : 1,
+        output: JSON.stringify(result, null, 2),
+        errorText: result.ok ? "" : String(result.error || "Accessibility command failed."),
+      };
     } catch (error) {
       if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
     }
     await sleep(250);
   }
-  throw new Error("Accessibility response was not written. Confirm that the updated companion app is installed, its Accessibility service is enabled, and Termux has shared-storage access (termux-setup-storage).");
+  throw new Error("Timed out waiting for Accessibility Service response " + requestId +
+    ". The command may still be pending; check that Brave is allowed to open and the Accessibility service remains connected.");
 }
 
 async function uploadWorkspaceFile(args) {
