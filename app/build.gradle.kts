@@ -45,7 +45,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { buildConfig = true }
+    buildFeatures { buildConfig = true; aidl = true }
 }
 dependencies {
     implementation("io.github.tdlib-android:core:0.1.1")
