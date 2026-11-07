@@ -138,6 +138,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        AppLog.flush(this)
         if (waitingForInstallPermission) {
             waitingForInstallPermission = false
             if (android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) {
