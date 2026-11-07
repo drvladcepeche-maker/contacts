@@ -573,7 +573,13 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
-        try { all = repo.loadAll() } catch (e: Exception) { toast("Ошибка: ${e.message}") }
+        try {
+            all = repo.loadAll()
+            AppLog.info(this, "MainActivity.refresh", "Loaded ${all.size} contacts")
+        } catch (e: Exception) {
+            AppLog.error(this, "MainActivity.refresh", "Failed to load contacts", e)
+            toast("Ошибка: ${e.message}")
+        }
         selected.retainAll(all.map { it.id }.toSet())
         applyFilter()
     }
