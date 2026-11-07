@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.installCrashHandler(this)
+        AppLog.flush(this)
         AppLog.info(this, "MainActivity", "onCreate")
         repo = ContactRepo(contentResolver)
         bridge = ContactsBridge(this)
