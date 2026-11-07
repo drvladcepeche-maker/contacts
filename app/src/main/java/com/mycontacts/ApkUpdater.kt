@@ -67,22 +67,38 @@ object ApkUpdater {
                     ?: throw IllegalStateException("В релизе нет списка файлов")
                 var apkUrl: String? = null
                 var hashUrl: String? = null
+                var releaseDigest: String? = null
                 for (i in 0 until assets.length()) {
                     val asset = assets.optJSONObject(i) ?: continue
                     when (asset.optString("name")) {
-                        APK_ASSET -> apkUrl = asset.optString("browser_download_url")
+                        APK_ASSET -> {
+                            apkUrl = asset.optString("browser_download_url")
+                            releaseDigest = asset.optString("digest").takeIf {
+                                it.startsWith("sha256:")
+                            }?.removePrefix("sha256:")
+                        }
                         HASH_ASSET -> hashUrl = asset.optString("browser_download_url")
                     }
                 }
                 val downloadUrl = apkUrl ?: throw IllegalStateException("APK ещё не опубликован")
-                val checksumUrl = hashUrl ?: throw IllegalStateException("Контрольная сумма APK отсутствует")
                 val dir = File(activity.cacheDir, "verified-updates")
                 if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("Не удалось создать каталог обновления")
                 val apk = File(dir, APK_ASSET)
                 download(downloadUrl, apk)
-                val expectedHash = downloadText(checksumUrl).trim().substringBefore(' ').lowercase()
-                require(expectedHash.matches(Regex("[0-9a-f]{64}"))) { "Некорректная SHA-256 контрольная сумма" }
-                require(sha256(apk) == expectedHash) { "Контрольная сумма APK не совпадает; установка отменена" }
+                // Prefer GitHub's SHA-256 digest for the exact uploaded APK asset.
+                // The sidecar file remains a compatibility fallback for older releases.
+                val expectedHash = (releaseDigest ?: run {
+                    val checksumUrl = hashUrl
+                        ?: throw IllegalStateException("Контрольная сумма APK отсутствует")
+                    downloadText(checksumUrl).trim().substringBefore(' ').lowercase()
+                }).lowercase()
+                require(expectedHash.matches(Regex("[0-9a-f]{64}"))) {
+                    "GitHub не вернул корректную SHA-256 контрольную сумму"
+                }
+                val actualHash = sha256(apk)
+                require(actualHash == expectedHash) {
+                    "SHA-256 не совпала (APK ${actualHash.take(12)}, релиз ${expectedHash.take(12)}). Загрузка отменена."
+                }
 
                 @Suppress("DEPRECATION")
                 val packageFlags = if (Build.VERSION.SDK_INT >= 28) {
@@ -142,7 +158,7 @@ object ApkUpdater {
     }
 
     private fun downloadText(url: String): String {
-        val connection = open(url)
+        val connection = open(url, "application/octet-stream")
         try {
             return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
@@ -151,7 +167,7 @@ object ApkUpdater {
     }
 
     private fun download(url: String, destination: File) {
-        val connection = open(url)
+        val connection = open(url, "application/octet-stream")
         try {
             connection.inputStream.use { input ->
                 destination.outputStream().use { output ->
@@ -171,13 +187,13 @@ object ApkUpdater {
         }
     }
 
-    private fun open(url: String): HttpURLConnection =
+    private fun open(url: String, accept: String = "application/vnd.github+json"): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
             readTimeout = 60000
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", "MyContacts-Android-Updater")
-            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("Accept", accept)
             connect()
             if (responseCode !in 200..299) {
                 val code = responseCode
