@@ -186,11 +186,13 @@ echo "Изменения APK собираются через GitHub Actions по
 
     private fun redact(value: String): String {
         var safe = value
-        safe = safe.replace(Regex("(?i)Bearer\\\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
-        safe = safe.replace(Regex("(?i)(token|password|secret|api[_-]?key)(\\\\s*[:=]\\\\s*)[^\\\\s,;]+"), "$1$2[REDACTED]")
-        safe = safe.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\\\.[A-Za-z]{2,}"), "[EMAIL]")
-        safe = safe.replace(Regex("\\\\+?\\\\d[\\\\d ()-]{7,}\\\\d"), "[PHONE]")
-        safe = safe.replace(Regex("\\\\b[A-Fa-f0-9]{32,}\\\\b"), "[TOKEN]")
+        safe = safe.replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
+        safe = Regex("(?i)(token|password|secret|api[_-]?key)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
+            it.groupValues[1] + it.groupValues[2] + "[REDACTED]"
+        }
+        safe = safe.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), "[EMAIL]")
+        safe = safe.replace(Regex("\\+?\\d[\\d ()-]{7,}\\d"), "[PHONE]")
+        safe = safe.replace(Regex("\\b[A-Fa-f0-9]{32,}\\b"), "[TOKEN]")
         return safe.take(12000)
     }
 
