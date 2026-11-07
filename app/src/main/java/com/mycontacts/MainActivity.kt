@@ -179,6 +179,7 @@ class MainActivity : Activity() {
             override fun run() {
                 if (!bridgePolling || isFinishing) return
                 drainBridgeQueue()
+                AppLog.flush(this@MainActivity)
                 bridgeHandler.postDelayed(this, 3000)
             }
         })
