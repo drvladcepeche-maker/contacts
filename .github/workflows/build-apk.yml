@@ -72,6 +72,7 @@ jobs:
           cd "$RUNNER_TEMP"
           sha256sum moi-kontakty.apk > moi-kontakty.apk.sha256
       - name: Create draft signed update release
+        id: draft_release
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
         uses: softprops/action-gh-release@v2
         with:
@@ -94,9 +95,8 @@ jobs:
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: mycontacts-app-${{ github.sha }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.id }}
         shell: bash
         run: |
-          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
-          test -n "$release_id"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false
+          test -n "$RELEASE_ID"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false
