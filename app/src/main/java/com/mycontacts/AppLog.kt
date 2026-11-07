@@ -144,6 +144,85 @@ echo "Изменения APK собираются через GitHub Actions по
         return "Download/MyContacts/$name"
     }
 
+    private val uploadExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /** Retry persisted diagnostic events whenever the app starts or records a new event. */
+    fun flush(context: Context) {
+        val app = context.applicationContext
+        uploadExecutor.execute {
+            try {
+                val prefs = app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
+                val batch = synchronized(lock) {
+                    val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
+                    catch (_: Exception) { org.json.JSONArray() }
+                    org.json.JSONArray().also { out ->
+                        for (i in 0 until minOf(current.length(), 50)) {
+                            current.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
+                        }
+                    }
+                }
+                if (batch.length() == 0) return@execute
+                val response = ContactsBridge(app).request(
+                    org.json.JSONObject().put("action", "upload_diagnostics").put("entries", batch)
+                )
+                if (response.optInt("received", -1) < 0) return@execute
+                val sent = HashSet<String>()
+                for (i in 0 until batch.length()) sent.add(batch.optJSONObject(i)?.optString("event_id") ?: "")
+                synchronized(lock) {
+                    val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
+                    catch (_: Exception) { org.json.JSONArray() }
+                    val remaining = org.json.JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        if (!sent.contains(item.optString("event_id"))) remaining.put(item)
+                    }
+                    prefs.edit().putString("pending", remaining.toString()).commit()
+                }
+            } catch (_: Exception) {
+                // Keep the queue intact; the next app start or log event retries it.
+            }
+        }
+    }
+
+    private fun redact(value: String): String {
+        var safe = value
+        safe = safe.replace(Regex("(?i)Bearer\\\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
+        safe = safe.replace(Regex("(?i)(token|password|secret|api[_-]?key)(\\\\s*[:=]\\\\s*)[^\\\\s,;]+"), "$1$2[REDACTED]")
+        safe = safe.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\\\.[A-Za-z]{2,}"), "[EMAIL]")
+        safe = safe.replace(Regex("\\\\+?\\\\d[\\\\d ()-]{7,}\\\\d"), "[PHONE]")
+        safe = safe.replace(Regex("\\\\b[A-Fa-f0-9]{32,}\\\\b"), "[TOKEN]")
+        return safe.take(12000)
+    }
+
+    private fun enqueueDiagnostic(context: Context, level: String, message: String, error: Throwable?) {
+        try {
+            val app = context.applicationContext
+            val stack = error?.let { android.util.Log.getStackTraceString(it) }
+            val event = org.json.JSONObject()
+                .put("event_id", java.util.UUID.randomUUID().toString())
+                .put("occurred_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.format(java.util.Date()))
+                .put("level", level)
+                .put("tag", redact(message.substringBefore(":").take(120)))
+                .put("message", redact(message.substringAfter(": ", message).take(2000)))
+                .put("stack_trace", stack?.let { redact(it) } ?: org.json.JSONObject.NULL)
+                .put("app_version", BuildConfig.VERSION_NAME)
+            val prefs = app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
+            synchronized(lock) {
+                val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
+                catch (_: Exception) { org.json.JSONArray() }
+                current.put(event)
+                val trimmed = org.json.JSONArray()
+                for (i in maxOf(0, current.length() - 200) until current.length()) trimmed.put(current.getJSONObject(i))
+                prefs.edit().putString("pending", trimmed.toString()).commit()
+            }
+            flush(app)
+        } catch (_: Exception) {
+            // Diagnostics must never interrupt the application.
+        }
+    }
+
     private fun write(context: Context, level: String, message: String, error: Throwable?) {
         synchronized(lock) {
             try {
@@ -163,5 +242,6 @@ echo "Изменения APK собираются через GitHub Actions по
                 // Logging must never crash the application.
             }
         }
+        enqueueDiagnostic(context, level, message, error)
     }
 }
