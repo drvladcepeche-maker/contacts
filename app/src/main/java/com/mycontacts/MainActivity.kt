@@ -863,58 +863,83 @@ try {
     }.start()
 
     private fun transferDialog() {
-        bg {
-            val accs = repo.accounts()
-            runOnUiThread {
-                val labels = accs.map { it.first.label + " — " + it.second }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Откуда копировать")
-                    .setItems(labels) { _, i -> pickTarget(accs.map { it.first }, accs[i].first, accs[i].second) }
-                    .setNegativeButton("Отмена", null).show()
+        AlertDialog.Builder(this).setTitle("Операция с аккаунтом")
+            .setItems(arrayOf("Копировать все контакты и номера", "Переместить все контакты и номера")) { _, mode ->
+                val move = mode == 1
+                bg {
+                    val accs = repo.accounts()
+                    runOnUiThread {
+                        if (accs.size < 2) {
+                            toast("Для переноса нужны как минимум два аккаунта")
+                            return@runOnUiThread
+                        }
+                        val labels = accs.map { it.first.label + " — " + it.second }.toTypedArray()
+                        AlertDialog.Builder(this).setTitle("Выберите исходный аккаунт")
+                            .setItems(labels) { _, i -> pickTarget(accs.map { it.first }, accs[i].first, accs[i].second, move) }
+                            .setNegativeButton("Отмена", null).show()
+                    }
+                }
             }
-        }
+            .setNegativeButton("Отмена", null).show()
     }
 
-    private fun pickTarget(accs: List<Acc>, src: Acc, count: Int) {
+    private fun pickTarget(accs: List<Acc>, src: Acc, count: Int, move: Boolean) {
         val targets = accs.filter { it != src }
-        AlertDialog.Builder(this).setTitle("Куда копировать")
+        AlertDialog.Builder(this).setTitle("Выберите целевой аккаунт")
             .setItems(targets.map { it.label }.toTypedArray()) { _, i ->
                 val dst = targets[i]
-                AlertDialog.Builder(this).setTitle("Подтвердите")
-                    .setMessage("Скопировать контакты (" + count + ") из «" + src.label + "» в «" + dst.label +
-                        "»?\nИсходные контакты не удаляются. После копирования будет проверка.")
-                    .setPositiveButton("Копировать") { _, _ -> runTransfer(src, dst) }
+                val action = if (move) "переместить" else "скопировать"
+                val removal = if (move) {
+                    "\n\nИсходные контакты будут удалены только после проверки всех копий в целевом аккаунте."
+                } else {
+                    "\n\nИсходные контакты останутся без изменений."
+                }
+                AlertDialog.Builder(this).setTitle("Подтвердите операцию")
+                    .setMessage("Операция: $action $count контактов из «" + src.label + "» в «" + dst.label + "»." +
+                        removal + "\n\nПереносятся имена, все номера телефонов, адреса электронной почты и Telegram-поле.")
+                    .setPositiveButton(if (move) "Переместить" else "Копировать") { _, _ -> runTransfer(src, dst, move) }
                     .setNegativeButton("Отмена", null).show()
             }
             .setNegativeButton("Отмена", null).show()
     }
 
-    private fun runTransfer(src: Acc, dst: Acc) {
-        toast("Идёт копирование…")
+    private fun runTransfer(src: Acc, dst: Acc, move: Boolean) {
+        toast(if (move) "Идёт копирование для переноса…" else "Идёт копирование…")
         bg {
             val r = repo.transfer(src, dst)
-            runOnUiThread { refresh(); showTransferResult(r) }
+            runOnUiThread { refresh(); showTransferResult(r, src, move) }
         }
     }
 
-    private fun showTransferResult(r: TransferResult) {
-        val ok = r.total > 0 && r.verified == r.total
+    private fun showTransferResult(r: TransferResult, src: Acc, move: Boolean) {
+        val verified = r.total > 0 && r.verified == r.total
         val msg = "Найдено в источнике: " + r.total + "\nСкопировано: " + r.copied +
             "\nПроверено в целевом аккаунте: " + r.verified +
             (if (r.missing.isNotEmpty()) "\nНе подтверждено: " + r.missing.take(20).joinToString(", ") else "") +
-            (if (ok) "\n\nВсё подтверждено." else "\n\nУдаление из источника недоступно, пока не подтверждены все контакты.")
-        val b = AlertDialog.Builder(this).setTitle("Результат переноса").setMessage(msg)
-        if (ok) {
-            b.setPositiveButton("Удалить из источника") { _, _ ->
-                AlertDialog.Builder(this).setTitle("Удалить исходные контакты (" + r.total + ")?")
-                    .setMessage("Копии в целевом аккаунте проверены. Это действие необратимо.")
+            (if (verified) "\n\nВсе контакты подтверждены в целевом аккаунте." else
+                "\n\nИсходные контакты сохранены. Удаление запрещено, пока все копии не подтверждены.")
+        val builder = AlertDialog.Builder(this).setTitle(if (move) "Результат перемещения" else "Результат копирования").setMessage(msg)
+        if (move && verified) {
+            builder.setPositiveButton("Удалить исходные контакты") { _, _ ->
+                AlertDialog.Builder(this).setTitle("Последнее подтверждение")
+                    .setMessage("Будут удалены " + r.total + " исходных записей аккаунта «" + src.label +
+                        "». Проверенные копии останутся в целевом аккаунте. Продолжить?")
                     .setPositiveButton("Удалить") { _, _ ->
-                        bg { repo.deleteRaws(r.rawIds); runOnUiThread { refresh(); toast("Удалено из источника") } }
+                        bg {
+                            repo.deleteRaws(r.rawIds)
+                            val remaining = repo.entriesOf(src).count { it.rawId in r.rawIds }
+                            runOnUiThread {
+                                refresh()
+                                if (remaining == 0) toast("Перемещение завершено: исходные записи удалены")
+                                else toast("Удаление выполнено не полностью: осталось записей $remaining")
+                            }
+                        }
                     }
                     .setNegativeButton("Оставить", null).show()
             }
-            b.setNegativeButton("Оставить", null)
-        } else b.setPositiveButton("Закрыть", null)
-        b.show()
+            builder.setNegativeButton("Оставить исходные", null)
+        } else builder.setPositiveButton("Закрыть", null)
+        builder.show()
     }
 
     /** Передаёт контакты в установленное приложение ChatGPT через системное меню Android. */
