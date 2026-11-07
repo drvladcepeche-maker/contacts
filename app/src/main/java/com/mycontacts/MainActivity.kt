@@ -22,6 +22,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import rikka.shizuku.Shizuku
 
 class MainActivity : Activity() {
 
@@ -30,12 +31,25 @@ class MainActivity : Activity() {
     private val bridgeHandler = Handler(Looper.getMainLooper())
     private var bridgePolling = false
     private var waitingForInstallPermission = false
+    private lateinit var shizukuStatus: TextView
+    private val shizukuPermissionRequestCode = 101
+    private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+        if (requestCode == shizukuPermissionRequestCode) {
+            updateShizukuStatus()
+            toast(if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                "Shizuku разрешил доступ приложению «Мои контакты — привязка»."
+            } else {
+                "Shizuku не выдал разрешение приложению."
+            })
+        }
+    }
     private val activeCommandIds = HashSet<String>()
 
     private lateinit var list: ListView
     private lateinit var search: EditText
     private lateinit var status: TextView
     private var all: List<Contact> = emptyList()
+    private var refreshGeneration = 0
     private var shown: List<Contact> = emptyList()
     private var pendingXlsxExport: List<Contact>? = null
 
@@ -49,6 +63,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
         AppLog.installCrashHandler(this)
         AppLog.info(this, "MainActivity", "onCreate")
         repo = ContactRepo(contentResolver)
@@ -101,6 +116,7 @@ class MainActivity : Activity() {
         val row7 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row8 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row9 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val row10 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun btn(t: String, a: () -> Unit) = Button(this).apply {
             text = t; textSize = 12f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -127,16 +143,22 @@ class MainActivity : Activity() {
         row8.addView(btn("Сохранить логи") { exportAppLogs() })
         row8.addView(btn("Файлы для Termux") { exportTermuxGuide() })
         row9.addView(btn("Разрешить установку APK") { requestUnknownSourcesPermission() })
+        row10.addView(btn("Доступ Shizuku") { requestShizukuPermission() })
+        val row11 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row11.addView(btn("Проверить обновления") { ApkUpdater.checkAndInstall(this@MainActivity) })
+        shizukuStatus = TextView(this)
         status = TextView(this)
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { if (selected.isNotEmpty()) toggle(it) else editDialog(it) } }
         list.setOnItemLongClickListener { _, _, pos, _ -> shown.getOrNull(pos)?.let { toggle(it) }; true }
-        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, status, list).forEach { root.addView(it) }
+        listOf<View>(search, row1, row2, row3, row4, row5, row6, row7, row8, row9, row10, row11, shizukuStatus, status, list).forEach { root.addView(it) }
         setContentView(root)
+        updateShizukuStatus()
     }
 
     override fun onResume() {
         super.onResume()
+        updateShizukuStatus()
         if (waitingForInstallPermission) {
             waitingForInstallPermission = false
             if (android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) {
@@ -148,6 +170,11 @@ class MainActivity : Activity() {
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
+    }
+
+    override fun onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
+        super.onDestroy()
     }
 
     override fun onPause() {
@@ -315,9 +342,9 @@ class MainActivity : Activity() {
                     try {
                         bridge.pairDevice(value)
                         paired = true
-                        val n = bridge.sync(contactsForSync())
+                        val summary = syncContacts()
                         runOnUiThread {
-                            showSyncResult(n)
+                            showSyncResult(summary)
                             startBridgeService()
                             toast("Устройство привязано. Административный токен не сохранён.")
                         }
@@ -333,20 +360,31 @@ class MainActivity : Activity() {
             .setNeutralButton("Синхронизировать сейчас") { _, _ ->
                 bg {
                     try {
-                        val n = bridge.sync(contactsForSync())
-                        runOnUiThread { showSyncResult(n) }
+                        val summary = syncContacts()
+                        runOnUiThread { showSyncResult(summary) }
                     } catch (e: Exception) { runOnUiThread { toast("Ошибка связи: ${e.message}") } }
                 }
             }
             .setNegativeButton("Закрыть", null).show()
     }
 
-    private fun showSyncResult(count: Int) {
-        val conflicts = bridge.lastSyncConflicts
-        val message = if (conflicts.isEmpty()) "Новых контактов передано: $count. Повторные ID пропущены." else "Новых: $count. Конфликтов ID: ${conflicts.size}. Существующие записи не перезаписаны. ID: ${conflicts.take(8).joinToString(", ")}"
+    private fun showSyncResult(summary: SyncSummary) {
+        val conflicts = summary.conflicts
+        val manifestStatus = if (summary.manifestRecorded) {
+            "Реестр ID: записан."
+        } else {
+            "Реестр ID: не записан (${summary.manifestError ?: "ошибка"})."
+        }
+        val message = "Проверено: ${summary.attempted}. Уникальных: ${summary.unique}. Добавлено: ${summary.inserted}. Обновлено: ${summary.updated}. Без изменений: ${summary.skipped}. Конфликтов: ${conflicts.size}. Повторов в пакетах: ${summary.duplicates}. $manifestStatus"
         status.text = message
         toast(message)
-        if (conflicts.isNotEmpty()) AlertDialog.Builder(this).setTitle("Расхождения данных по ID").setMessage(conflicts.take(50).joinToString("\n")).setPositiveButton("Закрыть", null).show()
+        if (conflicts.isNotEmpty() && !isFinishing && !isDestroyed) {
+            val details = conflicts.entries.take(50).joinToString("\n") { (id, fields) ->
+                if (fields.isEmpty()) id else "$id — ${fields.joinToString(", ")}"
+            }
+            AlertDialog.Builder(this).setTitle("Расхождения данных (${conflicts.size})")
+                .setMessage(details).setPositiveButton("Закрыть", null).show()
+        }
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
@@ -398,13 +436,13 @@ class MainActivity : Activity() {
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
                                     try {
-                                        val current = if (contactId > 0) repo.loadAll().firstOrNull { it.id == contactId } else null
+                                        val current = if (contactId > 0) repo.loadAll(includeFields = false).firstOrNull { it.id == contactId } else null
                                         if (contactId > 0 && current == null) throw IllegalStateException("Контакт не найден")
                                         val target = writableAccountFor(current)
                                             ?: throw IllegalStateException("Нет разрешённого для записи аккаунта. Проверьте настройки аккаунтов синхронизации.")
                                         if (current != null) repo.updateInAccount(contactId, name, phone, target)
                                         else repo.addToAccount(name, phone, target)
-                                        val found = repo.loadAll().firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
+                                        val found = repo.loadAll(includeFields = false).firstOrNull { it.name == name && (phone.isBlank() || phone in it.phones) }
                                         completeBridgeCommand(id, JSONObject().put("ok", true).put("contact", found?.let { contactJson(it) } ?: JSONObject()))
                                         runOnUiThread { refresh(); toast("Контакт сохранён") }
                                     } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка записи") } catch (_: Exception) {} }
@@ -422,7 +460,7 @@ class MainActivity : Activity() {
                         require(contactId > 0) { "Некорректный ID контакта" }
                         val telegramId = payload.optString("telegram_id", "")
                         val username = payload.optString("telegram_username", "")
-                        val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                        val contact = repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
                             ?: throw IllegalStateException("Контакт не найден")
                         val target = writableAccountFor(contact)
                             ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
@@ -437,7 +475,7 @@ class MainActivity : Activity() {
             "delete_contact" -> {
                 runOnUiThread {
                     val contactId = payload.optLong("id", -1)
-                    val c = repo.loadAll().firstOrNull { it.id == contactId }
+                    val c = repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
                     if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
@@ -458,7 +496,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     val ids = payload.optJSONArray("ids") ?: JSONArray()
                     val group = (0 until ids.length()).mapNotNull { ix ->
-                        val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
+                        val cid = ids.optLong(ix, -1); repo.loadAll(includeFields = false).firstOrNull { it.id == cid }
                     }.distinctBy { it.id }
                     if (group.size < 2) bg { try { completeBridgeCommand(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
                     else AlertDialog.Builder(this).setTitle("Объединить контакты?")
@@ -479,7 +517,11 @@ class MainActivity : Activity() {
                 }
             }
             "sync_contacts" -> bg {
-                try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)); runOnUiThread { showSyncResult(n) } }
+try {
+                    val summary = syncContacts()
+                    completeBridgeCommand(id, summary.toJson())
+                    runOnUiThread { showSyncResult(summary) }
+                }
                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
             }
             else -> bg { try { completeBridgeCommand(id, error = "Неподдерживаемая команда: $action") } catch (_: Exception) {} }
@@ -503,15 +545,22 @@ class MainActivity : Activity() {
     private fun accountFlag(account: Acc, flag: String, defaultValue: Boolean = true): Boolean =
         accountSyncPrefs.getBoolean(accountKey(account) + "_" + flag, defaultValue)
 
+    private fun allowedReadAccounts(): Set<Acc> = repo.accounts().map { it.first }
+        .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }
+        .toSet()
+
+    /** Lightweight contact rows for remote list/search commands. */
     private fun contactsForSync(): List<Contact> {
-        val allowed = repo.accounts().map { it.first }
-            .filter { accountFlag(it, "enabled") && accountFlag(it, "read") }
-            .toSet()
+        val allowed = allowedReadAccounts()
         if (allowed.isEmpty()) return emptyList()
-        return repo.loadAll().filter { contact ->
+        return repo.loadAll(includeFields = false).filter { contact ->
             contact.accountSources.isNotEmpty() && contact.accountSources.all { it in allowed }
         }
     }
+
+    /** Full-field sync is paged at the provider and HTTP layers. */
+    private fun syncContacts(): SyncSummary =
+        bridge.syncBatches(repo.syncBatches(allowedReadAccounts(), batchSize = 100))
 
     private fun writableAccountFor(contact: Contact?): Acc? =
         repo.accounts().map { it.first }.firstOrNull { account ->
@@ -570,9 +619,26 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
-        try { all = repo.loadAll() } catch (e: Exception) { toast("Ошибка: ${e.message}") }
-        selected.retainAll(all.map { it.id }.toSet())
-        applyFilter()
+        val generation = ++refreshGeneration
+        status.text = "Загрузка контактов…"
+        bg {
+            try {
+                val loaded = repo.loadAll(includeFields = false)
+                runOnUiThread {
+                    if (isFinishing || isDestroyed || generation != refreshGeneration) return@runOnUiThread
+                    all = loaded
+                    val ids = loaded.asSequence().map { it.id }.toHashSet()
+                    selected.retainAll(ids)
+                    applyFilter()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && generation == refreshGeneration) {
+                        toast("Ошибка загрузки контактов: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 
     private fun applyFilter() {
@@ -797,58 +863,83 @@ class MainActivity : Activity() {
     }.start()
 
     private fun transferDialog() {
-        bg {
-            val accs = repo.accounts()
-            runOnUiThread {
-                val labels = accs.map { it.first.label + " — " + it.second }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("Откуда копировать")
-                    .setItems(labels) { _, i -> pickTarget(accs.map { it.first }, accs[i].first, accs[i].second) }
-                    .setNegativeButton("Отмена", null).show()
+        AlertDialog.Builder(this).setTitle("Операция с аккаунтом")
+            .setItems(arrayOf("Копировать все контакты и номера", "Переместить все контакты и номера")) { _, mode ->
+                val move = mode == 1
+                bg {
+                    val accs = repo.accounts()
+                    runOnUiThread {
+                        if (accs.size < 2) {
+                            toast("Для переноса нужны как минимум два аккаунта")
+                            return@runOnUiThread
+                        }
+                        val labels = accs.map { it.first.label + " — " + it.second }.toTypedArray()
+                        AlertDialog.Builder(this).setTitle("Выберите исходный аккаунт")
+                            .setItems(labels) { _, i -> pickTarget(accs.map { it.first }, accs[i].first, accs[i].second, move) }
+                            .setNegativeButton("Отмена", null).show()
+                    }
+                }
             }
-        }
+            .setNegativeButton("Отмена", null).show()
     }
 
-    private fun pickTarget(accs: List<Acc>, src: Acc, count: Int) {
+    private fun pickTarget(accs: List<Acc>, src: Acc, count: Int, move: Boolean) {
         val targets = accs.filter { it != src }
-        AlertDialog.Builder(this).setTitle("Куда копировать")
+        AlertDialog.Builder(this).setTitle("Выберите целевой аккаунт")
             .setItems(targets.map { it.label }.toTypedArray()) { _, i ->
                 val dst = targets[i]
-                AlertDialog.Builder(this).setTitle("Подтвердите")
-                    .setMessage("Скопировать контакты (" + count + ") из «" + src.label + "» в «" + dst.label +
-                        "»?\nИсходные контакты не удаляются. После копирования будет проверка.")
-                    .setPositiveButton("Копировать") { _, _ -> runTransfer(src, dst) }
+                val action = if (move) "переместить" else "скопировать"
+                val removal = if (move) {
+                    "\n\nИсходные контакты будут удалены только после проверки всех копий в целевом аккаунте."
+                } else {
+                    "\n\nИсходные контакты останутся без изменений."
+                }
+                AlertDialog.Builder(this).setTitle("Подтвердите операцию")
+                    .setMessage("Операция: $action $count контактов из «" + src.label + "» в «" + dst.label + "»." +
+                        removal + "\n\nПереносятся имена, все номера телефонов, адреса электронной почты и Telegram-поле.")
+                    .setPositiveButton(if (move) "Переместить" else "Копировать") { _, _ -> runTransfer(src, dst, move) }
                     .setNegativeButton("Отмена", null).show()
             }
             .setNegativeButton("Отмена", null).show()
     }
 
-    private fun runTransfer(src: Acc, dst: Acc) {
-        toast("Идёт копирование…")
+    private fun runTransfer(src: Acc, dst: Acc, move: Boolean) {
+        toast(if (move) "Идёт копирование для переноса…" else "Идёт копирование…")
         bg {
             val r = repo.transfer(src, dst)
-            runOnUiThread { refresh(); showTransferResult(r) }
+            runOnUiThread { refresh(); showTransferResult(r, src, move) }
         }
     }
 
-    private fun showTransferResult(r: TransferResult) {
-        val ok = r.total > 0 && r.verified == r.total
+    private fun showTransferResult(r: TransferResult, src: Acc, move: Boolean) {
+        val verified = r.total > 0 && r.verified == r.total
         val msg = "Найдено в источнике: " + r.total + "\nСкопировано: " + r.copied +
             "\nПроверено в целевом аккаунте: " + r.verified +
             (if (r.missing.isNotEmpty()) "\nНе подтверждено: " + r.missing.take(20).joinToString(", ") else "") +
-            (if (ok) "\n\nВсё подтверждено." else "\n\nУдаление из источника недоступно, пока не подтверждены все контакты.")
-        val b = AlertDialog.Builder(this).setTitle("Результат переноса").setMessage(msg)
-        if (ok) {
-            b.setPositiveButton("Удалить из источника") { _, _ ->
-                AlertDialog.Builder(this).setTitle("Удалить исходные контакты (" + r.total + ")?")
-                    .setMessage("Копии в целевом аккаунте проверены. Это действие необратимо.")
+            (if (verified) "\n\nВсе контакты подтверждены в целевом аккаунте." else
+                "\n\nИсходные контакты сохранены. Удаление запрещено, пока все копии не подтверждены.")
+        val builder = AlertDialog.Builder(this).setTitle(if (move) "Результат перемещения" else "Результат копирования").setMessage(msg)
+        if (move && verified) {
+            builder.setPositiveButton("Удалить исходные контакты") { _, _ ->
+                AlertDialog.Builder(this).setTitle("Последнее подтверждение")
+                    .setMessage("Будут удалены " + r.total + " исходных записей аккаунта «" + src.label +
+                        "». Проверенные копии останутся в целевом аккаунте. Продолжить?")
                     .setPositiveButton("Удалить") { _, _ ->
-                        bg { repo.deleteRaws(r.rawIds); runOnUiThread { refresh(); toast("Удалено из источника") } }
+                        bg {
+                            repo.deleteRaws(r.rawIds)
+                            val remaining = repo.entriesOf(src).count { it.rawId in r.rawIds }
+                            runOnUiThread {
+                                refresh()
+                                if (remaining == 0) toast("Перемещение завершено: исходные записи удалены")
+                                else toast("Удаление выполнено не полностью: осталось записей $remaining")
+                            }
+                        }
                     }
                     .setNegativeButton("Оставить", null).show()
             }
-            b.setNegativeButton("Оставить", null)
-        } else b.setPositiveButton("Закрыть", null)
-        b.show()
+            builder.setNegativeButton("Оставить исходные", null)
+        } else builder.setPositiveButton("Закрыть", null)
+        builder.show()
     }
 
     /** Передаёт контакты в установленное приложение ChatGPT через системное меню Android. */
@@ -1004,13 +1095,13 @@ class MainActivity : Activity() {
     private fun queueTelegramMatch() {
         bg {
             try {
-                val synced = bridge.sync(contactsForSync())
+                val summary = syncContacts()
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
-                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
+                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing ${summary.synced} contacts")
                 runOnUiThread {
-                    showSyncResult(synced)
+                    showSyncResult(summary)
                     if (result.optBoolean("queued")) {
                         toast("Серверная проверка поставлена в очередь: $count уникальных номеров. Обработка начнётся после настройки Telegram-сессии и GitHub Actions.")
                     } else {
@@ -1051,6 +1142,56 @@ class MainActivity : Activity() {
         }
     }
 
+
+    private fun updateShizukuStatus() {
+        shizukuStatus.text = when {
+            !Shizuku.pingBinder() -> "Shizuku: не запущен или служба недоступна."
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED ->
+                "Shizuku: разрешение выдано этому приложению (UID ${Shizuku.getUid()})."
+            else -> "Shizuku: приложение ещё не авторизовано."
+        }
+    }
+
+    private fun requestShizukuPermission() {
+        if (Shizuku.isPreV11()) {
+            toast("Эта версия Shizuku не поддерживается. Обновите Shizuku.")
+            return
+        }
+        if (!Shizuku.pingBinder()) {
+            AlertDialog.Builder(this)
+                .setTitle("Shizuku недоступен")
+                .setMessage("Запустите службу Shizuku и вернитесь сюда. После запуска нажмите «Доступ Shizuku» ещё раз.")
+                .setPositiveButton("Открыть Shizuku") { _, _ ->
+                    val launch = packageManager.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+                    if (launch != null) startActivity(launch)
+                    else toast("Приложение Shizuku не найдено.")
+                }
+                .setNegativeButton("Закрыть", null)
+                .show()
+            updateShizukuStatus()
+            return
+        }
+        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            toast("Разрешение Shizuku уже выдано этому приложению.")
+            updateShizukuStatus()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Запросить доступ Shizuku")
+            .setMessage(
+                "Shizuku покажет системный запрос. Разрешение будет выдано приложению «Мои контакты — привязка» и позволит ему выполнять разрешённые команды с UID shell. " +
+                "Это отдельное разрешение: Termux должен быть авторизован в Shizuku независимо."
+            )
+            .setPositiveButton("Запросить") { _, _ ->
+                try {
+                    Shizuku.requestPermission(shizukuPermissionRequestCode)
+                } catch (error: Exception) {
+                    toast("Не удалось запросить Shizuku: " + (error.message ?: error.javaClass.simpleName))
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
 
     /**
      * Android requires the user to approve unknown-source installation per app.

@@ -1,11 +1,14 @@
 name: Build APK
 on:
   push:
-    branches: [main]
+    branches: [main, feature/brave-accessibility-control, 'fix/**']
   pull_request:
-    branches: [main]
+    branches: [main, feature/brave-accessibility-control]
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,10 +32,12 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
       - name: Configure stable signing when secrets are available
+        id: signing
         shell: bash
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Stable signing secrets are not configured; this build will use the temporary runner debug key."
+            echo "Stable signing secrets are not configured; this build will use the temporary runner debug key and will not be published as an update."
+            echo "stable_signing=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
@@ -51,8 +56,47 @@ jobs:
             echo "MYCONTACTS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
           echo "Stable Android signing is configured."
+          echo "stable_signing=true" >> "$GITHUB_OUTPUT"
       - run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: moi-kontakty-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Prepare signed update assets
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          cp "$APK" "$RUNNER_TEMP/moi-kontakty.apk"
+          cd "$RUNNER_TEMP"
+          sha256sum moi-kontakty.apk > moi-kontakty.apk.sha256
+      - name: Create draft signed update release
+        id: draft_release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mycontacts-app-${{ github.sha }}
+          target_commitish: ${{ github.ref_name }}
+          name: Мои контакты — 0.6.${{ github.run_number }}
+          body: |
+            Автоматическая подписанная сборка приложения.
+            Версия: 0.6.${{ github.run_number }}
+            Version code: 1000 + ${{ github.run_number }}
+            Commit: ${{ github.sha }}
+          prerelease: true
+          draft: true
+          make_latest: false
+          files: |
+            ${{ runner.temp }}/moi-kontakty.apk
+            ${{ runner.temp }}/moi-kontakty.apk.sha256
+
+      - name: Publish immutable signed update release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.draft_release.outputs.id }}
+        shell: bash
+        run: |
+          test -n "$RELEASE_ID"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false
