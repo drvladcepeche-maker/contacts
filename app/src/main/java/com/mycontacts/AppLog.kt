@@ -145,9 +145,13 @@ echo "Изменения APK собираются через GitHub Actions по
     }
 
     private val uploadExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var lastFlushScheduledAt = 0L
 
-    /** Retry persisted diagnostic events whenever the app starts or records a new event. */
+    /** Retry persisted diagnostic events, throttled to avoid repeated network requests. */
     fun flush(context: Context) {
+        val now = System.currentTimeMillis()
+        if (now - lastFlushScheduledAt < 30_000L) return
+        lastFlushScheduledAt = now
         val app = context.applicationContext
         uploadExecutor.execute {
             try {
