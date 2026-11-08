@@ -190,6 +190,7 @@ class MainActivity : Activity() {
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit().putString("last_service_start_error", "").apply()
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Failed to start bridge foreground service", e)
+            AppLog.error(this, "MainActivity", "Failed to start bridge foreground service", e)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit()
                 .putString("last_service_start_error", e.javaClass.simpleName + ": " + (e.message ?: "no message")).apply()
             toast("Не удалось запустить фоновую связь: " + (e.message ?: e.javaClass.simpleName))
@@ -241,6 +242,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
                 android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
             }
         }
     }
@@ -299,6 +301,7 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
             android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
+            AppLog.error(this, "MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
             throw e
         }
     }
