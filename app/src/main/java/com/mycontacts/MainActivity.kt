@@ -294,6 +294,14 @@ class MainActivity : Activity() {
     }
 
     private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
+        // Record every command outcome locally and upload it immediately. Previously
+        // normal success/failure branches acknowledged commands without AppLog events.
+        if (error == null) {
+            AppLog.info(this, "BridgeCommand", "Local outcome completed; command_id=$id")
+        } else {
+            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; reason=${error.take(500)}")
+        }
+        AppLog.flush(this, force = true)
         try {
             persistCommandOutcome(id, result, error)
             bridge.complete(id, result, error)
@@ -405,6 +413,8 @@ class MainActivity : Activity() {
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
         if (id.isBlank()) return
+        val action = command.optString("action")
+        AppLog.info(this, "BridgeCommand", "Received command; command_id=$id; action=$action")
 
         // An earlier attempt may have changed the phone successfully but failed
         // to acknowledge the result to Supabase. Retry the acknowledgement only.
@@ -421,7 +431,6 @@ class MainActivity : Activity() {
             return
         }
 
-        val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
         if (notificationRejectedCommandIds.remove(id)) {
             bg { try { completeBridgeCommand(id, error = "Отклонено пользователем через уведомление") } catch (e: Exception) { AppLog.error(this, "NotificationAction", "Reject failed", e) } }
@@ -505,9 +514,29 @@ class MainActivity : Activity() {
             "delete_contact" -> {
                 runOnUiThread {
                     val contactId = payload.optLong("id", -1)
-                    val c = repo.loadAll().firstOrNull { it.id == contactId }
-                    if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
-                    else {
+                    val currentContacts = repo.loadAll()
+                    val byId = currentContacts.firstOrNull { it.id == contactId }
+                    val requestedName = payload.optString("name").trim()
+                    val requestedPhone = payload.optString("phone").filter { it.isDigit() }
+                    val fallbackMatches = if (byId == null && requestedName.isNotBlank() && requestedPhone.isNotBlank()) {
+                        currentContacts.filter { contact ->
+                            contact.name.trim().equals(requestedName, ignoreCase = true) &&
+                                contact.phones.any { it.filter { ch -> ch.isDigit() } == requestedPhone }
+                        }
+                    } else emptyList()
+                    val c = byId ?: fallbackMatches.singleOrNull()
+                    if (byId == null && c != null) {
+                        AppLog.warn(this, "BridgeCommand", "Delete resolved stale local ID $contactId to current ID ${c.id} using exact name and phone")
+                        AppLog.flush(this, force = true)
+                    }
+                    if (c == null) {
+                        val reason = if (fallbackMatches.size > 1) {
+                            "Локальный ID $contactId устарел; по точному имени и телефону найдено несколько контактов (${fallbackMatches.size}). Автоматическое удаление отменено."
+                        } else {
+                            "Контакт не найден: local_contact_id=$contactId"
+                        }
+                        bg { try { completeBridgeCommand(id, error = reason) } catch (_: Exception) {} }
+                    } else {
                         val dialog = AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
