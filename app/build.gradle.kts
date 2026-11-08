@@ -16,8 +16,8 @@ android {
         applicationId = "com.mycontacts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 1481
+        versionName = "0.6.481"
     }
     signingConfigs {
         if (stableSigningEnabled) {
@@ -32,7 +32,7 @@ android {
     buildTypes {
         getByName("debug") {
             // Keep the recovery build installable beside an older APK signed with a different key.
-            applicationIdSuffix = ".pairing2"
+            applicationIdSuffix = ".bridgefix4"
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
