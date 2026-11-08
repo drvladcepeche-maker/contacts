@@ -33,7 +33,18 @@ object AppLog {
 
     fun read(context: Context): String = synchronized(lock) {
         val file = File(context.filesDir, FILE_NAME)
-        if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
+        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\\n"
+        val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
+        val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
+        val lastError = prefs.getString("last_upload_error", "").orEmpty()
+        body + buildString {
+            append("\\n--- Отправка диагностики ---\\n")
+            append("Ожидают отправки: ").append(pending).append("\\n")
+            append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\\n")
+            append("Последняя отправка: принято ").append(prefs.getInt("last_upload_received", 0))
+                .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\\n")
+            if (lastError.isNotBlank()) append("Последняя ошибка отправки: ").append(redact(lastError)).append("\\n")
+        }
     }
 
     fun exportToDownloads(context: Context): String {
@@ -169,7 +180,14 @@ echo "Изменения APK собираются через GitHub Actions по
                 val response = ContactsBridge(app).request(
                     org.json.JSONObject().put("action", "upload_diagnostics").put("entries", batch)
                 )
-                if (response.optInt("received", -1) < 0) return@execute
+                val received = response.optInt("received", -1)
+                if (received < 0) {
+                    val message = response.optString("error", "Сервер вернул некорректный ответ диагностики")
+                    prefs.edit().putString("last_upload_error", message).apply()
+                    android.util.Log.e("AppLog", "Diagnostic upload rejected: " + message)
+                    lastFlushScheduledAt = 0L
+                    return@execute
+                }
                 val sent = HashSet<String>()
                 for (i in 0 until batch.length()) sent.add(batch.optJSONObject(i)?.optString("event_id") ?: "")
                 synchronized(lock) {
@@ -182,8 +200,21 @@ echo "Изменения APK собираются через GitHub Actions по
                     }
                     prefs.edit().putString("pending", remaining.toString()).commit()
                 }
-            } catch (_: Exception) {
-                // Keep the queue intact and permit the next event/poll to retry promptly.
+                prefs.edit()
+                    .putString("last_upload_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                        timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    }.format(Date()))
+                    .putInt("last_upload_received", received)
+                    .putInt("last_upload_inserted", response.optInt("inserted", 0))
+                    .putString("last_upload_error", "")
+                    .apply()
+            } catch (e: Exception) {
+                // Keep the queue intact, expose the transport error in the exported log,
+                // and retry on the next flush.
+                val message = e.javaClass.simpleName + ": " + (e.message ?: "no message")
+                app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
+                    .edit().putString("last_upload_error", message).apply()
+                android.util.Log.e("AppLog", "Diagnostic upload failed", e)
                 lastFlushScheduledAt = 0L
             }
         }
