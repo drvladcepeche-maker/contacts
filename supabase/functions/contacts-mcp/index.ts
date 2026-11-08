@@ -298,6 +298,13 @@ Deno.serve(async (req: Request) => {
     }
     return response(id, toolResult({ error: "Unknown tool" }, true));
   } catch (e) {
-    return response(id, toolResult({ error: e instanceof Error ? e.message : String(e) }, true));
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[contacts-mcp] tool call failed", {
+      tool: name,
+      requestId: id,
+      message: message.slice(0, 1000),
+      timestamp: new Date().toISOString(),
+    });
+    return response(id, toolResult({ error: message }, true));
   }
 });
