@@ -109,7 +109,7 @@ function renderContacts(contacts) {
       <input class="pick-contact" type="checkbox" data-id="${safeId}" aria-label="Выбрать ${escapeHtml(displayName(contact))}" ${id === '' ? 'disabled' : ''} />
       <div class="avatar">${escapeHtml(displayName(contact).trim().slice(0,1).toUpperCase() || '?')}</div>
       <div class="contact-body"><strong>${escapeHtml(displayName(contact))}</strong>${details.map(item => `<span>${escapeHtml(item)}</span>`).join('')}${id !== '' ? `<small>ID: ${safeId}</small>` : ''}</div>
-      <div class="contact-row-actions"><button class="secondary edit-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Изменить</button><button class="danger delete-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Удалить</button></div>
+      <div class="contact-row-actions"><button class="secondary edit-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Изменить</button><button class="secondary move-contact" data-id="${safeId}" ${id === '' || !(contact.accounts || []).length ? 'disabled' : ''}>Перенести</button><button class="danger delete-contact" data-id="${safeId}" ${id === '' ? 'disabled' : ''}>Удалить</button></div>
     </article>`;
   }).join('');
   updateMergeButton();
@@ -260,9 +260,10 @@ $('#contacts').addEventListener('change', (event) => {
 });
 $('#contacts').addEventListener('click', async (event) => {
   const edit = event.target.closest('.edit-contact');
+  const move = event.target.closest('.move-contact');
   const remove = event.target.closest('.delete-contact');
-  if (!edit && !remove) return;
-  const id = Number((edit || remove).dataset.id);
+  if (!edit && !move && !remove) return;
+  const id = Number((edit || move || remove).dataset.id);
   const contact = state.contacts.find(item => Number(item.local_contact_id ?? item.id ?? item.contact_id) === id);
   if (!contact || !Number.isInteger(id) || id <= 0) { setStatus('Не удалось определить контакт.', 'error'); return; }
   try {
@@ -272,9 +273,39 @@ $('#contacts').addEventListener('click', async (event) => {
       if (!name.trim()) { setStatus('Имя не может быть пустым.', 'error'); return; }
       const phone = window.prompt('Номер телефона:', contact.phone || contact.phone_number || '');
       if (phone === null) return;
-      await queueChange('update', { id, name: name.trim(), phone: phone.trim() }, `Отправить на телефон запрос на изменение контакта «${displayName(contact)}»? Телефон попросит отдельное подтверждение.`);
+      await queueChange('update', { id, name: name.trim(), phone: phone.trim() }, 'Отправить на телефон запрос на изменение контакта «' + displayName(contact) + '»? Телефон попросит отдельное подтверждение.');
+    } else if (move) {
+      const formatAccount = (account) => account.label || ((account.account_name || 'Локально') + ' (' + (account.account_type || 'local') + ')');
+      const valid = (account) => account && account.account_name && account.account_type;
+      const sources = (contact.accounts || []).filter(valid);
+      if (!sources.length) throw new Error('Не найден исходный аккаунт. Обновите кэш после синхронизации телефона.');
+      let source = sources[0];
+      if (sources.length > 1) {
+        const choice = window.prompt('Выберите исходный аккаунт:\n' + sources.map((a, i) => (i + 1) + '. ' + formatAccount(a)).join('\n'), '1');
+        if (choice === null) return;
+        source = sources[Number(choice) - 1];
+        if (!source) throw new Error('Некорректный номер исходного аккаунта.');
+      }
+      const allAccounts = [...new Map(state.contacts.flatMap(item => item.accounts || [])
+        .filter(valid).map(account => [account.account_type + '|' + account.account_name, account])).values()];
+      const targets = allAccounts.filter(account =>
+        account.account_name !== source.account_name || account.account_type !== source.account_type);
+      if (!targets.length) throw new Error('Не найден другой аккаунт назначения. Сначала синхронизируйте список аккаунтов на телефоне.');
+      const targetChoice = window.prompt('Выберите целевой аккаунт:\n' + targets.map((a, i) => (i + 1) + '. ' + formatAccount(a)).join('\n'), '1');
+      if (targetChoice === null) return;
+      const target = targets[Number(targetChoice) - 1];
+      if (!target) throw new Error('Некорректный номер целевого аккаунта.');
+      const confirmation = 'Перенести «' + displayName(contact) + '» из «' + formatAccount(source) + '» в «' + formatAccount(target) + '»? Исходная запись будет удалена только после проверки копии на телефоне.';
+      await queueChange('move', {
+        id,
+        source_account_name: source.account_name,
+        source_account_type: source.account_type,
+        target_account_name: target.account_name,
+        target_account_type: target.account_type,
+        confirmed_by_user: true
+      }, confirmation);
     } else {
-      await queueChange('delete', { id, confirmed_by_user: true }, `Отправить на телефон запрос на удаление контакта «${displayName(contact)}» (ID ${id})? Телефон попросит отдельное подтверждение.`);
+      await queueChange('delete', { id, confirmed_by_user: true }, 'Отправить на телефон запрос на удаление контакта «' + displayName(contact) + '» (ID ' + id + ')? Телефон попросит отдельное подтверждение.');
     }
   } catch (error) { setStatus(error.message || 'Не удалось отправить команду.', 'error'); }
 });
