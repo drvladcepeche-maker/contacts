@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -29,10 +29,12 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
       - name: Configure stable signing when secrets are available
+        id: signing
         shell: bash
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Stable signing secrets are not configured; this build will use the temporary runner debug key."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Stable signing secrets are absent. A debug build will be used for CI validation only; no installable artifact will be published."
             exit 0
           fi
           for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
@@ -50,9 +52,23 @@ jobs:
             echo "MYCONTACTS_KEY_ALIAS=$ANDROID_KEY_ALIAS"
             echo "MYCONTACTS_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
-          echo "Stable Android signing is configured."
-      - run: gradle assembleDebug --no-daemon
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "Persistent signing key loaded."
+      - name: Build debug variant for CI validation
+        run: gradle assembleDebug --no-daemon
+      - name: Build signed release APK
+        if: steps.signing.outputs.available == 'true'
+        run: gradle assembleRelease --no-daemon
+      - name: Verify release APK signature and package
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$APK" | grep -F "package: name='com.mycontacts.fullfields'"
       - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.available == 'true'
         with:
-          name: moi-kontakty-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: moi-kontakty-fullfields-signed
+          path: app/build/outputs/apk/release/app-release.apk
