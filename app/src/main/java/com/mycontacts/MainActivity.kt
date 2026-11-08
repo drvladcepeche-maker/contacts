@@ -527,6 +527,61 @@ class MainActivity : Activity() {
                     }
                 }
             }
+            "move_contact" -> {
+                runOnUiThread {
+                    val contactId = payload.optLong("id", -1)
+                    val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                    val sourceName = payload.optString("source_account_name")
+                    val sourceType = payload.optString("source_account_type")
+                    val targetName = payload.optString("target_account_name")
+                    val targetType = payload.optString("target_account_type")
+                    if (contact == null) {
+                        bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
+                    } else {
+                        val accounts = repo.accounts().map { it.first }
+                        val source = accounts.firstOrNull { it.name == sourceName && it.type == sourceType }
+                        val target = accounts.firstOrNull { it.name == targetName && it.type == targetType }
+                        if (source == null || target == null) {
+                            bg { try { completeBridgeCommand(id, error = "Исходный или целевой аккаунт больше не доступен на телефоне") } catch (_: Exception) {} }
+                        } else {
+                            val executeMove: () -> Unit = {
+                                bg {
+                                    try {
+                                        if (!accountFlag(source, "enabled") || !accountFlag(source, "write")) {
+                                            throw IllegalStateException("Для исходного аккаунта не разрешена запись")
+                                        }
+                                        if (!accountFlag(target, "enabled") || !accountFlag(target, "write")) {
+                                            throw IllegalStateException("Для целевого аккаунта не разрешена запись")
+                                        }
+                                        if (source !in contact.accountSources) {
+                                            throw IllegalStateException("Контакт больше не принадлежит исходному аккаунту")
+                                        }
+                                        val moved = repo.moveContactInAccount(contactId, source, target)
+                                        val refreshed = repo.loadAll().firstOrNull { item ->
+                                            item.name == contact.name && (contact.phones.isEmpty() || item.phones.any { it in contact.phones })
+                                        }
+                                        val result = JSONObject().put("ok", true).put("previous_contact_id", contactId)
+                                            .put("moved_records", moved.verified)
+                                            .put("contact", refreshed?.let { contactJson(it) } ?: JSONObject())
+                                        completeBridgeCommand(id, result)
+                                        runOnUiThread { refresh(); toast("Контакт перенесён: " + source.label + " → " + target.label) }
+                                    } catch (e: Exception) {
+                                        try { completeBridgeCommand(id, error = e.message ?: "Ошибка переноса контакта") } catch (_: Exception) {}
+                                    }
+                                }
+                            }
+                            if (approvedFromNotification) executeMove()
+                            else AlertDialog.Builder(this).setTitle("Перенести контакт?")
+                                .setMessage(contact.name + "\n" + contact.phones.joinToString(", ") +
+                                    "\n\nИз: " + source.label + "\nВ: " + target.label +
+                                    "\n\nИсходная запись будет удалена только после проверки копии.")
+                                .setPositiveButton("Перенести") { _, _ -> executeMove() }
+                                .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                                .show()
+                        }
+                    }
+                }
+            }
             "sync_contacts" -> bg {
                 try { val n = bridge.sync(contactsForSync()); completeBridgeCommand(id, JSONObject().put("synced", n)); runOnUiThread { showSyncResult(n) } }
                 catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка синхронизации") } catch (_: Exception) {} }
