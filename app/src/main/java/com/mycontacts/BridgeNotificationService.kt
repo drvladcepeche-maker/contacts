@@ -140,10 +140,10 @@ class BridgeNotificationService : Service() {
         return when (action) {
             "upsert_contact" -> (if (id > 0) "Изменить контакт" else "Создать контакт") + ": " + name.ifBlank { "без имени" } +
                 (if (phone.isNotBlank()) " · " + maskPhone(phone) else "")
-            "delete_contact" -> "Удалить контакт · ID " + id
+            "delete_contact" -> "Удалить контакт: " + name.ifBlank { "ID " + id }
             "merge_contacts" -> "Объединить контакты · " + (payload.optJSONArray("ids")?.length() ?: 0) + " записей"
             "update_telegram_fields" -> "Изменить Telegram-поля · ID " + id + " · " + payload.optString("telegram_username")
-            "move_contact" -> "Перенести контакт · ID " + id + " · " + payload.optString("source_account_name") + " → " + payload.optString("target_account_name")
+            "move_contact" -> "Перенести " + name.ifBlank { "контакт · ID " + id } + " · " + payload.optString("source_account_name") + " → " + payload.optString("target_account_name")
             "sync_contacts" -> "Синхронизировать контакты с сервером"
             "list_contacts" -> "Передать список контактов"
             "search_contacts" -> "Найти контакты: " + payload.optString("query").take(50)
