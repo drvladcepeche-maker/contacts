@@ -148,9 +148,9 @@ echo "Изменения APK собираются через GitHub Actions по
     @Volatile private var lastFlushScheduledAt = 0L
 
     /** Retry persisted diagnostic events, throttled to avoid repeated network requests. */
-    fun flush(context: Context) {
+    fun flush(context: Context, force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (now - lastFlushScheduledAt < 30_000L) return
+        if (!force && now - lastFlushScheduledAt < 30_000L) return
         lastFlushScheduledAt = now
         val app = context.applicationContext
         uploadExecutor.execute {
@@ -183,7 +183,8 @@ echo "Изменения APK собираются через GitHub Actions по
                     prefs.edit().putString("pending", remaining.toString()).commit()
                 }
             } catch (_: Exception) {
-                // Keep the queue intact; the next app start or log event retries it.
+                // Keep the queue intact and permit the next event/poll to retry promptly.
+                lastFlushScheduledAt = 0L
             }
         }
     }
@@ -223,7 +224,7 @@ echo "Изменения APK собираются через GitHub Actions по
                 for (i in maxOf(0, current.length() - 200) until current.length()) trimmed.put(current.getJSONObject(i))
                 prefs.edit().putString("pending", trimmed.toString()).commit()
             }
-            flush(app)
+            if (level != "INFO") flush(app, force = true)
         } catch (_: Exception) {
             // Diagnostics must never interrupt the application.
         }
