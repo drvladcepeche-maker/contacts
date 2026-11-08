@@ -528,6 +528,65 @@ class ContactRepo(private val cr: ContentResolver) {
         return TransferResult(source.size, copied, verified, missing, source.map { it.rawId })
     }
 
+    /** Move a single contact's raw records to another account, copying every textual and binary Data column. */
+    fun moveContactInAccount(contactId: Long, source: Acc, target: Acc): TransferResult {
+        require(source != target) { "Исходный и целевой аккаунты совпадают" }
+        val sourceIds = rawIdsForAccount(contactId, source)
+        if (sourceIds.isEmpty()) throw IllegalStateException("Контакт не найден в исходном аккаунте")
+        val sourceSet = sourceIds.toSet()
+        val sourceEntries = entriesOf(source).filter { it.rawId in sourceSet }
+        if (sourceEntries.isEmpty()) throw IllegalStateException("В исходном аккаунте нет данных контакта для переноса")
+        val before = keyCounts(entriesOf(target))
+        val dataColumns = (1..15).map { "data" + it }
+        for (rawId in sourceIds) {
+            val operations = ArrayList<ContentProviderOperation>()
+            operations.add(ContentProviderOperation.newInsert(CC.RawContacts.CONTENT_URI)
+                .withValue(CC.RawContacts.ACCOUNT_TYPE, target.type)
+                .withValue(CC.RawContacts.ACCOUNT_NAME, target.name).build())
+            val projection = arrayOf(CC.Data.MIMETYPE, *dataColumns.toTypedArray())
+            cr.query(CC.Data.CONTENT_URI, projection, CC.Data.RAW_CONTACT_ID + "=?",
+                arrayOf(rawId.toString()), null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val mime = cursor.getString(0) ?: continue
+                    val operation = ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                        .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+                        .withValue(CC.Data.MIMETYPE, mime)
+                    for ((offset, column) in dataColumns.withIndex()) {
+                        val index = offset + 1
+                        if (cursor.isNull(index)) continue
+                        val value: Any? = when (cursor.getType(index)) {
+                            Cursor.FIELD_TYPE_BLOB -> cursor.getBlob(index)
+                            Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(index)
+                            Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(index)
+                            else -> cursor.getString(index)
+                        }
+                        if (value != null) operation.withValue(column, value)
+                    }
+                    operations.add(operation.build())
+                }
+            } ?: throw IllegalStateException("Не удалось прочитать поля исходного контакта")
+            if (operations.size == 1) throw IllegalStateException("В исходном контакте нет полей для переноса")
+            cr.applyBatch(CC.AUTHORITY, operations)
+        }
+        val after = keyCounts(entriesOf(target))
+        val used = HashMap<String, Int>()
+        var verified = 0
+        val missing = ArrayList<String>()
+        for (entry in sourceEntries) {
+            val signature = key(entry)
+            val occurrence = (used[signature] ?: 0) + 1
+            used[signature] = occurrence
+            val gained = (after[signature] ?: 0) - (before[signature] ?: 0)
+            if (gained >= occurrence) verified++
+            else missing.add(entry.name.ifBlank { entry.phones.firstOrNull()?.first ?: "?" })
+        }
+        if (verified != sourceEntries.size) {
+            throw IllegalStateException("Проверено копий: " + verified + " из " + sourceEntries.size + ". Исходные данные сохранены; проверьте целевой аккаунт.")
+        }
+        deleteRaws(sourceIds)
+        return TransferResult(sourceEntries.size, sourceIds.size, verified, missing, sourceIds)
+    }
+
     fun deleteRaws(ids: List<Long>) {
         for (id in ids) cr.delete(ContentUris.withAppendedId(CC.RawContacts.CONTENT_URI, id), null, null)
     }
