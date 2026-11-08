@@ -67,6 +67,7 @@ class BridgeNotificationService : Service() {
                     val commands = bridge.poll()
                     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
                     var pendingCount = 0
+                    var pendingCommands = JSONArray()
                     synchronized(QUEUE_LOCK) {
                         val pending = readPending(prefs.getString(KEY_PENDING, "[]"))
                         val known = HashSet<String>()
@@ -84,8 +85,9 @@ class BridgeNotificationService : Service() {
                             Log.i(TAG, "Persisted " + added + " command(s); pending=" + pending.length())
                         }
                         pendingCount = pending.length()
+                        pendingCommands = pending
                     }
-                    if (pendingCount > 0) postPendingNotification(pending)
+                    if (pendingCount > 0) postPendingNotification(pendingCommands)
                     else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
                     recordDiagnostic("last_poll_at", System.currentTimeMillis().toString())
                     recordDiagnostic("last_poll_error", "")
