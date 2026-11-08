@@ -139,6 +139,7 @@ class BridgeNotificationService : Service() {
             "delete_contact" -> "Удалить контакт · ID " + id
             "merge_contacts" -> "Объединить контакты · " + (payload.optJSONArray("ids")?.length() ?: 0) + " записей"
             "update_telegram_fields" -> "Изменить Telegram-поля · ID " + id + " · " + payload.optString("telegram_username")
+            "move_contact" -> "Перенести контакт · ID " + id + " · " + payload.optString("source_account_name") + " → " + payload.optString("target_account_name")
             "sync_contacts" -> "Синхронизировать контакты с сервером"
             "list_contacts" -> "Передать список контактов"
             "search_contacts" -> "Найти контакты: " + payload.optString("query").take(50)
@@ -193,7 +194,7 @@ class BridgeNotificationService : Service() {
             for (i in 0 until pending.length()) {
                 val command = pending.optJSONObject(i) ?: continue
                 val action = command.optString("action")
-                if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields")) continue
+                if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields", "move_contact")) continue
                 val id = command.optString("id")
                 val open = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
