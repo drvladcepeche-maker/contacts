@@ -11,6 +11,7 @@ const CORS = {
 
 const tools = [
   { name: "contacts_status", description: "Check bridge status, paired Android devices, last sync and cached contact count.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "contacts_report_error", description: "Upload a redacted web-interface diagnostic event for a device you own.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, level: { type: "string", enum: ["WARN", "ERROR", "FATAL"] }, tag: { type: "string", maxLength: 120 }, message: { type: "string", maxLength: 2000 }, stack_trace: { type: "string", maxLength: 12000 }, app_version: { type: "string", maxLength: 40 } }, required: ["device_id", "level", "tag", "message"], additionalProperties: false } },
   { name: "contacts_list", description: "List cached contacts from one paired Android device. Optional account_name/account_type filters return only matching account memberships; the returned accounts array is narrowed to the selected source.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_search", description: "Search cached contacts by name, phone, or email-like fields, optionally restricted to one account source.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id", "query"], additionalProperties: false } },
   { name: "contacts_list_v2", description: "List cached contacts filtered by account_name/account_type. Use this refreshed tool when filtering contacts by Android account.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
@@ -101,6 +102,29 @@ Deno.serve(async (req: Request) => {
   const name = String(params.name ?? "");
   const args = params.arguments ?? {};
   try {
+    if (name === "contacts_report_error") {
+      const deviceId = String(args.device_id ?? "");
+      if (!deviceId || !canAccessDevice(deviceId)) return denied(id);
+      const sanitize = (value: unknown, max: number) => String(value ?? "")
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi, "[email]")
+        .replace(/\\+?\\d[\\d\\s().-]{7,}\\d/g, "[phone]")
+        .slice(0, max);
+      const level = String(args.level ?? "ERROR").toUpperCase();
+      if (!["WARN", "ERROR", "FATAL"].includes(level)) return response(id, toolResult({ error: "Invalid diagnostic level" }, true));
+      const { error } = await db.from("contact_bridge_diagnostics").insert({
+        device_id: deviceId,
+        event_id: crypto.randomUUID(),
+        occurred_at: new Date().toISOString(),
+        level,
+        tag: sanitize(args.tag || "web-ui", 120),
+        message: sanitize(args.message, 2000),
+        stack_trace: args.stack_trace ? sanitize(args.stack_trace, 12000) : null,
+        app_version: sanitize(args.app_version || "web-ui", 40),
+      });
+      if (error) throw error;
+      return response(id, toolResult({ accepted: true }));
+    }
+
     if (name === "contacts_status") {
       let devicesQuery = db.from("contact_bridge_devices")
         .select("id, device_name, created_at, last_seen_at, revoked_at").is("revoked_at", null);
