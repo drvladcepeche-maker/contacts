@@ -81,7 +81,12 @@ async function callTool(name, args = {}) {
   const result = await rpc('tools/call', { name, arguments: args });
   if (result?.isError) {
     const textValue = result.content?.find(item => item.type === 'text')?.text;
-    throw new Error(textValue || 'Инструмент вернул ошибку.');
+    let detail = textValue || 'Инструмент вернул ошибку.';
+    try {
+      const parsed = JSON.parse(detail);
+      detail = parsed?.error || parsed?.message || detail;
+    } catch {}
+    throw new Error(detail);
   }
   const textValue = result?.content?.find(item => item.type === 'text')?.text;
   if (!textValue) return result;
