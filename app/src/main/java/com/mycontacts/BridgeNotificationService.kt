@@ -194,7 +194,6 @@ class BridgeNotificationService : Service() {
                 val command = pending.optJSONObject(i) ?: continue
                 val action = command.optString("action")
                 if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields")) continue
-                if (i >= 2) break
                 val id = command.optString("id")
                 val open = Intent(this, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -216,6 +215,7 @@ class BridgeNotificationService : Service() {
                     PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
                 )
                 builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Отклонить", rejectIntent)
+                break
             }
         }
         return builder.build()
