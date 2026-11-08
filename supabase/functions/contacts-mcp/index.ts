@@ -106,8 +106,8 @@ Deno.serve(async (req: Request) => {
       const deviceId = String(args.device_id ?? "");
       if (!deviceId || !canAccessDevice(deviceId)) return denied(id);
       const sanitize = (value: unknown, max: number) => String(value ?? "")
-        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi, "[email]")
-        .replace(/\\+?\\d[\\d\\s().-]{7,}\\d/g, "[phone]")
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+        .replace(/\+?\d[\d\s().-]{7,}\d/g, "[phone]")
         .slice(0, max);
       const level = String(args.level ?? "ERROR").toUpperCase();
       if (!["WARN", "ERROR", "FATAL"].includes(level)) return response(id, toolResult({ error: "Invalid diagnostic level" }, true));
