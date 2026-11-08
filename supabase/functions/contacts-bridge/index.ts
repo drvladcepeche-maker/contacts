@@ -205,6 +205,35 @@ Deno.serve(async (req: Request) => {
     await supabase.from("contact_bridge_devices")
       .update({ last_seen_at: new Date().toISOString() }).eq("id", deviceId);
 
+    if (action === "upload_diagnostics") {
+      const entries = Array.isArray(body.entries) ? body.entries.slice(0, 50) : [];
+      if (!entries.length) return json({ received: 0, inserted: 0 });
+      const allowedLevels = new Set(["INFO", "WARN", "ERROR", "FATAL"]);
+      const rows = entries.flatMap((entry: any) => {
+        if (!entry || typeof entry !== "object") return [];
+        const eventId = String(entry.event_id ?? "").trim();
+        const occurredAt = new Date(String(entry.occurred_at ?? ""));
+        const level = String(entry.level ?? "ERROR").toUpperCase();
+        if (!eventId || eventId.length > 80 || Number.isNaN(occurredAt.getTime()) || !allowedLevels.has(level)) return [];
+        return [{
+          device_id: deviceId,
+          event_id: eventId,
+          occurred_at: occurredAt.toISOString(),
+          level,
+          tag: String(entry.tag ?? "Unknown").slice(0, 120),
+          message: String(entry.message ?? "").slice(0, 2000),
+          stack_trace: entry.stack_trace == null ? null : String(entry.stack_trace).slice(0, 12000),
+          app_version: entry.app_version == null ? null : String(entry.app_version).slice(0, 40),
+        }];
+      });
+      if (!rows.length) return json({ received: entries.length, inserted: 0, rejected: entries.length });
+      const { data, error } = await supabase.from("contact_bridge_diagnostics")
+        .upsert(rows, { onConflict: "device_id,event_id", ignoreDuplicates: true })
+        .select("event_id");
+      if (error) return json({ error: "Diagnostics upload failed: " + error.message }, 500);
+      return json({ received: entries.length, inserted: data?.length ?? 0, rejected: entries.length - rows.length });
+    }
+
     if (action === "sync_contacts") {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
@@ -457,7 +486,7 @@ Deno.serve(async (req: Request) => {
       // Read the claimed command so successful contact writes can refresh the cache.
       const { data: command, error: commandReadError } = await supabase
         .from("contact_bridge_commands")
-        .select("id, action, status")
+        .select("id, action, status, payload")
         .eq("id", commandId)
         .eq("device_id", deviceId)
         .eq("status", "claimed")
@@ -466,12 +495,59 @@ Deno.serve(async (req: Request) => {
       if (!command) return json({ error: "Command not found or not claimed" }, 404);
 
       let cacheUpdated = false;
-      if (status === "completed" && command.action === "upsert_contact") {
+      const commandPayload = command.payload && typeof command.payload === "object"
+        ? command.payload as Record<string, unknown> : {};
+      if (status === "completed" && command.action === "delete_contact") {
+        const localId = String(commandPayload.id ?? "").trim();
+        if (localId) {
+          const { error: deleteError } = await supabase.from("contact_bridge_snapshots")
+            .delete().eq("device_id", deviceId).eq("local_contact_id", localId);
+          if (deleteError) return json({ error: deleteError.message }, 500);
+          cacheUpdated = true;
+        }
+      }
+
+      if (status === "completed" && command.action === "merge_contacts") {
         const result = body.result as Record<string, unknown> | null;
         const contact = result && result.contact && typeof result.contact === "object"
-          ? result.contact as Record<string, unknown>
-          : null;
+          ? result.contact as Record<string, unknown> : null;
+        const keepId = contact?.id == null ? "" : String(contact.id);
+        const ids = Array.isArray(commandPayload.ids) ? commandPayload.ids.map(String) : [];
+        const removeIds = ids.filter(value => value && value !== keepId);
+        for (let offset = 0; offset < removeIds.length; offset += 100) {
+          const { error: deleteError } = await supabase.from("contact_bridge_snapshots")
+            .delete().eq("device_id", deviceId).in("local_contact_id", removeIds.slice(offset, offset + 100));
+          if (deleteError) return json({ error: deleteError.message }, 500);
+        }
+        if (contact && keepId) {
+          const { data: existing, error: existingError } = await supabase.from("contact_bridge_snapshots")
+            .select("contact_data").eq("device_id", deviceId).eq("local_contact_id", keepId).maybeSingle();
+          if (existingError) return json({ error: existingError.message }, 500);
+          const prior = existing?.contact_data && typeof existing.contact_data === "object"
+            ? existing.contact_data as Record<string, unknown> : {};
+          const { error: upsertError } = await supabase.from("contact_bridge_snapshots").upsert({
+            device_id: deviceId, local_contact_id: keepId,
+            contact_data: { ...prior, ...contact, id: contact.id },
+            synced_at: new Date().toISOString(),
+          }, { onConflict: "device_id,local_contact_id" });
+          if (upsertError) return json({ error: upsertError.message }, 500);
+        }
+        cacheUpdated = true;
+      }
+
+      if (status === "completed" && ["upsert_contact", "move_contact", "update_telegram_fields"].includes(command.action)) {
+        const result = body.result as Record<string, unknown> | null;
+        const contact = result && result.contact && typeof result.contact === "object"
+          ? result.contact as Record<string, unknown> : null;
         const contactId = contact?.id;
+        if (command.action === "move_contact" && result?.previous_contact_id != null) {
+          const previousId = String(result.previous_contact_id);
+          if (previousId && previousId !== String(contactId ?? "")) {
+            const { error: deleteError } = await supabase.from("contact_bridge_snapshots")
+              .delete().eq("device_id", deviceId).eq("local_contact_id", previousId);
+            if (deleteError) return json({ error: deleteError.message }, 500);
+          }
+        }
         if (contact && contactId !== undefined && contactId !== null && String(contactId)) {
           const localId = String(contactId);
           const { data: existing, error: existingError } = await supabase
@@ -481,11 +557,8 @@ Deno.serve(async (req: Request) => {
             .eq("local_contact_id", localId)
             .maybeSingle();
           if (existingError) return json({ error: existingError.message }, 500);
-
-          // Keep fields from the last full sync that the command result does not include.
           const prior = existing?.contact_data && typeof existing.contact_data === "object"
-            ? existing.contact_data as Record<string, unknown>
-            : {};
+            ? existing.contact_data as Record<string, unknown> : {};
           const mergedContact = { ...prior, ...contact, id: contactId };
           const { error: snapshotError } = await supabase
             .from("contact_bridge_snapshots")
@@ -546,7 +619,7 @@ Deno.serve(async (req: Request) => {
 
   if (action === "queue_command") {
     const commandAction = String(body.command_action ?? "");
-    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts", "update_telegram_fields"];
+    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts", "update_telegram_fields", "move_contact"];
     if (!allowed.includes(commandAction)) return json({ error: "Unsupported command_action" }, 400);
     if (!deviceId && body.device_id) deviceId = String(body.device_id);
     if (!deviceId) {

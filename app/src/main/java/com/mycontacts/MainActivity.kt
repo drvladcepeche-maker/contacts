@@ -31,6 +31,8 @@ class MainActivity : Activity() {
     private var bridgePolling = false
     private var waitingForInstallPermission = false
     private val activeCommandIds = HashSet<String>()
+    private val notificationApprovedCommandIds = HashSet<String>()
+    private val notificationRejectedCommandIds = HashSet<String>()
 
     private lateinit var list: ListView
     private lateinit var search: EditText
@@ -138,6 +140,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        consumeNotificationDecision(intent)
         AppLog.flush(this)
         if (waitingForInstallPermission) {
             waitingForInstallPermission = false
@@ -150,6 +153,27 @@ class MainActivity : Activity() {
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeNotificationDecision(intent)
+        drainBridgeQueue()
+    }
+
+    private fun consumeNotificationDecision(source: Intent?) {
+        if (source == null) return
+        val commandId = source.getStringExtra("notification_command_id").orEmpty()
+        val decision = source.getStringExtra("notification_decision").orEmpty()
+        if (commandId.isBlank() || decision !in setOf("approve", "reject")) return
+        synchronized(activeCommandIds) {
+            if (decision == "approve") notificationApprovedCommandIds.add(commandId)
+            else notificationRejectedCommandIds.add(commandId)
+        }
+        source.removeExtra("notification_command_id")
+        source.removeExtra("notification_decision")
+        AppLog.info(this, "NotificationAction", "User selected " + decision + " for command " + commandId)
     }
 
     override fun onPause() {
@@ -166,6 +190,7 @@ class MainActivity : Activity() {
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit().putString("last_service_start_error", "").apply()
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Failed to start bridge foreground service", e)
+            AppLog.error(this, "MainActivity", "Failed to start bridge foreground service", e)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit()
                 .putString("last_service_start_error", e.javaClass.simpleName + ": " + (e.message ?: "no message")).apply()
             toast("Не удалось запустить фоновую связь: " + (e.message ?: e.javaClass.simpleName))
@@ -217,6 +242,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
                 android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
             }
         }
     }
@@ -275,6 +301,7 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
             android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
+            AppLog.error(this, "MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
             throw e
         }
     }
@@ -353,7 +380,27 @@ class MainActivity : Activity() {
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
-        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
+        .put("id", c.id)
+        .put("name", c.name)
+        .put("phones", JSONArray(c.phones))
+        .put("telegram", c.telegram)
+        .put("telegram_id", c.telegramId)
+        .put("telegram_username", c.telegramUsername)
+        .put("fields", JSONArray().apply {
+            c.fields.forEach { field ->
+                put(JSONObject().put("mimetype", field.mimetype).put("values", JSONObject().apply {
+                    field.values.forEach { (key, value) -> put(key, value) }
+                }))
+            }
+        })
+        .put("accounts", JSONArray().apply {
+            c.accountSources.forEach { account ->
+                put(JSONObject()
+                    .put("account_name", account.name ?: JSONObject.NULL)
+                    .put("account_type", account.type ?: JSONObject.NULL)
+                    .put("label", account.label))
+            }
+        })
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
@@ -376,6 +423,11 @@ class MainActivity : Activity() {
 
         val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
+        if (notificationRejectedCommandIds.remove(id)) {
+            bg { try { completeBridgeCommand(id, error = "Отклонено пользователем через уведомление") } catch (e: Exception) { AppLog.error(this, "NotificationAction", "Reject failed", e) } }
+            return
+        }
+        val approvedFromNotification = notificationApprovedCommandIds.remove(id)
         when (action) {
             "list_contacts", "search_contacts" -> {
                 val q = payload.optString("query").trim().lowercase()
@@ -396,7 +448,7 @@ class MainActivity : Activity() {
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
-                        AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
+                        val dialog = AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
                             .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
@@ -415,26 +467,39 @@ class MainActivity : Activity() {
                             }
                             .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                             .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
                     }
                 }
             }
             "update_telegram_fields" -> {
-                bg {
-                    try {
-                        val contactId = payload.optLong("id", -1)
-                        require(contactId > 0) { "Некорректный ID контакта" }
-                        val telegramId = payload.optString("telegram_id", "")
-                        val username = payload.optString("telegram_username", "")
-                        val contact = repo.loadAll().firstOrNull { it.id == contactId }
-                            ?: throw IllegalStateException("Контакт не найден")
-                        val target = writableAccountFor(contact)
-                            ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
-                        repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
-                        completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
-                        runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
-                    } catch (e: Exception) {
-                        try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                val contactId = payload.optLong("id", -1)
+                val telegramId = payload.optString("telegram_id", "")
+                val username = payload.optString("telegram_username", "")
+                val executeUpdate: () -> Unit = {
+                    bg {
+                        try {
+                            require(contactId > 0) { "Некорректный ID контакта" }
+                            val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                                ?: throw IllegalStateException("Контакт не найден")
+                            val target = writableAccountFor(contact)
+                                ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
+                            repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
+                            val updatedContact = repo.loadAll().firstOrNull { it.id == contactId }
+                            completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId)
+                                .put("contact", updatedContact?.let { contactJson(it) } ?: JSONObject()))
+                            runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
+                        } catch (e: Exception) {
+                            try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                        }
                     }
+                }
+                runOnUiThread {
+                    if (approvedFromNotification) executeUpdate()
+                    else AlertDialog.Builder(this).setTitle("Изменить Telegram-данные контакта?")
+                        .setMessage("ID контакта: " + contactId + "\nTelegram ID: " + telegramId + "\nUsername: " + username)
+                        .setPositiveButton("Разрешить") { _, _ -> executeUpdate() }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .show()
                 }
             }
             "delete_contact" -> {
@@ -442,7 +507,8 @@ class MainActivity : Activity() {
                     val contactId = payload.optLong("id", -1)
                     val c = repo.loadAll().firstOrNull { it.id == contactId }
                     if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
-                    else AlertDialog.Builder(this).setTitle("Удалить контакт?")
+                    else {
+                        val dialog = AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
                             bg { try {
@@ -455,6 +521,8 @@ class MainActivity : Activity() {
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
                 }
             }
             "merge_contacts" -> {
@@ -464,7 +532,8 @@ class MainActivity : Activity() {
                         val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
                     }.distinctBy { it.id }
                     if (group.size < 2) bg { try { completeBridgeCommand(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
-                    else AlertDialog.Builder(this).setTitle("Объединить контакты?")
+                    else {
+                        val dialog = AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
                             bg { try {
@@ -473,12 +542,72 @@ class MainActivity : Activity() {
                                         group.all { account in it.accountSources }
                                 } ?: throw IllegalStateException("Для объединения включите запись в одном аккаунте, содержащем все выбранные контакты")
                                 repo.mergeInAccount(group, target)
-                                completeBridgeCommand(id)
+                                val mergedContact = repo.loadAll().firstOrNull { it.id == group.first().id }
+                                val mergeResult = JSONObject().put("merged_contact_ids", JSONArray(group.map { it.id }))
+                                if (mergedContact != null) mergeResult.put("contact", contactJson(mergedContact))
+                                completeBridgeCommand(id, mergeResult)
                                 runOnUiThread { refresh(); toast("Контакты объединены в аккаунте: " + target.label) }
                             } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
+                }
+            }
+            "move_contact" -> {
+                runOnUiThread {
+                    val contactId = payload.optLong("id", -1)
+                    val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                    val sourceName = payload.optString("source_account_name")
+                    val sourceType = payload.optString("source_account_type")
+                    val targetName = payload.optString("target_account_name")
+                    val targetType = payload.optString("target_account_type")
+                    if (contact == null) {
+                        bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
+                    } else {
+                        val accounts = repo.accounts().map { it.first }
+                        val source = accounts.firstOrNull { it.name == sourceName && it.type == sourceType }
+                        val target = accounts.firstOrNull { it.name == targetName && it.type == targetType }
+                        if (source == null || target == null) {
+                            bg { try { completeBridgeCommand(id, error = "Исходный или целевой аккаунт больше не доступен на телефоне") } catch (_: Exception) {} }
+                        } else {
+                            val executeMove: () -> Unit = {
+                                bg {
+                                    try {
+                                        if (!accountFlag(source, "enabled") || !accountFlag(source, "write")) {
+                                            throw IllegalStateException("Для исходного аккаунта не разрешена запись")
+                                        }
+                                        if (!accountFlag(target, "enabled") || !accountFlag(target, "write")) {
+                                            throw IllegalStateException("Для целевого аккаунта не разрешена запись")
+                                        }
+                                        if (source !in contact.accountSources) {
+                                            throw IllegalStateException("Контакт больше не принадлежит исходному аккаунту")
+                                        }
+                                        val moved = repo.moveContactInAccount(contactId, source, target)
+                                        val refreshed = repo.loadAll().firstOrNull { item ->
+                                            item.name == contact.name && (contact.phones.isEmpty() || item.phones.any { it in contact.phones })
+                                        }
+                                        val result = JSONObject().put("ok", true).put("previous_contact_id", contactId)
+                                            .put("moved_records", moved.verified)
+                                            .put("contact", refreshed?.let { contactJson(it) } ?: JSONObject())
+                                        completeBridgeCommand(id, result)
+                                        runOnUiThread { refresh(); toast("Контакт перенесён: " + source.label + " → " + target.label) }
+                                    } catch (e: Exception) {
+                                        try { completeBridgeCommand(id, error = e.message ?: "Ошибка переноса контакта") } catch (_: Exception) {}
+                                    }
+                                }
+                            }
+                            if (approvedFromNotification) executeMove()
+                            else AlertDialog.Builder(this).setTitle("Перенести контакт?")
+                                .setMessage(contact.name + "\n" + contact.phones.joinToString(", ") +
+                                    "\n\nИз: " + source.label + "\nВ: " + target.label +
+                                    "\n\nИсходная запись будет удалена только после проверки копии.")
+                                .setPositiveButton("Перенести") { _, _ -> executeMove() }
+                                .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                                .show()
+                        }
+                    }
                 }
             }
             "sync_contacts" -> bg {

@@ -29,6 +29,7 @@ class BridgeNotificationService : Service() {
             Log.i(TAG, "Service created; notification channels checked")
         } catch (e: Exception) {
             Log.e(TAG, "Service initialization failed", e)
+            AppLog.error(this, TAG, "Service initialization failed", e)
             stopSelf()
         }
     }
@@ -51,6 +52,7 @@ class BridgeNotificationService : Service() {
             return START_STICKY
         } catch (e: Exception) {
             Log.e(TAG, "Unable to start foreground service", e)
+            AppLog.error(this, TAG, "Unable to start foreground service", e)
             running = false
             stopSelf(startId)
             return START_NOT_STICKY
@@ -83,12 +85,13 @@ class BridgeNotificationService : Service() {
                         }
                         pendingCount = pending.length()
                     }
-                    if (pendingCount > 0) postPendingNotification(pendingCount)
+                    if (pendingCount > 0) postPendingNotification(pending)
                     else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
                     recordDiagnostic("last_poll_at", System.currentTimeMillis().toString())
                     recordDiagnostic("last_poll_error", "")
                 } catch (e: Exception) {
                     Log.e(TAG, "Command polling or notification cycle failed", e)
+                    AppLog.error(this@BridgeNotificationService, TAG, "Command polling or notification cycle failed", e)
                     recordDiagnostic("last_poll_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
                     if (bridge.token().isBlank()) {
                         // A 401 clears the rejected token in ContactsBridge; stop polling until re-paired.
@@ -102,8 +105,9 @@ class BridgeNotificationService : Service() {
         }
     }
 
-    private fun postPendingNotification(count: Int) {
+    private fun postPendingNotification(pending: JSONArray) {
         val manager = getSystemService(NotificationManager::class.java)
+        val count = pending.length()
         val enabled = manager.areNotificationsEnabled()
         val permission = Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -114,13 +118,42 @@ class BridgeNotificationService : Service() {
             return
         }
         try {
-            manager.notify(ALERT_ID, buildNotification("Ожидают подтверждения: " + count, true))
+            val descriptions = (0 until minOf(count, 3)).mapNotNull { i -> pending.optJSONObject(i)?.let { commandSummary(it) } }
+            val more = if (count > 3) "\nИ ещё команд: " + (count - 3) else ""
+            val message = "Ожидают решения: " + count + "\n" + descriptions.joinToString("\n") + more
+            manager.notify(ALERT_ID, buildNotification(message, true, pending))
             recordDiagnostic("last_notification_error", "")
             Log.i(TAG, "Pending-command notification posted; count=" + count)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to publish pending-command notification", e)
+            AppLog.error(this, TAG, "Failed to publish pending-command notification", e)
             recordDiagnostic("last_notification_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
         }
+    }
+
+    private fun commandSummary(command: org.json.JSONObject): String {
+        val action = command.optString("action")
+        val payload = command.optJSONObject("payload") ?: org.json.JSONObject()
+        val id = payload.optLong("id", -1)
+        val name = payload.optString("name").trim()
+        val phone = payload.optString("phone").trim()
+        return when (action) {
+            "upsert_contact" -> (if (id > 0) "Изменить контакт" else "Создать контакт") + ": " + name.ifBlank { "без имени" } +
+                (if (phone.isNotBlank()) " · " + maskPhone(phone) else "")
+            "delete_contact" -> "Удалить контакт · ID " + id
+            "merge_contacts" -> "Объединить контакты · " + (payload.optJSONArray("ids")?.length() ?: 0) + " записей"
+            "update_telegram_fields" -> "Изменить Telegram-поля · ID " + id + " · " + payload.optString("telegram_username")
+            "move_contact" -> "Перенести контакт · ID " + id + " · " + payload.optString("source_account_name") + " → " + payload.optString("target_account_name")
+            "sync_contacts" -> "Синхронизировать контакты с сервером"
+            "list_contacts" -> "Передать список контактов"
+            "search_contacts" -> "Найти контакты: " + payload.optString("query").take(50)
+            else -> action.ifBlank { "Команда" }
+        }
+    }
+
+    private fun maskPhone(value: String): String {
+        val digits = value.filter { it.isDigit() }
+        return if (digits.length <= 4) "••••" else "•••• " + digits.takeLast(4)
     }
 
     private fun readPending(value: String?): JSONArray =
@@ -143,7 +176,7 @@ class BridgeNotificationService : Service() {
         }
     }
 
-    private fun buildNotification(message: String, alert: Boolean): Notification {
+    private fun buildNotification(message: String, alert: Boolean, pending: JSONArray? = null): Notification {
         val open = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("open_bridge_queue", true)
@@ -156,10 +189,41 @@ class BridgeNotificationService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder.setSmallIcon(android.R.drawable.stat_notify_sync)
+        builder.setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Мои контакты").setContentText(message)
             .setContentIntent(pendingIntent).setAutoCancel(false).setOnlyAlertOnce(true)
-            .setOngoing(!alert).setCategory(Notification.CATEGORY_SERVICE).build()
+            .setStyle(Notification.BigTextStyle().bigText(message))
+            .setOngoing(!alert).setCategory(Notification.CATEGORY_SERVICE)
+        if (alert && pending != null) {
+            for (i in 0 until pending.length()) {
+                val command = pending.optJSONObject(i) ?: continue
+                val action = command.optString("action")
+                if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields", "move_contact")) continue
+                val id = command.optString("id")
+                val open = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra("notification_command_id", id)
+                    putExtra("notification_decision", "approve")
+                }
+                val approveIntent = PendingIntent.getActivity(
+                    this, (id + ":approve").hashCode(), open,
+                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                )
+                builder.addAction(android.R.drawable.ic_menu_save, "Подтвердить", approveIntent)
+                val reject = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra("notification_command_id", id)
+                    putExtra("notification_decision", "reject")
+                }
+                val rejectIntent = PendingIntent.getActivity(
+                    this, (id + ":reject").hashCode(), reject,
+                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                )
+                builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Отклонить", rejectIntent)
+                break
+            }
+        }
+        return builder.build()
     }
 
     override fun onDestroy() {
