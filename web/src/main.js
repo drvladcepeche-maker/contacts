@@ -60,10 +60,19 @@ async function rpc(method, params = {}) {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(response.status === 401 ? 'Токен отклонён. Проверьте токен доступа.' : `Ошибка сервера (${response.status}): ${body.slice(0, 180)}`);
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body);
+      detail = parsed?.error?.message || parsed?.message || body;
+    } catch {}
+    throw new Error(response.status === 401
+      ? 'Токен доступа отклонён сервером (401). Проверьте, что используется административный токен или токен авторизованного пользователя.'
+      : `Сервер вернул HTTP ${response.status}: ${String(detail).slice(0, 300)}`);
   }
   if (response.status === 202 && method.startsWith('notifications/')) return {};
-  const payload = await response.json();
+  let payload;
+  try { payload = await response.json(); }
+  catch { throw new Error('Сервер вернул ответ не в формате JSON. Проверьте журнал Edge Function contacts-mcp.'); }
   if (payload.error) throw new Error(payload.error.message || 'Ошибка MCP');
   return payload.result;
 }
@@ -123,11 +132,21 @@ async function loadContacts(query = '') {
   const deviceId = $('#device').value;
   if (!deviceId) { renderContacts([]); return; }
   $('#contacts').innerHTML = '<p class="empty">Загружаю контакты…</p>';
-  const result = query
-    ? await callTool('contacts_search', { device_id: deviceId, query, limit: 7000 })
-    : await callTool('contacts_list', { device_id: deviceId, limit: 7000 });
-  renderContacts(result.contacts || []);
-  $('#syncInfo').textContent = 'Показаны кэшированные данные. Последняя синхронизация может быть не текущей.';
+  const allContacts = [];
+  const pageSize = 500;
+  const maximum = 7000;
+  for (let offset = 0; offset < maximum; offset += pageSize) {
+    const result = query
+      ? await callTool('contacts_search', { device_id: deviceId, query, limit: pageSize, offset })
+      : await callTool('contacts_list', { device_id: deviceId, limit: pageSize, offset });
+    const page = Array.isArray(result.contacts) ? result.contacts : [];
+    allContacts.push(...page);
+    if (page.length < pageSize || result.has_more === false || allContacts.length >= maximum) break;
+  }
+  renderContacts(allContacts.slice(0, maximum));
+  $('#syncInfo').textContent = allContacts.length >= maximum
+    ? 'Показаны первые 7000 записей кэша. Для получения новых данных сначала выполните синхронизацию на телефоне.'
+    : 'Показаны кэшированные данные. Последняя синхронизация может быть не текущей.';
 }
 
 $('#connect').addEventListener('click', async () => {
@@ -165,8 +184,29 @@ $('#disconnect').addEventListener('click', () => {
 });
 
 $('#refresh').addEventListener('click', async () => {
-  try { await loadStatus(); setStatus('Данные обновлены', 'success'); }
-  catch (error) { setStatus(error.message, 'error'); }
+  const button = $('#refresh');
+  if (state.busy) return;
+  state.busy = true;
+  button.disabled = true;
+  button.textContent = 'Обновляю…';
+  setStatus('Проверяю подключение и загружаю список устройств…');
+  try {
+    await loadStatus();
+    setStatus('Обновление завершено. Загружено контактов: ' + state.contacts.length, 'success');
+  } catch (error) {
+    const message = error?.message || String(error);
+    console.error('[Мои контакты] Ошибка кнопки «Обновить»', {
+      message,
+      selectedDevice: state.selectedDevice,
+      requestId: state.requestId,
+      time: new Date().toISOString()
+    });
+    setStatus('Обновление не выполнено: ' + message, 'error');
+  } finally {
+    state.busy = false;
+    button.disabled = false;
+    button.textContent = 'Обновить';
+  }
 });
 
 $('#device').addEventListener('change', async () => {
