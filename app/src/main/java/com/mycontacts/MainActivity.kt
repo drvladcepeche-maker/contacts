@@ -377,7 +377,27 @@ class MainActivity : Activity() {
     }
 
     private fun contactJson(c: Contact): JSONObject = JSONObject()
-        .put("id", c.id).put("name", c.name).put("phones", JSONArray(c.phones))
+        .put("id", c.id)
+        .put("name", c.name)
+        .put("phones", JSONArray(c.phones))
+        .put("telegram", c.telegram)
+        .put("telegram_id", c.telegramId)
+        .put("telegram_username", c.telegramUsername)
+        .put("fields", JSONArray().apply {
+            c.fields.forEach { field ->
+                put(JSONObject().put("mimetype", field.mimetype).put("values", JSONObject().apply {
+                    field.values.forEach { (key, value) -> put(key, value) }
+                }))
+            }
+        })
+        .put("accounts", JSONArray().apply {
+            c.accountSources.forEach { account ->
+                put(JSONObject()
+                    .put("account_name", account.name ?: JSONObject.NULL)
+                    .put("account_type", account.type ?: JSONObject.NULL)
+                    .put("label", account.label))
+            }
+        })
 
     private fun handleBridgeCommand(command: JSONObject) {
         val id = command.optString("id")
@@ -461,7 +481,9 @@ class MainActivity : Activity() {
                             val target = writableAccountFor(contact)
                                 ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
                             repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
-                            completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
+                            val updatedContact = repo.loadAll().firstOrNull { it.id == contactId }
+                            completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId)
+                                .put("contact", updatedContact?.let { contactJson(it) } ?: JSONObject()))
                             runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
                         } catch (e: Exception) {
                             try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
