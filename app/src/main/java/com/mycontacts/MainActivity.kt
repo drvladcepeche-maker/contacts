@@ -539,7 +539,10 @@ class MainActivity : Activity() {
                                         group.all { account in it.accountSources }
                                 } ?: throw IllegalStateException("Для объединения включите запись в одном аккаунте, содержащем все выбранные контакты")
                                 repo.mergeInAccount(group, target)
-                                completeBridgeCommand(id)
+                                val mergedContact = repo.loadAll().firstOrNull { it.id == group.first().id }
+                                val mergeResult = JSONObject().put("merged_contact_ids", JSONArray(group.map { it.id }))
+                                if (mergedContact != null) mergeResult.put("contact", contactJson(mergedContact))
+                                completeBridgeCommand(id, mergeResult)
                                 runOnUiThread { refresh(); toast("Контакты объединены в аккаунте: " + target.label) }
                             } catch (e: Exception) { try { completeBridgeCommand(id, error = e.message ?: "Ошибка объединения") } catch (_: Exception) {} } }
                         }
