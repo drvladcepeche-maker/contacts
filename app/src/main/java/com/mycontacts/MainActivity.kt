@@ -229,21 +229,30 @@ class MainActivity : Activity() {
         val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) }
             catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Could not read pending command queue", e)
+                AppLog.error(this, "MainActivity", "Could not read pending command queue", e)
                 JSONArray()
             }
-        for (i in 0 until pending.length()) {
-            val command = pending.optJSONObject(i) ?: continue
-            val id = command.optString("id")
-            if (id.isBlank()) continue
-            val alreadyHandling = synchronized(activeCommandIds) { !activeCommandIds.add(id) }
-            if (alreadyHandling) continue
-            try {
-                handleBridgeCommand(command)
-            } catch (e: Exception) {
-                synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-                android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
-                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
-            }
+
+        // Process exactly one command at a time. Mutating commands require a
+        // phone-side confirmation dialog; iterating the whole queue here can
+        // stack dozens of dialogs and make the approval state ambiguous.
+        val command = (0 until pending.length())
+            .asSequence()
+            .mapNotNull { pending.optJSONObject(it) }
+            .firstOrNull { it.optString("id").isNotBlank() }
+            ?: return
+        val id = command.optString("id")
+        val canHandle = synchronized(activeCommandIds) {
+            if (activeCommandIds.isNotEmpty()) false else activeCommandIds.add(id)
+        }
+        if (!canHandle) return
+
+        try {
+            handleBridgeCommand(command)
+        } catch (e: Exception) {
+            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+            android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+            AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
         }
     }
 
