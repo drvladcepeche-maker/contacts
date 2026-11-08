@@ -449,22 +449,32 @@ class MainActivity : Activity() {
                 }
             }
             "update_telegram_fields" -> {
-                bg {
-                    try {
-                        val contactId = payload.optLong("id", -1)
-                        require(contactId > 0) { "Некорректный ID контакта" }
-                        val telegramId = payload.optString("telegram_id", "")
-                        val username = payload.optString("telegram_username", "")
-                        val contact = repo.loadAll().firstOrNull { it.id == contactId }
-                            ?: throw IllegalStateException("Контакт не найден")
-                        val target = writableAccountFor(contact)
-                            ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
-                        repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
-                        completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
-                        runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
-                    } catch (e: Exception) {
-                        try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                val contactId = payload.optLong("id", -1)
+                val telegramId = payload.optString("telegram_id", "")
+                val username = payload.optString("telegram_username", "")
+                val executeUpdate: () -> Unit = {
+                    bg {
+                        try {
+                            require(contactId > 0) { "Некорректный ID контакта" }
+                            val contact = repo.loadAll().firstOrNull { it.id == contactId }
+                                ?: throw IllegalStateException("Контакт не найден")
+                            val target = writableAccountFor(contact)
+                                ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
+                            repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
+                            completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
+                            runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
+                        } catch (e: Exception) {
+                            try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                        }
                     }
+                }
+                runOnUiThread {
+                    if (approvedFromNotification) executeUpdate()
+                    else AlertDialog.Builder(this).setTitle("Изменить Telegram-данные контакта?")
+                        .setMessage("ID контакта: " + contactId + "\nTelegram ID: " + telegramId + "\nUsername: " + username)
+                        .setPositiveButton("Разрешить") { _, _ -> executeUpdate() }
+                        .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
+                        .show()
                 }
             }
             "delete_contact" -> {
