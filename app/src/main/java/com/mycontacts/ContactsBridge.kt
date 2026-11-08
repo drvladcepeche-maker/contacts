@@ -95,8 +95,11 @@ class ContactsBridge(context: Context) {
         val conflicts = LinkedHashSet<String>()
         val batches = contacts.chunked(250)
         AppLog.info(appContext, "ContactsSync", "Starting sync: contacts=${contacts.size}, batches=${batches.size}")
+        var completedContacts = 0
+        var currentBatch = 0
         try {
             batches.forEachIndexed { index, batch ->
+                currentBatch = index + 1
                 val arr = JSONArray()
                 batch.forEach { c ->
                     arr.put(JSONObject()
@@ -126,6 +129,7 @@ class ContactsBridge(context: Context) {
                 }
                 val response = requestSyncBatch(JSONObject().put("action", "sync_contacts").put("contacts", arr))
                 total += response.optInt("synced")
+                completedContacts += batch.size
                 val rows = response.optJSONArray("conflicts") ?: JSONArray()
                 for (i in 0 until rows.length()) {
                     val item = rows.optJSONObject(i) ?: continue
@@ -134,12 +138,14 @@ class ContactsBridge(context: Context) {
                 }
             }
         } catch (e: Exception) {
-            val message = "Sync failed at batch ${(total / 250) + 1}/${batches.size}; " +
-                "completed_contacts_synced=${total}; error=${e.javaClass.simpleName}: ${e.message}"
+            val message = "Sync failed at batch ${currentBatch}/${batches.size}; " +
+                "completed_batches=${currentBatch - 1}; completed_contacts=${completedContacts}; " +
+                "new_or_updated=${total}; error=${e.javaClass.simpleName}: ${e.message}"
             AppLog.error(appContext, "ContactsSync", message, e)
             AppLog.flush(appContext, force = true)
             throw IllegalStateException(
-                "Синхронизация остановилась на партии после передачи $total контактов: ${e.message}",
+                "Синхронизация остановилась на партии $currentBatch из ${batches.size}; " +
+                    "успешно обработано $completedContacts контактов: ${e.message}",
                 e
             )
         }
