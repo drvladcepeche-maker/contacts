@@ -115,6 +115,23 @@ function renderContacts(contacts) {
   updateMergeButton();
 }
 
+async function reportUiError(tag, error) {
+  const deviceId = $('#device')?.value || state.selectedDevice || state.devices[0]?.id || state.devices[0]?.device_id;
+  if (!deviceId || !state.token) return;
+  try {
+    await callTool('contacts_report_error', {
+      device_id: deviceId,
+      level: 'ERROR',
+      tag: String(tag).slice(0, 120),
+      message: String(error?.message || error || 'Unknown web error').slice(0, 2000),
+      stack_trace: String(error?.stack || '').slice(0, 12000),
+      app_version: 'moi-kontakty-web/0.1.0'
+    });
+  } catch (reportError) {
+    console.warn('[Мои контакты] Не удалось отправить диагностику на сервер', reportError);
+  }
+}
+
 async function loadStatus() {
   const status = await callTool('contacts_status');
   const devices = status.devices || [];
@@ -206,6 +223,7 @@ $('#refresh').addEventListener('click', async () => {
       requestId: state.requestId,
       time: new Date().toISOString()
     });
+    await reportUiError('web.refresh', error);
     setStatus('Обновление не выполнено: ' + message, 'error');
   } finally {
     state.busy = false;
@@ -216,7 +234,7 @@ $('#refresh').addEventListener('click', async () => {
 
 $('#device').addEventListener('change', async () => {
   try { await loadContacts($('#query').value.trim()); }
-  catch (error) { setStatus(error.message, 'error'); }
+  catch (error) { await reportUiError('web.device_change', error); setStatus(error.message, 'error'); }
 });
 
 
@@ -282,5 +300,5 @@ $('#mergeContacts').addEventListener('click', async () => {
 $('#searchForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try { await loadContacts($('#query').value.trim()); }
-  catch (error) { setStatus(error.message, 'error'); }
+  catch (error) { await reportUiError('web.contact_search', error); setStatus(error.message, 'error'); }
 });
