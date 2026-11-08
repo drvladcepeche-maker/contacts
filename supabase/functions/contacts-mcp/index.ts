@@ -299,6 +299,8 @@ Deno.serve(async (req: Request) => {
       } else if (operation === "delete") {
         if (!Number.isInteger(args.id) || Number(args.id) <= 0) return response(id, toolResult({ error: "valid local contact id required for delete" }, true));
         payload.id = Number(args.id);
+        payload.name = String(args.name ?? "").trim();
+        payload.phone = String(args.phone ?? "").trim();
       } else if (operation === "merge") {
         if (!Array.isArray(args.ids) || args.ids.length < 2 || args.ids.some((v: unknown) => !Number.isInteger(v))) return response(id, toolResult({ error: "ids must contain at least two local contact IDs" }, true));
         payload.ids = args.ids;
@@ -312,6 +314,7 @@ Deno.serve(async (req: Request) => {
           return response(id, toolResult({ error: "move requires source_account_name, source_account_type, target_account_name and target_account_type" }, true));
         }
         payload.id = Number(args.id);
+        payload.name = String(args.name ?? "").trim();
         payload.source_account_name = sourceName;
         payload.source_account_type = sourceType;
         payload.target_account_name = targetName;
