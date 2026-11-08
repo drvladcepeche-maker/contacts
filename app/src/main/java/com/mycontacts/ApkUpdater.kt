@@ -16,6 +16,8 @@ import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
@@ -157,33 +159,78 @@ object ApkUpdater {
         }.start()
     }
 
-    private fun downloadText(url: String): String {
+    /**
+     * GitHub access from mobile networks can briefly fail during DNS resolution.
+     * Retry only transient name-resolution and socket-timeout failures; never weaken
+     * checksum, package, version, or signing-certificate verification.
+     */
+    private fun <T> retryNetwork(url: String, action: () -> T): T {
+        var lastError: Exception? = null
+        for (attempt in 0..3) {
+            try {
+                return action()
+            } catch (error: UnknownHostException) {
+                lastError = error
+                if (attempt == 3) {
+                    throw IllegalStateException(
+                        "DNS не смог определить адрес сервера обновлений: ${error.message ?: URL(url).host}. " +
+                            "Проверьте подключение и DNS телефона; повторите проверку позже.",
+                        error
+                    )
+                }
+            } catch (error: SocketTimeoutException) {
+                lastError = error
+                if (attempt == 3) {
+                    throw IllegalStateException(
+                        "Сервер обновлений не ответил за отведённое время (${URL(url).host}). " +
+                            "Проверьте соединение и повторите проверку.",
+                        error
+                    )
+                }
+            }
+            try {
+                Thread.sleep(1000L * (attempt + 1))
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("Проверка обновления прервана", interrupted)
+            }
+        }
+        throw IllegalStateException("Сетевая ошибка при проверке обновления", lastError)
+    }
+
+    private fun downloadText(url: String): String = retryNetwork(url) {
         val connection = open(url, "application/octet-stream")
         try {
-            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
             connection.disconnect()
         }
     }
 
     private fun download(url: String, destination: File) {
-        val connection = open(url, "application/octet-stream")
-        try {
-            connection.inputStream.use { input ->
-                destination.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        require(total <= 100L * 1024L * 1024L) { "APK превышает допустимый размер 100 МБ" }
-                        output.write(buffer, 0, count)
+        retryNetwork(url) {
+            // A timed-out attempt must never leave a partial APK to be mistaken for a complete download.
+            if (destination.exists() && !destination.delete()) {
+                throw IllegalStateException("Не удалось очистить неполный файл обновления")
+            }
+            val connection = open(url, "application/octet-stream")
+            try {
+                connection.inputStream.use { input ->
+                    destination.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 100L * 1024L * 1024L) { "APK превышает допустимый размер 100 МБ" }
+                            output.write(buffer, 0, count)
+                        }
                     }
                 }
+            } finally {
+                connection.disconnect()
             }
-        } finally {
-            connection.disconnect()
         }
     }
 
