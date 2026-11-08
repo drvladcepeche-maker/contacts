@@ -298,6 +298,7 @@ $('#contacts').addEventListener('click', async (event) => {
       const confirmation = 'Перенести «' + displayName(contact) + '» из «' + formatAccount(source) + '» в «' + formatAccount(target) + '»? Исходная запись будет удалена только после проверки копии на телефоне.';
       await queueChange('move', {
         id,
+        name: displayName(contact),
         source_account_name: source.account_name,
         source_account_type: source.account_type,
         target_account_name: target.account_name,
@@ -305,7 +306,7 @@ $('#contacts').addEventListener('click', async (event) => {
         confirmed_by_user: true
       }, confirmation);
     } else {
-      await queueChange('delete', { id, confirmed_by_user: true }, 'Отправить на телефон запрос на удаление контакта «' + displayName(contact) + '» (ID ' + id + ')? Телефон попросит отдельное подтверждение.');
+      await queueChange('delete', { id, name: displayName(contact), phone: (contact.phone || contact.phone_number || '') , confirmed_by_user: true }, 'Отправить на телефон запрос на удаление контакта «' + displayName(contact) + '» (ID ' + id + ')? Телефон попросит отдельное подтверждение.');
     }
   } catch (error) { setStatus(error.message || 'Не удалось отправить команду.', 'error'); }
 });
