@@ -31,6 +31,8 @@ class MainActivity : Activity() {
     private var bridgePolling = false
     private var waitingForInstallPermission = false
     private val activeCommandIds = HashSet<String>()
+    private val notificationApprovedCommandIds = HashSet<String>()
+    private val notificationRejectedCommandIds = HashSet<String>()
 
     private lateinit var list: ListView
     private lateinit var search: EditText
@@ -138,6 +140,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        consumeNotificationDecision(intent)
         AppLog.flush(this)
         if (waitingForInstallPermission) {
             waitingForInstallPermission = false
@@ -150,6 +153,27 @@ class MainActivity : Activity() {
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeNotificationDecision(intent)
+        drainBridgeQueue()
+    }
+
+    private fun consumeNotificationDecision(source: Intent?) {
+        if (source == null) return
+        val commandId = source.getStringExtra("notification_command_id").orEmpty()
+        val decision = source.getStringExtra("notification_decision").orEmpty()
+        if (commandId.isBlank() || decision !in setOf("approve", "reject")) return
+        synchronized(activeCommandIds) {
+            if (decision == "approve") notificationApprovedCommandIds.add(commandId)
+            else notificationRejectedCommandIds.add(commandId)
+        }
+        source.removeExtra("notification_command_id")
+        source.removeExtra("notification_decision")
+        AppLog.info(this, "NotificationAction", "User selected " + decision + " for command " + commandId)
     }
 
     override fun onPause() {
@@ -376,6 +400,11 @@ class MainActivity : Activity() {
 
         val action = command.optString("action")
         val payload = command.optJSONObject("payload") ?: JSONObject()
+        if (notificationRejectedCommandIds.remove(id)) {
+            bg { try { completeBridgeCommand(id, error = "Отклонено пользователем через уведомление") } catch (e: Exception) { AppLog.error(this, "NotificationAction", "Reject failed", e) } }
+            return
+        }
+        val approvedFromNotification = notificationApprovedCommandIds.remove(id)
         when (action) {
             "list_contacts", "search_contacts" -> {
                 val q = payload.optString("query").trim().lowercase()
@@ -396,7 +425,7 @@ class MainActivity : Activity() {
                     if (name.isBlank()) {
                         bg { try { completeBridgeCommand(id, error = "Поле name обязательно") } catch (_: Exception) {} }
                     } else {
-                        AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
+                        val dialog = AlertDialog.Builder(this).setTitle("ИИ предлагает изменить контакт")
                             .setMessage((if (contactId > 0) "Изменить" else "Создать") + " контакт?\nИмя: $name\nТелефон: $phone")
                             .setPositiveButton("Разрешить") { _, _ ->
                                 bg {
@@ -415,6 +444,7 @@ class MainActivity : Activity() {
                             }
                             .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                             .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
                     }
                 }
             }
@@ -442,7 +472,8 @@ class MainActivity : Activity() {
                     val contactId = payload.optLong("id", -1)
                     val c = repo.loadAll().firstOrNull { it.id == contactId }
                     if (c == null) bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
-                    else AlertDialog.Builder(this).setTitle("Удалить контакт?")
+                    else {
+                        val dialog = AlertDialog.Builder(this).setTitle("Удалить контакт?")
                         .setMessage("${c.name}\n${c.phones.joinToString(", ")}")
                         .setPositiveButton("Удалить") { _, _ ->
                             bg { try {
@@ -455,6 +486,8 @@ class MainActivity : Activity() {
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
                 }
             }
             "merge_contacts" -> {
@@ -464,7 +497,8 @@ class MainActivity : Activity() {
                         val cid = ids.optLong(ix, -1); repo.loadAll().firstOrNull { it.id == cid }
                     }.distinctBy { it.id }
                     if (group.size < 2) bg { try { completeBridgeCommand(id, error = "Для объединения нужны минимум два контакта") } catch (_: Exception) {} }
-                    else AlertDialog.Builder(this).setTitle("Объединить контакты?")
+                    else {
+                        val dialog = AlertDialog.Builder(this).setTitle("Объединить контакты?")
                         .setMessage(group.joinToString("\n") { it.name + " — " + it.phones.joinToString(", ") })
                         .setPositiveButton("Объединить") { _, _ ->
                             bg { try {
@@ -479,6 +513,8 @@ class MainActivity : Activity() {
                         }
                         .setNegativeButton("Отклонить") { _, _ -> bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} } }
                         .show()
+                        if (approvedFromNotification) dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+                    }
                 }
             }
             "sync_contacts" -> bg {
