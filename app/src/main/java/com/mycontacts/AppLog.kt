@@ -33,17 +33,17 @@ object AppLog {
 
     fun read(context: Context): String = synchronized(lock) {
         val file = File(context.filesDir, FILE_NAME)
-        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\\n"
+        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
         val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
         val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
         val lastError = prefs.getString("last_upload_error", "").orEmpty()
         body + buildString {
-            append("\\n--- Отправка диагностики ---\\n")
-            append("Ожидают отправки: ").append(pending).append("\\n")
-            append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\\n")
+            append("\n--- Отправка диагностики ---\n")
+            append("Ожидают отправки: ").append(pending).append("\n")
+            append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\n")
             append("Последняя отправка: принято ").append(prefs.getInt("last_upload_received", 0))
-                .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\\n")
-            if (lastError.isNotBlank()) append("Последняя ошибка отправки: ").append(redact(lastError)).append("\\n")
+                .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\n")
+            if (lastError.isNotBlank()) append("Последняя ошибка отправки: ").append(redact(lastError)).append("\n")
         }
     }
 
