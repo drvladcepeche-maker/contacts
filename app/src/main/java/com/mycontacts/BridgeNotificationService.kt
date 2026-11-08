@@ -29,6 +29,7 @@ class BridgeNotificationService : Service() {
             Log.i(TAG, "Service created; notification channels checked")
         } catch (e: Exception) {
             Log.e(TAG, "Service initialization failed", e)
+            AppLog.error(this, TAG, "Service initialization failed", e)
             stopSelf()
         }
     }
@@ -51,6 +52,7 @@ class BridgeNotificationService : Service() {
             return START_STICKY
         } catch (e: Exception) {
             Log.e(TAG, "Unable to start foreground service", e)
+            AppLog.error(this, TAG, "Unable to start foreground service", e)
             running = false
             stopSelf(startId)
             return START_NOT_STICKY
@@ -89,6 +91,7 @@ class BridgeNotificationService : Service() {
                     recordDiagnostic("last_poll_error", "")
                 } catch (e: Exception) {
                     Log.e(TAG, "Command polling or notification cycle failed", e)
+                    AppLog.error(this@BridgeNotificationService, TAG, "Command polling or notification cycle failed", e)
                     recordDiagnostic("last_poll_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
                     if (bridge.token().isBlank()) {
                         // A 401 clears the rejected token in ContactsBridge; stop polling until re-paired.
@@ -123,6 +126,7 @@ class BridgeNotificationService : Service() {
             Log.i(TAG, "Pending-command notification posted; count=" + count)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to publish pending-command notification", e)
+            AppLog.error(this, TAG, "Failed to publish pending-command notification", e)
             recordDiagnostic("last_notification_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
         }
     }
