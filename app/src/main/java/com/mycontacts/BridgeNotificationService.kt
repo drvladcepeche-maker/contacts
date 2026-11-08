@@ -184,7 +184,7 @@ class BridgeNotificationService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder.setSmallIcon(android.R.drawable.stat_notify_sync)
+        builder.setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Мои контакты").setContentText(message)
             .setContentIntent(pendingIntent).setAutoCancel(false).setOnlyAlertOnce(true)
             .setStyle(Notification.BigTextStyle().bigText(message))
