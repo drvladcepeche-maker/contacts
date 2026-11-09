@@ -199,7 +199,7 @@ object ApkUpdater {
     }
 
     private fun downloadText(url: String): String = retryNetwork(url) {
-        val connection = open(url, "application/octet-stream")
+        val connection = open(url)
         try {
             connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
