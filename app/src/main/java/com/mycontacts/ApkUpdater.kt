@@ -67,32 +67,46 @@ object ApkUpdater {
                 val latestRelease = release ?: throw IllegalStateException("Подписанный релиз приложения ещё не опубликован")
                 val assets = latestRelease.optJSONArray("assets")
                     ?: throw IllegalStateException("В релизе нет списка файлов")
-                var apkUrl: String? = null
-                var hashUrl: String? = null
+                var apkAssetApiUrl: String? = null
+                var apkBrowserUrl: String? = null
+                var hashAssetApiUrl: String? = null
+                var hashBrowserUrl: String? = null
                 var releaseDigest: String? = null
                 for (i in 0 until assets.length()) {
                     val asset = assets.optJSONObject(i) ?: continue
                     when (asset.optString("name")) {
                         APK_ASSET -> {
-                            apkUrl = asset.optString("browser_download_url")
+                            apkAssetApiUrl = asset.optString("url").takeIf { it.startsWith("https://api.github.com/") }
+                            apkBrowserUrl = asset.optString("browser_download_url").takeIf { it.startsWith("https://") }
                             releaseDigest = asset.optString("digest").takeIf {
                                 it.startsWith("sha256:")
                             }?.removePrefix("sha256:")
                         }
-                        HASH_ASSET -> hashUrl = asset.optString("browser_download_url")
+                        HASH_ASSET -> {
+                            hashAssetApiUrl = asset.optString("url").takeIf { it.startsWith("https://api.github.com/") }
+                            hashBrowserUrl = asset.optString("browser_download_url").takeIf { it.startsWith("https://") }
+                        }
                     }
                 }
-                val downloadUrl = apkUrl ?: throw IllegalStateException("APK ещё не опубликован")
+                // Use the release-asset REST endpoint for binary downloads. The browser_download_url
+                // endpoint is a normal browser/CDN route and must not receive the API binary Accept header.
+                val downloadUrl = apkAssetApiUrl ?: apkBrowserUrl
+                    ?: throw IllegalStateException("Ссылка на APK отсутствует в метаданных релиза")
+                val downloadAccept = if (apkAssetApiUrl != null) "application/octet-stream" else "*/*"
                 val dir = File(activity.cacheDir, "verified-updates")
                 if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("Не удалось создать каталог обновления")
                 val apk = File(dir, APK_ASSET)
-                download(downloadUrl, apk)
+                download(downloadUrl, apk, downloadAccept)
                 // Prefer GitHub's SHA-256 digest for the exact uploaded APK asset.
                 // The sidecar file remains a compatibility fallback for older releases.
                 val expectedHash = (releaseDigest ?: run {
-                    val checksumUrl = hashUrl
+                    val checksumUrl = hashAssetApiUrl ?: hashBrowserUrl
                         ?: throw IllegalStateException("Контрольная сумма APK отсутствует")
-                    downloadText(checksumUrl).trim().substringBefore(' ').lowercase()
+                    downloadText(
+                        checksumUrl,
+                        if (hashAssetApiUrl != null) "application/octet-stream" else "*/*",
+                        "чтение контрольной суммы APK"
+                    ).trim().substringBefore(' ').lowercase()
                 }).lowercase()
                 require(expectedHash.matches(Regex("[0-9a-f]{64}"))) {
                     "GitHub не вернул корректную SHA-256 контрольную сумму"
@@ -198,8 +212,12 @@ object ApkUpdater {
         throw IllegalStateException("Сетевая ошибка при проверке обновления", lastError)
     }
 
-    private fun downloadText(url: String): String = retryNetwork(url) {
-        val connection = open(url)
+    private fun downloadText(
+        url: String,
+        accept: String = "application/vnd.github+json",
+        stage: String = "чтение данных GitHub"
+    ): String = retryNetwork(url) {
+        val connection = open(url, accept, stage)
         try {
             connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
@@ -207,13 +225,13 @@ object ApkUpdater {
         }
     }
 
-    private fun download(url: String, destination: File) {
+    private fun download(url: String, destination: File, accept: String) {
         retryNetwork(url) {
             // A timed-out attempt must never leave a partial APK to be mistaken for a complete download.
             if (destination.exists() && !destination.delete()) {
                 throw IllegalStateException("Не удалось очистить неполный файл обновления")
             }
-            val connection = open(url, "application/octet-stream")
+            val connection = open(url, accept, "скачивание APK")
             try {
                 connection.inputStream.use { input ->
                     destination.outputStream().use { output ->
@@ -234,7 +252,11 @@ object ApkUpdater {
         }
     }
 
-    private fun open(url: String, accept: String = "application/vnd.github+json"): HttpURLConnection =
+    private fun open(
+        url: String,
+        accept: String = "application/vnd.github+json",
+        stage: String = "сетевой запрос"
+    ): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
             readTimeout = 60000
@@ -244,8 +266,18 @@ object ApkUpdater {
             connect()
             if (responseCode !in 200..299) {
                 val code = responseCode
+                val responseHost = this.url.host
+                val contentType = getHeaderField("Content-Type") ?: "не указан"
+                val details = try {
+                    errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(400) }
+                } catch (_: Exception) {
+                    null
+                }
                 disconnect()
-                throw IllegalStateException("GitHub вернул HTTP $code")
+                val suffix = details?.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""
+                throw IllegalStateException(
+                    "$stage: сервер $responseHost вернул HTTP $code (Content-Type: $contentType)$suffix"
+                )
             }
         }
 
