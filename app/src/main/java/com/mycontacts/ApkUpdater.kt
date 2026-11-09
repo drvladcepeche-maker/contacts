@@ -92,10 +92,11 @@ object ApkUpdater {
                 // endpoint is a normal browser/CDN route and must not receive the API binary Accept header.
                 val downloadUrl = apkAssetApiUrl ?: apkBrowserUrl
                     ?: throw IllegalStateException("Ссылка на APK отсутствует в метаданных релиза")
+                val downloadAccept = if (apkAssetApiUrl != null) "application/octet-stream" else "*/*"
                 val dir = File(activity.cacheDir, "verified-updates")
                 if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("Не удалось создать каталог обновления")
                 val apk = File(dir, APK_ASSET)
-                download(downloadUrl, apk)
+                download(downloadUrl, apk, downloadAccept)
                 // Prefer GitHub's SHA-256 digest for the exact uploaded APK asset.
                 // The sidecar file remains a compatibility fallback for older releases.
                 val expectedHash = (releaseDigest ?: run {
@@ -224,13 +225,13 @@ object ApkUpdater {
         }
     }
 
-    private fun download(url: String, destination: File) {
+    private fun download(url: String, destination: File, accept: String) {
         retryNetwork(url) {
             // A timed-out attempt must never leave a partial APK to be mistaken for a complete download.
             if (destination.exists() && !destination.delete()) {
                 throw IllegalStateException("Не удалось очистить неполный файл обновления")
             }
-            val connection = open(url, "application/octet-stream", "скачивание APK")
+            val connection = open(url, accept, "скачивание APK")
             try {
                 connection.inputStream.use { input ->
                     destination.outputStream().use { output ->
