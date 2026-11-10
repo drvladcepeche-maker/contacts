@@ -8,7 +8,7 @@ The Android client will call the Supabase Edge Function `remote-config` with:
 - body: empty JSON object `{}`;
 - header: `Authorization: Bearer <64-character device token>`.
 
-The endpoint authenticates the token against `public.termux_bridge_devices` using its SHA-256 hash, and rejects disabled or revoked devices. It does not accept an anonymous configuration request.
+The endpoint authenticates the token against `public.contact_bridge_devices` using its SHA-256 hash, and rejects disabled or revoked devices. It does not accept an anonymous configuration request.
 
 ## Signing
 
