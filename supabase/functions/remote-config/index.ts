@@ -179,9 +179,15 @@ Deno.serve(async (req: Request) => {
     if (privateKeyBytes.length < 80 || privateKeyBytes.length > 256) {
       return json({ error: "Signing key configuration is invalid" }, 503);
     }
+    // Materialize a standalone ArrayBuffer to satisfy WebCrypto's BufferSource
+    // contract across Deno's strict TypeScript definitions.
+    const privateKeyData = new ArrayBuffer(privateKeyBytes.byteLength);
+    new Uint8Array(privateKeyData).set(privateKeyBytes);
+    const payloadData = new ArrayBuffer(payloadBytes.byteLength);
+    new Uint8Array(payloadData).set(payloadBytes);
     const privateKey = await crypto.subtle.importKey(
       "pkcs8",
-      privateKeyBytes,
+      privateKeyData,
       { name: "ECDSA", namedCurve: "P-256" },
       false,
       ["sign"],
@@ -189,7 +195,7 @@ Deno.serve(async (req: Request) => {
     const rawSignature = new Uint8Array(await crypto.subtle.sign(
       { name: "ECDSA", hash: "SHA-256" },
       privateKey,
-      payloadBytes,
+      payloadData,
     ));
     const derSignature = p1363ToDer(rawSignature);
 
