@@ -236,6 +236,10 @@ class MainActivity : Activity() {
             val command = pending.optJSONObject(i) ?: continue
             val id = command.optString("id")
             if (id.isBlank()) continue
+            // get_diagnostics is owned by BridgeNotificationService so it can be
+            // answered while the Activity is stopped. Never let the UI queue
+            // dispatcher race the foreground service and reject this read-only action.
+            if (command.optString("action") == "get_diagnostics") continue
             val alreadyHandling = synchronized(activeCommandIds) { !activeCommandIds.add(id) }
             if (alreadyHandling) continue
             try {
