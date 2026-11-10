@@ -170,6 +170,7 @@ class MainActivity : Activity() {
         startBridgeService()
         drainBridgeQueue()
         startBridgeQueueDrain()
+        DiagnosticsSync.flush(this)
     }
 
     override fun onDestroy() {
