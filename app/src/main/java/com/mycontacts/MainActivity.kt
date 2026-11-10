@@ -1099,24 +1099,41 @@ try {
 
 
     private fun queueTelegramMatch() {
+        // Give immediate feedback; contact sync and server request run in the background.
+        status.text = "Серверная проверка: подготовка контактов и отправка запроса…"
+        toast("Запускаю серверную проверку…")
+        AppLog.info(this, "TelegramResolver", "Server check button pressed")
+
         bg {
             try {
+                AppLog.info(this, "TelegramResolver", "Contact synchronization started for server check")
                 val summary = syncContacts()
+                AppLog.info(this, "TelegramResolver", "Contact synchronization completed: attempted=${summary.attempted}, synced=${summary.synced}")
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
-                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing ${summary.synced} contacts")
+                val queued = result.optBoolean("queued")
+                AppLog.info(this, "TelegramResolver", "Server check request completed: queued=$queued, jobId=$jobId, uniquePhones=$count")
                 runOnUiThread {
                     showSyncResult(summary)
-                    if (result.optBoolean("queued")) {
-                        toast("Серверная проверка поставлена в очередь: $count уникальных номеров. Обработка начнётся после настройки Telegram-сессии и GitHub Actions.")
+                    status.text = if (queued) {
+                        "Серверная проверка поставлена в очередь. Номеров: $count. ID задачи: $jobId"
+                    } else {
+                        "Серверная проверка не запущена: нет международных номеров."
+                    }
+                    if (queued) {
+                        toast("Серверная проверка поставлена в очередь: $count уникальных номеров.")
                     } else {
                         toast("Нет международных номеров для серверной проверки.")
                     }
                 }
             } catch (e: Exception) {
-                AppLog.error(this, "TelegramResolver", "Could not queue cloud matching", e)
-                runOnUiThread { toast("Не удалось поставить серверную проверку: ${e.message}") }
+                AppLog.error(this, "TelegramResolver", "Server check failed", e)
+                runOnUiThread {
+                    val message = e.message ?: e.javaClass.simpleName
+                    status.text = "Серверная проверка: ошибка — $message"
+                    toast("Не удалось выполнить серверную проверку: $message")
+                }
             }
         }
     }
