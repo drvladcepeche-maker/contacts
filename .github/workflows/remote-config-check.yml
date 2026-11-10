@@ -12,6 +12,7 @@ on:
     branches: [main, feature/brave-accessibility-control]
     paths:
       - 'supabase/functions/remote-config/**'
+      - 'supabase/functions/contacts-bridge/**'
       - 'supabase/migrations/**'
       - 'docs/REMOTE_CONFIG_SIGNING.md'
       - '.github/workflows/remote-config-check.yml'
