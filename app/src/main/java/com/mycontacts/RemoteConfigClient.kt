@@ -38,7 +38,14 @@ class RemoteConfigClient(context: Context) {
         if (verified.sequence < highWatermark) {
             throw IllegalArgumentException("Remote config sequence is older than the accepted high-watermark")
         }
-        return store.applyVerified(verified, nowEpochSeconds)
+        val applied = store.applyVerified(verified, nowEpochSeconds)
+        if (applied) return true
+
+        // A concurrent refresh may have persisted the same sequence between the
+        // high-watermark read and this write. Treat that as an idempotent success;
+        // otherwise false means the atomic durable write failed.
+        if (store.current(nowEpochSeconds)?.sequence == verified.sequence) return false
+        throw IllegalStateException("Could not atomically persist the verified remote configuration")
     }
 
     fun current(nowEpochSeconds: Long = System.currentTimeMillis() / 1000L): AppliedRemoteConfig? =

@@ -130,17 +130,16 @@ Deno.serve(async (req: Request) => {
 
     const tokenHash = await sha256Hex(bearer);
     const { data: device, error: deviceError } = await supabase
-      .from("termux_bridge_devices")
+      .from("contact_bridge_devices")
       .select("id")
       .eq("token_hash", tokenHash)
-      .eq("enabled", true)
       .is("revoked_at", null)
       .maybeSingle();
 
     if (deviceError) return json({ error: "Device lookup failed" }, 500);
     if (!device) return json({ error: "Unauthorized or revoked device" }, 401);
 
-    await supabase.from("termux_bridge_devices")
+    await supabase.from("contact_bridge_devices")
       .update({ last_seen_at: new Date().toISOString() })
       .eq("id", device.id);
 
