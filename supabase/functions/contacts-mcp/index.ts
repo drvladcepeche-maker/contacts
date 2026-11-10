@@ -16,6 +16,7 @@ const tools = [
   { name: "contacts_list_v2", description: "List cached contacts filtered by account_name/account_type. Use this refreshed tool when filtering contacts by Android account.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_search_v2", description: "Search cached contacts by name, phone, or email, optionally restricted to one Android account source.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id", "query"], additionalProperties: false } },
   { name: "contacts_request_change", description: "Queue a contact create/update/delete/merge request for Android. The phone displays a confirmation prompt before any write is applied. Delete and merge additionally require confirmed_by_user=true in this tool call.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, operation: { type: "string", enum: ["create", "update", "delete", "merge"] }, id: { type: "integer", description: "Local Android contact ID for update/delete" }, name: { type: "string" }, phone: { type: "string" }, ids: { type: "array", items: { type: "integer" }, minItems: 2 }, confirmed_by_user: { type: "boolean", description: "Must be true for delete or merge when the user explicitly authorized the operation." } }, required: ["device_id", "operation"], additionalProperties: false } },
+  { name: "contacts_request_diagnostics", description: "Request a read-only live diagnostics snapshot from the paired Android app: APK version/build, Android device and permissions, bridge/service state, Telegram matching progress, recent redacted app logs and errors. The app can answer while minimized if its foreground bridge service is running.", inputSchema: { type: "object", properties: { device_id: { type: "string" } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_command_status", description: "Check whether a queued Android contact command has completed.", inputSchema: { type: "object", properties: { command_id: { type: "string" } }, required: ["command_id"], additionalProperties: false } },
   { name: "contacts_identifier_report", description: "Read classified identifiers and likely misplaced values for one paired device. This is evidence only; it never edits the Android contact.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, detected_type: { type: "string" }, misfiled_only: { type: "boolean" }, resolution_status: { type: "string", enum: ["pending","accepted","rejected","corrected"] }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000 } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_identifier_review", description: "Record a review decision for one identifier observation. This updates only the evidence ledger, never the source contact.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, observation_id: { type: "string" }, resolution_status: { type: "string", enum: ["accepted","rejected","corrected"] }, corrected_value: { type: "string" }, review_note: { type: "string" } }, required: ["device_id","observation_id","resolution_status"], additionalProperties: false } },
@@ -284,6 +285,21 @@ Deno.serve(async (req: Request) => {
         .select("id, device_id, action, status, created_at").single();
       if (error) throw error;
       return response(id, toolResult({ queued: true, command: data, note: "Keep the Android app open. The phone will request confirmation before applying changes." }));
+    }
+
+    if (name === "contacts_request_diagnostics") {
+      const deviceId = String(args.device_id ?? "");
+      if (!deviceId) return response(id, toolResult({ error: "device_id required" }, true));
+      if (!canAccessDevice(deviceId)) return denied(id);
+      const { data, error } = await db.from("contact_bridge_commands")
+        .insert({ device_id: deviceId, action: "get_diagnostics", payload: {} })
+        .select("id, device_id, action, status, created_at").single();
+      if (error) throw error;
+      return response(id, toolResult({
+        queued: true,
+        command: data,
+        note: "The Android foreground bridge service will return a redacted diagnostics snapshot. Read the result with contacts_command_status using this command_id."
+      }));
     }
 
     if (name === "contacts_command_status") {
