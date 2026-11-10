@@ -25,7 +25,7 @@ Allowed configuration keys:
 - `config.features.brave_automation_enabled`: optional boolean;
 - `config.sync.poll_interval_seconds`: optional integer from 15 through 300.
 
-Unknown keys, wrong types, missing required containers, stale sequence numbers, expired payloads, issue times more than five minutes in the future, and validity periods longer than 30 days are rejected. Payload bytes are limited to 64 KiB. No strings, expressions, URLs, package names, paths, or commands are accepted as configuration values.
+Unknown keys, wrong types, missing required containers, stale sequence numbers, expired payloads, negative issue times, issue times more than five minutes in the future, and validity periods longer than 30 days are rejected. Payload bytes are limited to 64 KiB. No strings, expressions, URLs, package names, paths, or commands are accepted as configuration values.
 
 ## Key management and rollout boundary
 
