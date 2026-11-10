@@ -97,4 +97,12 @@ class RemoteConfigStoreTest {
         val store = RemoteConfigStore(MemoryPersistence())
         assertFalse(store.rollback(now))
     }
+
+    @Test
+    fun expiredConfigCannotBePersistedAfterItWasVerified() {
+        val store = RemoteConfigStore(MemoryPersistence())
+        val expired = verified(1L, true, expiresAt = now + 10)
+        assertFalse(store.applyVerified(expired, now + 10))
+        assertEquals(0L, store.lastAppliedSequence())
+    }
 }
