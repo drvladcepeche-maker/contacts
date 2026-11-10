@@ -1,12 +1,8 @@
--- Private, server-only configuration source for signed Android remote settings.
--- No anon/authenticated access or Data API exposure is granted.
+-- Server-only configuration source for signed Android remote settings.
+-- The table is in the exposed public schema but has RLS enabled and no
+-- privileges for anon/authenticated/PUBLIC; only service_role can read it.
 
-create schema if not exists app_private;
-
-revoke all on schema app_private from public, anon, authenticated;
-grant usage on schema app_private to service_role;
-
-create table if not exists app_private.remote_app_config (
+create table if not exists public.remote_app_config (
   id smallint primary key default 1 check (id = 1),
   sequence bigint not null check (sequence between 1 and 9007199254740991),
   issued_at bigint not null check (issued_at >= 0),
@@ -15,12 +11,12 @@ create table if not exists app_private.remote_app_config (
   updated_at timestamptz not null default now()
 );
 
-alter table app_private.remote_app_config enable row level security;
+alter table public.remote_app_config enable row level security;
 
-revoke all on table app_private.remote_app_config from public, anon, authenticated;
-grant select on table app_private.remote_app_config to service_role;
+revoke all on table public.remote_app_config from public, anon, authenticated;
+grant select on table public.remote_app_config to service_role;
 
-insert into app_private.remote_app_config (
+insert into public.remote_app_config (
   id, sequence, issued_at, expires_at, config
 )
 values (
