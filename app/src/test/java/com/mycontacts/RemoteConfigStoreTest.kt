@@ -53,7 +53,7 @@ class RemoteConfigStoreTest {
     fun appliesVerifiedSnapshotAndPersistsSequence() {
         val persistence = MemoryPersistence()
         val store = RemoteConfigStore(persistence)
-        assertTrue(store.applyVerified(verified(1L, true)))
+        assertTrue(store.applyVerified(verified(1L, true), now))
         val current = store.current(now)
         assertEquals(1L, current?.sequence)
         assertEquals(true, current?.featureFlags?.get("telegram_match_enabled"))
@@ -63,22 +63,22 @@ class RemoteConfigStoreTest {
     @Test
     fun rejectsReplayEvenAfterRollback() {
         val store = RemoteConfigStore(MemoryPersistence())
-        assertTrue(store.applyVerified(verified(1L, true)))
-        assertTrue(store.applyVerified(verified(2L, false)))
+        assertTrue(store.applyVerified(verified(1L, true), now))
+        assertTrue(store.applyVerified(verified(2L, false), now))
         assertTrue(store.rollback(now))
         assertEquals(1L, store.current(now)?.sequence)
         assertEquals(2L, store.lastAppliedSequence())
-        assertFalse(store.applyVerified(verified(2L, false)))
+        assertFalse(store.applyVerified(verified(2L, false), now))
     }
 
     @Test
     fun failedAtomicWriteLeavesPreviousStateUntouched() {
         val persistence = MemoryPersistence()
         val store = RemoteConfigStore(persistence)
-        assertTrue(store.applyVerified(verified(1L, true)))
+        assertTrue(store.applyVerified(verified(1L, true), now))
         val before = persistence.value
         persistence.failWrites = true
-        assertFalse(store.applyVerified(verified(2L, false)))
+        assertFalse(store.applyVerified(verified(2L, false), now))
         assertEquals(before, persistence.value)
         assertEquals(1L, store.current(now)?.sequence)
     }
@@ -86,8 +86,8 @@ class RemoteConfigStoreTest {
     @Test
     fun expiredActiveAndPreviousConfigurationsAreNotRestored() {
         val store = RemoteConfigStore(MemoryPersistence())
-        assertTrue(store.applyVerified(verified(1L, true, expiresAt = now + 10)))
-        assertTrue(store.applyVerified(verified(2L, false)))
+        assertTrue(store.applyVerified(verified(1L, true, expiresAt = now + 10), now))
+        assertTrue(store.applyVerified(verified(2L, false), now))
         assertFalse(store.rollback(now + 11))
         assertNull(store.current(now + 4000))
     }
