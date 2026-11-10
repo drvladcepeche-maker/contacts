@@ -45,8 +45,9 @@ object AppDiagnostics {
                 org.json.JSONArray(bridgePrefs.getString(BridgeNotificationService.KEY_PENDING, "[]")).length()
             } catch (_: Exception) { -1 })
             .put("notifications_enabled", notificationManager.areNotificationsEnabled())
-            .put("battery_optimization_exempt", if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                power.isIgnoringBatteryOptimizations(app.packageName) else true)
+            .put("battery_optimization_exempt", try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) power.isIgnoringBatteryOptimizations(app.packageName) else true
+            } catch (_: SecurityException) { JSONObject.NULL })
 
         return JSONObject()
             .put("collected_at", java.time.Instant.now().toString())
