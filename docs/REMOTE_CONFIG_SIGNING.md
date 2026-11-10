@@ -35,4 +35,4 @@ The migration seeds both feature flags as disabled and a conservative 60-second 
 
 ## Provisioning boundary
 
-The function returns HTTP 503 until the signing private key is provisioned. This is intentional fail-closed behavior. A matching DER SubjectPublicKeyInfo public key must be pinned in a reviewed Android host build before the client starts trusting this endpoint. Key rotation requires a coordinated app release; do not replace the server private key alone.
+The function returns HTTP 503 until the signing private key is provisioned. This is intentional fail-closed behavior. A matching DER SubjectPublicKeyInfo public key is pinned in `RemoteConfigPublicKey.kt` in the reviewed Android host build. Its SHA-256 fingerprint is `142b34dbec6bd761d60ed26344e2aacf4c7a05a47b7d4a4b3e80d6871987d0fc`. The client must not trust this endpoint until the corresponding private key is installed as the Supabase Edge Function secret. Key rotation requires a coordinated app release; do not replace the server private key alone.
