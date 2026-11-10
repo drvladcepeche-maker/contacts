@@ -23,7 +23,11 @@ object AppDiagnostics {
         fun granted(permission: String): Boolean =
             app.packageManager.checkPermission(permission, app.packageName) == PackageManager.PERMISSION_GRANTED
 
+        val telegramRuntime = app.getSharedPreferences("telegram_match_runtime", Context.MODE_PRIVATE)
         val telegram = JSONObject()
+            .put("state", telegramRuntime.getString("state", "unknown"))
+            .put("last_error", telegramRuntime.getString("last_error", "") ?: "")
+            .put("updated_at_ms", telegramRuntime.getLong("updated_at", 0L))
             .put("index", telegramPrefs.getInt("index", 0))
             .put("checked", telegramPrefs.getInt("checked", 0))
             .put("matched", telegramPrefs.getInt("matched", 0))
@@ -35,6 +39,7 @@ object AppDiagnostics {
             .put("last_poll_at_ms", bridgePrefs.getString("last_poll_at", "") ?: "")
             .put("last_poll_error", bridgePrefs.getString("last_poll_error", "") ?: "")
             .put("last_notification_error", bridgePrefs.getString("last_notification_error", "") ?: "")
+            .put("last_diagnostics_error", bridgePrefs.getString("last_diagnostics_error", "") ?: "")
             .put("last_service_start_error", bridgePrefs.getString("last_service_start_error", "") ?: "")
             .put("pending_command_count", try {
                 org.json.JSONArray(bridgePrefs.getString(BridgeNotificationService.KEY_PENDING, "[]")).length()
