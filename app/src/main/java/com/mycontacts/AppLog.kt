@@ -210,7 +210,7 @@ echo "Изменения APK собираются через GitHub Actions по
 
     private fun sanitizeDiagnostic(value: String): String = value
         .replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~-]{12,}"), "Bearer [REDACTED]")
-        .replace(Regex("(?i)(token|api[_-]?key|password)=([^&\\s]+)"), "\\$1=[REDACTED]")
+        .replace(Regex("(?i)(token|api[_-]?key|password)=([^&\\s]+)"), "\$1=[REDACTED]")
         .replace(Regex("\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", RegexOption.IGNORE_CASE), "[EMAIL]")
         .replace(Regex("(?<!\\w)\\+?\\d[\\d ()-]{7,}\\d(?!\\w)"), "[PHONE]")
         .replace(Regex("\\b[0-9a-fA-F]{48,}\\b"), "[TOKEN]")
