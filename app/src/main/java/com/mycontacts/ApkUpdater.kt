@@ -32,17 +32,21 @@ object ApkUpdater {
 
     fun checkAndInstall(activity: Activity) {
         if (!Shizuku.pingBinder()) {
+            AppLog.warn(activity, "ApkUpdater", "Shizuku binder is not running")
             Toast.makeText(activity, "Сначала запустите Shizuku", Toast.LENGTH_LONG).show()
             return
         }
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            AppLog.warn(activity, "ApkUpdater", "Shizuku permission is not granted")
             Toast.makeText(activity, "Сначала выдайте приложению разрешение Shizuku", Toast.LENGTH_LONG).show()
             return
         }
         Toast.makeText(activity, "Проверяю подписанное обновление…", Toast.LENGTH_LONG).show()
         Thread {
             try {
+                AppLog.info(activity, "ApkUpdater", "Started update check; Shizuku permission granted")
                 val releases = JSONArray(downloadText(RELEASES_API))
+                AppLog.info(activity, "ApkUpdater", "GitHub release list loaded; count=${releases.length()}")
                 var release: JSONObject? = null
                 var newestPublishedAt = ""
                 for (i in 0 until releases.length()) {
@@ -93,6 +97,7 @@ object ApkUpdater {
                 val downloadUrl = apkAssetApiUrl ?: apkBrowserUrl
                     ?: throw IllegalStateException("Ссылка на APK отсутствует в метаданных релиза")
                 val downloadAccept = if (apkAssetApiUrl != null) "application/octet-stream" else "*/*"
+                AppLog.info(activity, "ApkUpdater", "Downloading APK from ${URL(downloadUrl).host}")
                 val dir = File(activity.cacheDir, "verified-updates")
                 if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("Не удалось создать каталог обновления")
                 val apk = File(dir, APK_ASSET)
@@ -115,6 +120,7 @@ object ApkUpdater {
                 require(actualHash == expectedHash) {
                     "SHA-256 не совпала (APK ${actualHash.take(12)}, релиз ${expectedHash.take(12)}). Загрузка отменена."
                 }
+                AppLog.info(activity, "ApkUpdater", "APK downloaded; SHA-256 verified")
 
                 @Suppress("DEPRECATION")
                 val packageFlags = if (Build.VERSION.SDK_INT >= 28) {
@@ -136,6 +142,7 @@ object ApkUpdater {
                 require(archiveSigners.isNotEmpty() && archiveSigners == installedSigners) {
                     "Подпись APK отличается от установленной. Обновление заблокировано; данные не затронуты."
                 }
+                AppLog.info(activity, "ApkUpdater", "APK package and signing certificate verified")
                 val newVersion = versionCode(archive)
                 val oldVersion = versionCode(installed)
                 if (newVersion <= oldVersion) {
@@ -153,10 +160,12 @@ object ApkUpdater {
                     ).show()
                 }
                 val installFile = publishToDownloads(activity, apk)
+                AppLog.info(activity, "ApkUpdater", "Verified APK copied to Downloads; invoking Shizuku installer")
                 val installResult = installViaUserService(activity, installFile, expectedHash)
                 if (!installResult.contains("Success")) {
                     throw IllegalStateException("Android не подтвердил установку: " + installResult.take(500))
                 }
+                AppLog.info(activity, "ApkUpdater", "Android package manager confirmed installation: ${archive.versionName}")
                 activity.runOnUiThread {
                     Toast.makeText(
                         activity,
@@ -165,6 +174,7 @@ object ApkUpdater {
                     ).show()
                 }
             } catch (error: Exception) {
+                AppLog.error(activity, "ApkUpdater", "Update failed", error)
                 val message = error.message ?: error.javaClass.simpleName
                 activity.runOnUiThread {
                     Toast.makeText(activity, "Обновление не установлено: $message", Toast.LENGTH_LONG).show()
