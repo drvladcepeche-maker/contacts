@@ -182,7 +182,10 @@ echo "Изменения APK собираются через GitHub Actions по
                 // Keep a durable structured queue for remote diagnostics. INFO is included
                 // for updater stages; routine INFO messages from other components stay local.
                 val remote = level in setOf("WARN", "ERROR", "FATAL") ||
-                    (level == "INFO" && message.startsWith("ApkUpdater:"))
+                    (level == "INFO" && (
+                        message.startsWith("ApkUpdater:") ||
+                        message.startsWith("TelegramResolver:")
+                    ))
                 if (remote) {
                     val diagnostics = File(app.filesDir, DIAGNOSTICS_FILE_NAME)
                     if (diagnostics.exists() && diagnostics.length() > 2L * 1024L * 1024L) {
