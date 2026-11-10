@@ -282,6 +282,39 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    if (action === "upload_diagnostics") {
+      const entries = Array.isArray(body.entries) ? body.entries.slice(0, 50) : [];
+      if (!entries.length) return json({ received: 0, inserted: 0, rejected: 0 });
+      const allowedLevels = new Set(["INFO", "WARN", "ERROR", "FATAL"]);
+      const rows = entries.flatMap((entry: any) => {
+        if (!entry || typeof entry !== "object") return [];
+        const eventId = String(entry.event_id ?? "").trim();
+        const occurredAt = new Date(String(entry.occurred_at ?? ""));
+        const level = String(entry.level ?? "ERROR").toUpperCase();
+        if (!eventId || eventId.length > 80 || Number.isNaN(occurredAt.getTime()) || !allowedLevels.has(level)) return [];
+        return [{
+          device_id: deviceId,
+          event_id: eventId,
+          occurred_at: occurredAt.toISOString(),
+          level,
+          tag: String(entry.tag ?? "Unknown").slice(0, 120),
+          message: String(entry.message ?? "").slice(0, 2000),
+          stack_trace: entry.stack_trace == null ? null : String(entry.stack_trace).slice(0, 12000),
+          app_version: entry.app_version == null ? null : String(entry.app_version).slice(0, 40),
+        }];
+      });
+      if (!rows.length) return json({ received: entries.length, inserted: 0, rejected: entries.length });
+      const { data, error } = await supabase.from("contact_bridge_diagnostics")
+        .upsert(rows, { onConflict: "device_id,event_id", ignoreDuplicates: true })
+        .select("event_id");
+      if (error) return json({ error: "Diagnostics upload failed: " + error.message }, 500);
+      return json({
+        received: entries.length,
+        inserted: data?.length ?? 0,
+        rejected: entries.length - rows.length,
+      });
+    }
+
     if (action === "sync_contacts") {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
