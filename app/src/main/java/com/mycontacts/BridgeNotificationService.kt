@@ -48,6 +48,7 @@ class BridgeNotificationService : Service() {
                 running = true
                 handler.post(pollTask)
             }
+            recordDiagnostic("service_state", "running")
             return START_STICKY
         } catch (e: Exception) {
             Log.e(TAG, "Unable to start foreground service", e)
@@ -82,6 +83,10 @@ class BridgeNotificationService : Service() {
                             Log.i(TAG, "Persisted " + added + " command(s); pending=" + pending.length())
                         }
                         pendingCount = pending.length()
+                    }
+                    processDiagnosticsCommands()
+                    synchronized(QUEUE_LOCK) {
+                        pendingCount = readPending(prefs.getString(KEY_PENDING, "[]")).length()
                     }
                     if (pendingCount > 0) postPendingNotification(pendingCount)
                     else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
@@ -129,6 +134,39 @@ class BridgeNotificationService : Service() {
             JSONArray()
         }
 
+    /** Read-only diagnostics are answered in the foreground service, even while the Activity is minimized. */
+    private fun processDiagnosticsCommands() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val pending = synchronized(QUEUE_LOCK) {
+            readPending(prefs.getString(KEY_PENDING, "[]"))
+        }
+        val requests = (0 until pending.length()).mapNotNull { pending.optJSONObject(it) }
+            .filter { it.optString("action") == "get_diagnostics" }
+        for (command in requests) {
+            val id = command.optString("id")
+            if (id.isBlank()) continue
+            try {
+                val result = JSONObject().put("diagnostics", AppDiagnostics.collect(this))
+                bridge.complete(id, result)
+                synchronized(QUEUE_LOCK) {
+                    val current = readPending(prefs.getString(KEY_PENDING, "[]"))
+                    val kept = JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        if (item.optString("id") != id) kept.put(item)
+                    }
+                    if (!prefs.edit().putString(KEY_PENDING, kept.toString()).commit()) {
+                        throw IllegalStateException("Could not remove completed diagnostics request from local queue")
+                    }
+                }
+                Log.i(TAG, "Answered on-demand diagnostics request " + id)
+            } catch (e: Exception) {
+                Log.e(TAG, "Diagnostics request failed: " + id, e)
+                recordDiagnostic("last_diagnostics_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
+            }
+        }
+    }
+
     private fun recordDiagnostic(key: String, value: String) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
     }
@@ -165,6 +203,7 @@ class BridgeNotificationService : Service() {
     override fun onDestroy() {
         running = false
         handler.removeCallbacksAndMessages(null)
+        recordDiagnostic("service_state", "stopped")
         Log.w(TAG, "Foreground service destroyed")
         super.onDestroy()
     }
