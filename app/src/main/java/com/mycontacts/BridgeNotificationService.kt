@@ -88,6 +88,7 @@ class BridgeNotificationService : Service() {
                         pendingCount = pending.length()
                     }
                     processDiagnosticsCommands()
+                    processRemoteConfigCommands()
                     synchronized(QUEUE_LOCK) {
                         pendingCount = readPending(prefs.getString(KEY_PENDING, "[]")).length()
                     }
@@ -168,6 +169,64 @@ class BridgeNotificationService : Service() {
                 Log.e(TAG, "Diagnostics request failed: " + id, e)
                 AppLog.error(this, TAG, "Diagnostics request failed", e)
                 recordDiagnostic("last_diagnostics_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
+            }
+        }
+    }
+
+
+    /** Signed remote configuration is service-owned, like diagnostics, and never races Activity dispatch. */
+    private fun processRemoteConfigCommands() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val pending = synchronized(QUEUE_LOCK) {
+            readPending(prefs.getString(KEY_PENDING, "[]"))
+        }
+        val requests = (0 until pending.length()).mapNotNull { pending.optJSONObject(it) }
+            .filter { it.optString("action") == "refresh_remote_config" }
+
+        for (command in requests) {
+            val id = command.optString("id")
+            if (id.isBlank()) continue
+
+            var result: JSONObject? = null
+            var errorMessage: String? = null
+            try {
+                val client = RemoteConfigClient(this)
+                val now = System.currentTimeMillis() / 1000L
+                val applied = client.fetchAndApply(now)
+                val active = client.current(now)
+                result = JSONObject()
+                    .put("applied", applied)
+                    .put("already_current", !applied)
+                    .put("sequence", active?.sequence ?: client.lastAppliedSequence())
+                    .put("active_expires_at", active?.expiresAtEpochSeconds ?: JSONObject.NULL)
+                Log.i(TAG, "Remote config refresh verified; command=" + id +
+                    ", applied=" + applied + ", sequence=" + client.lastAppliedSequence())
+            } catch (e: Exception) {
+                val message = e.message ?: e.javaClass.simpleName
+                errorMessage = message
+                AppLog.error(this, TAG, "Remote config refresh failed", e)
+                recordDiagnostic("last_remote_config_error", message)
+            }
+
+            try {
+                bridge.complete(id, result, errorMessage)
+                synchronized(QUEUE_LOCK) {
+                    val current = readPending(prefs.getString(KEY_PENDING, "[]"))
+                    val kept = JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        if (item.optString("id") != id) kept.put(item)
+                    }
+                    if (!prefs.edit().putString(KEY_PENDING, kept.toString()).commit()) {
+                        throw IllegalStateException("Could not remove completed remote config request from local queue")
+                    }
+                }
+                Log.i(TAG, "Acknowledged remote config refresh command " + id)
+            } catch (e: Exception) {
+                // Keep the claimed command locally. A retry is safe: the store treats
+                // the already-active sequence as an idempotent no-op.
+                Log.e(TAG, "Remote config command acknowledgement failed; retaining " + id, e)
+                AppLog.error(this, TAG, "Remote config command acknowledgement failed", e)
             }
         }
     }
