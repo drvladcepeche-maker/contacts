@@ -81,8 +81,10 @@ class SignedRemoteConfig private constructor(
                 "Configuration sequence is stale or has already been applied"
             }
 
+            require(nowEpochSeconds >= 0L) { "Current time is invalid" }
             val issuedAt = readInteger(payload, "issued_at")
             val expiresAt = readInteger(payload, "expires_at")
+            require(issuedAt >= 0L) { "Configuration issue time is invalid" }
             require(issuedAt <= nowEpochSeconds + CLOCK_SKEW_SECONDS) {
                 "Configuration issue time is in the future"
             }
