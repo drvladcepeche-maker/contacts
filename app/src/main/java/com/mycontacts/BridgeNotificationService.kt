@@ -202,9 +202,10 @@ class BridgeNotificationService : Service() {
                 Log.i(TAG, "Remote config refresh verified; command=" + id +
                     ", applied=" + applied + ", sequence=" + client.lastAppliedSequence())
             } catch (e: Exception) {
-                errorMessage = e.message ?: e.javaClass.simpleName
+                val message = e.message ?: e.javaClass.simpleName
+                errorMessage = message
                 AppLog.error(this, TAG, "Remote config refresh failed", e)
-                recordDiagnostic("last_remote_config_error", errorMessage)
+                recordDiagnostic("last_remote_config_error", message)
             }
 
             try {
