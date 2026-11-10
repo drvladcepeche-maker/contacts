@@ -168,6 +168,10 @@ class ContactsBridge(context: Context) {
         lastSyncSummary = summary
         return summary
     }
+    fun uploadDiagnostics(entries: JSONArray): JSONObject = request(
+        JSONObject().put("action", "upload_diagnostics").put("entries", entries)
+    )
+
     fun queueTelegramMatch(): JSONObject = request(JSONObject().put("action", "queue_telegram_match"))
 
     fun poll(): JSONArray = request(JSONObject().put("action", "poll_commands")).optJSONArray("commands") ?: JSONArray()
