@@ -11,11 +11,12 @@ const CORS = {
 
 const tools = [
   { name: "contacts_status", description: "Check bridge status, paired Android devices, last sync and cached contact count.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "contacts_report_error", description: "Upload a redacted web-interface diagnostic event for a device you own.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, level: { type: "string", enum: ["WARN", "ERROR", "FATAL"] }, tag: { type: "string", maxLength: 120 }, message: { type: "string", maxLength: 2000 }, stack_trace: { type: "string", maxLength: 12000 }, app_version: { type: "string", maxLength: 40 } }, required: ["device_id", "level", "tag", "message"], additionalProperties: false } },
   { name: "contacts_list", description: "List cached contacts from one paired Android device. Optional account_name/account_type filters return only matching account memberships; the returned accounts array is narrowed to the selected source.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_search", description: "Search cached contacts by name, phone, or email-like fields, optionally restricted to one account source.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id", "query"], additionalProperties: false } },
   { name: "contacts_list_v2", description: "List cached contacts filtered by account_name/account_type. Use this refreshed tool when filtering contacts by Android account.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_search_v2", description: "Search cached contacts by name, phone, or email, optionally restricted to one Android account source.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id", "query"], additionalProperties: false } },
-  { name: "contacts_request_change", description: "Queue a contact create/update/delete/merge request for Android. The phone displays a confirmation prompt before any write is applied. Delete and merge additionally require confirmed_by_user=true in this tool call.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, operation: { type: "string", enum: ["create", "update", "delete", "merge"] }, id: { type: "integer", description: "Local Android contact ID for update/delete" }, name: { type: "string" }, phone: { type: "string" }, ids: { type: "array", items: { type: "integer" }, minItems: 2 }, confirmed_by_user: { type: "boolean", description: "Must be true for delete or merge when the user explicitly authorized the operation." } }, required: ["device_id", "operation"], additionalProperties: false } },
+  { name: "contacts_request_change", description: "Queue a contact create/update/delete/merge/move request for Android. The phone displays a confirmation prompt before any write is applied. Delete, merge and move additionally require confirmed_by_user=true in this tool call.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, operation: { type: "string", enum: ["create", "update", "delete", "merge", "move"] }, id: { type: "integer", description: "Local Android contact ID for update/delete" }, name: { type: "string" }, phone: { type: "string" }, ids: { type: "array", items: { type: "integer" }, minItems: 2 }, source_account_name: { type: "string" }, source_account_type: { type: "string" }, target_account_name: { type: "string" }, target_account_type: { type: "string" }, confirmed_by_user: { type: "boolean", description: "Must be true for delete or merge when the user explicitly authorized the operation." } }, required: ["device_id", "operation"], additionalProperties: false } },
   { name: "contacts_request_diagnostics", description: "Request a read-only live diagnostics snapshot from the paired Android app: APK version/build, Android device and permissions, bridge/service state, Telegram matching progress, recent redacted app logs and errors. The app can answer while minimized if its foreground bridge service is running.", inputSchema: { type: "object", properties: { device_id: { type: "string" } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_command_status", description: "Check whether a queued Android contact command has completed.", inputSchema: { type: "object", properties: { command_id: { type: "string" } }, required: ["command_id"], additionalProperties: false } },
   { name: "contacts_identifier_report", description: "Read classified identifiers and likely misplaced values for one paired device. This is evidence only; it never edits the Android contact.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, detected_type: { type: "string" }, misfiled_only: { type: "boolean" }, resolution_status: { type: "string", enum: ["pending","accepted","rejected","corrected"] }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000 } }, required: ["device_id"], additionalProperties: false } },
@@ -102,6 +103,29 @@ Deno.serve(async (req: Request) => {
   const name = String(params.name ?? "");
   const args = params.arguments ?? {};
   try {
+    if (name === "contacts_report_error") {
+      const deviceId = String(args.device_id ?? "");
+      if (!deviceId || !canAccessDevice(deviceId)) return denied(id);
+      const sanitize = (value: unknown, max: number) => String(value ?? "")
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+        .replace(/\+?\d[\d\s().-]{7,}\d/g, "[phone]")
+        .slice(0, max);
+      const level = String(args.level ?? "ERROR").toUpperCase();
+      if (!["WARN", "ERROR", "FATAL"].includes(level)) return response(id, toolResult({ error: "Invalid diagnostic level" }, true));
+      const { error } = await db.from("contact_bridge_diagnostics").insert({
+        device_id: deviceId,
+        event_id: crypto.randomUUID(),
+        occurred_at: new Date().toISOString(),
+        level,
+        tag: sanitize(args.tag || "web-ui", 120),
+        message: sanitize(args.message, 2000),
+        stack_trace: args.stack_trace ? sanitize(args.stack_trace, 12000) : null,
+        app_version: sanitize(args.app_version || "web-ui", 40),
+      });
+      if (error) throw error;
+      return response(id, toolResult({ accepted: true }));
+    }
+
     if (name === "contacts_status") {
       let devicesQuery = db.from("contact_bridge_devices")
         .select("id, device_name, created_at, last_seen_at, revoked_at").is("revoked_at", null);
@@ -257,11 +281,11 @@ Deno.serve(async (req: Request) => {
     if (name === "contacts_request_change") {
       const deviceId = String(args.device_id ?? "");
       const operation = String(args.operation ?? "");
-      const actionMap: Record<string, string> = { create: "upsert_contact", update: "upsert_contact", delete: "delete_contact", merge: "merge_contacts" };
+      const actionMap: Record<string, string> = { create: "upsert_contact", update: "upsert_contact", delete: "delete_contact", merge: "merge_contacts", move: "move_contact" };
       const action = actionMap[operation];
       if (!deviceId || !action) return response(id, toolResult({ error: "Valid device_id and operation required" }, true));
       if (!canAccessDevice(deviceId)) return denied(id);
-      if (["delete", "merge"].includes(operation) && args.confirmed_by_user !== true) {
+      if (["delete", "merge", "move"].includes(operation) && args.confirmed_by_user !== true) {
         return response(id, toolResult({ error: "Explicit user authorization is required for delete/merge. Set confirmed_by_user=true only when the user has authorized it." }, true));
       }
       const payload: Record<string, unknown> = {};
@@ -276,9 +300,26 @@ Deno.serve(async (req: Request) => {
       } else if (operation === "delete") {
         if (!Number.isInteger(args.id) || Number(args.id) <= 0) return response(id, toolResult({ error: "valid local contact id required for delete" }, true));
         payload.id = Number(args.id);
-      } else {
+        payload.name = String(args.name ?? "").trim();
+        payload.phone = String(args.phone ?? "").trim();
+      } else if (operation === "merge") {
         if (!Array.isArray(args.ids) || args.ids.length < 2 || args.ids.some((v: unknown) => !Number.isInteger(v))) return response(id, toolResult({ error: "ids must contain at least two local contact IDs" }, true));
         payload.ids = args.ids;
+      } else if (operation === "move") {
+        if (!Number.isInteger(args.id) || Number(args.id) <= 0) return response(id, toolResult({ error: "valid local contact id required for move" }, true));
+        const sourceName = String(args.source_account_name ?? "").trim();
+        const sourceType = String(args.source_account_type ?? "").trim();
+        const targetName = String(args.target_account_name ?? "").trim();
+        const targetType = String(args.target_account_type ?? "").trim();
+        if (!sourceName || !sourceType || !targetName || !targetType) {
+          return response(id, toolResult({ error: "move requires source_account_name, source_account_type, target_account_name and target_account_type" }, true));
+        }
+        payload.id = Number(args.id);
+        payload.name = String(args.name ?? "").trim();
+        payload.source_account_name = sourceName;
+        payload.source_account_type = sourceType;
+        payload.target_account_name = targetName;
+        payload.target_account_type = targetType;
       }
       const { data, error } = await db.from("contact_bridge_commands")
         .insert({ device_id: deviceId, action, payload })
@@ -314,6 +355,13 @@ Deno.serve(async (req: Request) => {
     }
     return response(id, toolResult({ error: "Unknown tool" }, true));
   } catch (e) {
-    return response(id, toolResult({ error: e instanceof Error ? e.message : String(e) }, true));
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[contacts-mcp] tool call failed", {
+      tool: name,
+      requestId: id,
+      message: message.slice(0, 1000),
+      timestamp: new Date().toISOString(),
+    });
+    return response(id, toolResult({ error: message }, true));
   }
 });
