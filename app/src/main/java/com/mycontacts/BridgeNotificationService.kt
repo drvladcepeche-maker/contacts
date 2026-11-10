@@ -28,6 +28,7 @@ class BridgeNotificationService : Service() {
             bridge = ContactsBridge(this)
             createChannels()
             Log.i(TAG, "Service created; notification channels checked")
+            AppLog.info(this, TAG, "Service created")
         } catch (e: Exception) {
             Log.e(TAG, "Service initialization failed", e)
             stopSelf()
@@ -45,6 +46,7 @@ class BridgeNotificationService : Service() {
             createChannels()
             startForeground(ONGOING_ID, buildNotification("Ожидание команд", false))
             Log.i(TAG, "Foreground service started")
+            AppLog.info(this, TAG, "Foreground service started")
             if (!running) {
                 running = true
                 handler.post(pollTask)
@@ -95,6 +97,7 @@ class BridgeNotificationService : Service() {
                     recordDiagnostic("last_poll_error", "")
                 } catch (e: Exception) {
                     Log.e(TAG, "Command polling or notification cycle failed", e)
+                    AppLog.error(this@BridgeNotificationService, TAG, "Command polling or notification cycle failed", e)
                     recordDiagnostic("last_poll_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
                     if (bridge.token().isBlank()) {
                         // A 401 clears the rejected token in ContactsBridge; stop polling until re-paired.
@@ -163,6 +166,7 @@ class BridgeNotificationService : Service() {
                 Log.i(TAG, "Answered on-demand diagnostics request " + id)
             } catch (e: Exception) {
                 Log.e(TAG, "Diagnostics request failed: " + id, e)
+                AppLog.error(this, TAG, "Diagnostics request failed", e)
                 recordDiagnostic("last_diagnostics_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
             }
         }
@@ -205,6 +209,7 @@ class BridgeNotificationService : Service() {
         running = false
         handler.removeCallbacksAndMessages(null)
         recordDiagnostic("service_state", "stopped")
+        AppLog.info(this, TAG, "Foreground service destroyed")
         Log.w(TAG, "Foreground service destroyed")
         super.onDestroy()
     }
