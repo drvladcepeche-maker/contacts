@@ -55,7 +55,11 @@ class RemoteConfigStore(private val persistence: RemoteConfigStatePersistence) {
      * Returns false for replay/stale sequence or failed durable write.
      * The previous active configuration remains available for one-step rollback.
      */
-    fun applyVerified(config: SignedRemoteConfig): Boolean {
+    fun applyVerified(config: SignedRemoteConfig, nowEpochSeconds: Long): Boolean {
+        require(nowEpochSeconds >= 0L) { "Current time is invalid" }
+        if (config.expiresAtEpochSeconds <= nowEpochSeconds) return false
+        if (config.issuedAtEpochSeconds > nowEpochSeconds &&
+            config.issuedAtEpochSeconds - nowEpochSeconds > 300L) return false
         val state = readState()
         val highWatermark = state.optLong("highest_sequence", 0L)
         if (config.sequence <= highWatermark) return false
