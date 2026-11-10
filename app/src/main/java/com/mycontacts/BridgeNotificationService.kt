@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import org.json.JSONArray
+import org.json.JSONObject
 
 /** The sole server command poller; claimed commands are persisted before alerts. */
 class BridgeNotificationService : Service() {
