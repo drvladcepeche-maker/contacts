@@ -33,6 +33,7 @@ class TelegramMatchService : Service() {
     private var batchesFinished = false
     private var completed = false
     private val stateLock = Any()
+    private val progressPrefs by lazy { getSharedPreferences(PROGRESS_PREFS, MODE_PRIVATE) }
 
     private data class Candidate(val contacts: List<Contact>, val phone: String)
 
@@ -44,7 +45,9 @@ class TelegramMatchService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, notification("Подготовка сопоставления…", 0, 0, ongoing = true))
-        if (!initialized.compareAndSet(false, true)) return START_NOT_STICKY
+        if (!initialized.compareAndSet(false, true)) return START_STICKY
+        val isNewRun = intent?.action == ACTION_MATCH
+        if (isNewRun) progressPrefs.edit().clear().apply()
         io.execute {
             try {
                 val all = repo.loadAll(includeFields = false)
@@ -56,6 +59,18 @@ class TelegramMatchService : Service() {
                 }
                 candidates = phoneRows.groupBy { it.second }.map { (phone, rows) ->
                     Candidate(rows.map { it.first }.distinctBy { it.id }, phone)
+                }
+                if (isNewRun) {
+                    index = 0
+                    checked = 0
+                    matched = 0
+                    errors = 0
+                    saveProgress()
+                } else {
+                    index = progressPrefs.getInt(KEY_INDEX, 0).coerceIn(0, candidates.size)
+                    checked = progressPrefs.getInt(KEY_CHECKED, 0).coerceAtLeast(0)
+                    matched = progressPrefs.getInt(KEY_MATCHED, 0).coerceAtLeast(0)
+                    errors = progressPrefs.getInt(KEY_ERRORS, 0).coerceAtLeast(0)
                 }
                 if (candidates.isEmpty()) {
                     finishWithError("Нет номеров в международном формате +код страны.")
@@ -87,7 +102,7 @@ class TelegramMatchService : Service() {
                 finishWithError("Не удалось подготовить контакты: ${e.message ?: e.javaClass.simpleName}")
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun normalizeInternationalPhone(raw: String): String {
@@ -109,8 +124,8 @@ class TelegramMatchService : Service() {
             finishIfReady()
             return
         }
-        val batch = candidates.subList(index, minOf(index + 50, candidates.size))
-        index += batch.size
+        val batchEnd = minOf(index + BATCH_SIZE, candidates.size)
+        val batch = candidates.subList(index, batchEnd)
         val imported = batch.map { candidate ->
             TdApi.ImportedContact(candidate.phone, candidate.contacts.firstOrNull()?.name?.take(64).orEmpty().ifBlank { "Contact" }, "", null)
         }.toTypedArray()
@@ -124,7 +139,9 @@ class TelegramMatchService : Service() {
                 synchronized(stateLock) {
                     checked += batch.size
                     errors += batch.size
+                    index = batchEnd
                 }
+                saveProgress()
                 updateNotification("Ошибка пачки: ${error ?: "нет результата"}", checked, candidates.size)
                 main.postDelayed({ processNextBatch() }, BATCH_DELAY_MS)
                 return@importPhoneBatch
@@ -163,6 +180,8 @@ class TelegramMatchService : Service() {
                     }
                 }
             }
+            index = batchEnd
+            saveProgress()
             updateNotification("Проверено $checked из ${candidates.size}", checked, candidates.size)
             main.postDelayed({ processNextBatch() }, BATCH_DELAY_MS)
         }
@@ -174,9 +193,19 @@ class TelegramMatchService : Service() {
             synchronized(stateLock) { if (completed) return; completed = true }
             val summary = "Готово. Проверено: $checked; найдено ID: $matched; ошибок: $errors."
             updateNotification(summary, candidates.size, candidates.size, ongoing = false, completed = true)
+            progressPrefs.edit().clear().apply()
             stopForeground(false)
             stopSelf()
         }
+    }
+
+    private fun saveProgress() {
+        progressPrefs.edit()
+            .putInt(KEY_INDEX, index)
+            .putInt(KEY_CHECKED, checked)
+            .putInt(KEY_MATCHED, matched)
+            .putInt(KEY_ERRORS, errors)
+            .apply()
     }
 
     private fun finishWithError(message: String) {
@@ -248,6 +277,12 @@ class TelegramMatchService : Service() {
         private const val TAG = "TelegramMatchService"
         private const val CHANNEL_ID = "telegram_matching_progress"
         private const val NOTIFICATION_ID = 7311
-        private const val BATCH_DELAY_MS = 3000L
+        private const val BATCH_SIZE = 50
+        private const val BATCH_DELAY_MS = 300_000L
+        private const val PROGRESS_PREFS = "telegram_match_progress"
+        private const val KEY_INDEX = "index"
+        private const val KEY_CHECKED = "checked"
+        private const val KEY_MATCHED = "matched"
+        private const val KEY_ERRORS = "errors"
     }
 }
