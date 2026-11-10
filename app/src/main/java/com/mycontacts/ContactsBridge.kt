@@ -32,6 +32,7 @@ class ContactsBridge(context: Context) {
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
+        const val REMOTE_CONFIG_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/remote-config"
     }
 
     private val prefs = context.getSharedPreferences("contacts_bridge", Context.MODE_PRIVATE)
@@ -40,9 +41,9 @@ class ContactsBridge(context: Context) {
     fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
     fun clearToken() { prefs.edit().remove("device_token").apply() }
 
-    private fun requestWithToken(token: String, body: JSONObject): JSONObject {
+    private fun requestWithToken(token: String, body: JSONObject, endpoint: String = BASE_URL): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
-        val conn = (URL(BASE_URL).openConnection() as HttpURLConnection).apply {
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
             readTimeout = 20000
@@ -87,6 +88,24 @@ class ContactsBridge(context: Context) {
         require(issued.isNotBlank()) { "Сервер не вернул токен устройства" }
         saveToken(issued)
         return response
+    }
+
+
+    /** Fetches the signed remote configuration using the paired device token. */
+    fun requestRemoteConfigEnvelope(): JSONObject {
+        val current = token()
+        require(current.isNotBlank()) { "Сначала привяжите устройство" }
+        return try {
+            requestWithToken(current, JSONObject(), REMOTE_CONFIG_URL)
+        } catch (e: BridgeHttpException) {
+            if (e.statusCode == 401) {
+                clearToken()
+                throw IllegalStateException(
+                    "Токен устройства отклонён сервером. Требуется повторная привязка.", e
+                )
+            }
+            throw e
+        }
     }
 
     @Volatile var lastSyncSummary: SyncSummary = SyncSummary()
