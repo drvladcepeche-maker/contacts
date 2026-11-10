@@ -40,6 +40,8 @@ android {
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
+            // Keep the exact application ID of already-installed bridgefix4 builds.
+            applicationIdSuffix = ".bridgefix4"
             isMinifyEnabled = false
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
