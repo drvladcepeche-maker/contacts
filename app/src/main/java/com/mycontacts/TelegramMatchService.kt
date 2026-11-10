@@ -41,12 +41,16 @@ class TelegramMatchService : Service() {
         super.onCreate()
         repo = ContactRepo(contentResolver)
         createChannel()
+        AppLog.info(this, TAG, "Telegram matching service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, notification("Подготовка сопоставления…", 0, 0, ongoing = true))
         if (!initialized.compareAndSet(false, true)) return START_STICKY
         val isNewRun = intent?.action == ACTION_MATCH
+        getSharedPreferences("telegram_match_runtime", MODE_PRIVATE).edit()
+            .putString("state", "preparing").putString("last_error", "").putLong("updated_at", System.currentTimeMillis()).apply()
+        AppLog.info(this, TAG, "Matching started; newRun=$isNewRun")
         if (isNewRun) progressPrefs.edit().clear().apply()
         io.execute {
             try {
@@ -99,6 +103,7 @@ class TelegramMatchService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Could not prepare Telegram matching", e)
+                AppLog.error(this@TelegramMatchService, TAG, "Could not prepare Telegram matching", e)
                 finishWithError("Не удалось подготовить контакты: ${e.message ?: e.javaClass.simpleName}")
             }
         }
@@ -113,6 +118,9 @@ class TelegramMatchService : Service() {
 
     private fun beginMatching() {
         if (!startedMatching.compareAndSet(false, true)) return
+        getSharedPreferences("telegram_match_runtime", MODE_PRIVATE).edit()
+            .putString("state", "running").putLong("updated_at", System.currentTimeMillis()).apply()
+        AppLog.info(this, TAG, "Telegram matching is running; candidates=${candidates.size}")
         updateNotification("Сопоставление запущено", 0, candidates.size)
         processNextBatch()
     }
@@ -142,6 +150,11 @@ class TelegramMatchService : Service() {
                     index = batchEnd
                 }
                 saveProgress()
+                val batchError = error?.toString() ?: "No result returned"
+                AppLog.warn(this, TAG, "Telegram batch import failed: $batchError")
+                getSharedPreferences("telegram_match_runtime", MODE_PRIVATE).edit()
+                    .putString("state", "running_with_errors").putString("last_error", batchError.take(1000))
+                    .putLong("updated_at", System.currentTimeMillis()).apply()
                 updateNotification("Ошибка пачки: ${error ?: "нет результата"}", checked, candidates.size)
                 main.postDelayed({ processNextBatch() }, BATCH_DELAY_MS)
                 return@importPhoneBatch
@@ -171,6 +184,7 @@ class TelegramMatchService : Service() {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to save Telegram fields for contact ${candidate.contacts.firstOrNull()?.id}", e)
+                                AppLog.error(this@TelegramMatchService, TAG, "Failed to save Telegram fields", e)
                                 synchronized(stateLock) { errors++ }
                             } finally {
                                 synchronized(stateLock) { pendingUsernameWrites-- }
@@ -192,6 +206,9 @@ class TelegramMatchService : Service() {
         if (shouldFinish) {
             synchronized(stateLock) { if (completed) return; completed = true }
             val summary = "Готово. Проверено: $checked; найдено ID: $matched; ошибок: $errors."
+            getSharedPreferences("telegram_match_runtime", MODE_PRIVATE).edit()
+                .putString("state", "completed").putString("last_error", "").putLong("updated_at", System.currentTimeMillis()).apply()
+            AppLog.info(this, TAG, summary)
             updateNotification(summary, candidates.size, candidates.size, ongoing = false, completed = true)
             progressPrefs.edit().clear().apply()
             stopForeground(false)
@@ -212,6 +229,9 @@ class TelegramMatchService : Service() {
         if (completed) return
         completed = true
         Log.w(TAG, message)
+        getSharedPreferences("telegram_match_runtime", MODE_PRIVATE).edit()
+            .putString("state", "error").putString("last_error", message.take(1000)).putLong("updated_at", System.currentTimeMillis()).apply()
+        AppLog.error(this, TAG, message)
         updateNotification(message, checked, candidates.size.coerceAtLeast(1), ongoing = false, completed = true)
         stopForeground(false)
         stopSelf()
@@ -221,6 +241,7 @@ class TelegramMatchService : Service() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             Log.w(TAG, "Notification permission not granted; foreground work continues without drawer updates")
+            AppLog.warn(this, TAG, "Notification permission not granted; foreground work continues")
         }
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, notification(message, progress, total, ongoing, completed))
