@@ -210,7 +210,7 @@ echo "Изменения APK собираются через GitHub Actions по
 
     private fun sanitizeDiagnostic(value: String): String = value
         .replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~-]{12,}"), "Bearer [REDACTED]")
-        .replace(Regex("(?i)(token|api[_-]?key|password)=([^&\\s]+)"), "$1=[REDACTED]")
+        .replace(Regex("(?i)(token|api[_-]?key|password)=([^&\\s]+)"), "\\$1=[REDACTED]")
         .replace(Regex("\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", RegexOption.IGNORE_CASE), "[EMAIL]")
         .replace(Regex("(?<!\\w)\\+?\\d[\\d ()-]{7,}\\d(?!\\w)"), "[PHONE]")
         .replace(Regex("\\b[0-9a-fA-F]{48,}\\b"), "[TOKEN]")
@@ -255,18 +255,21 @@ object DiagnosticsSync {
         val app = context.applicationContext
         executor.execute {
             try {
-                val entries = AppLog.pendingRemoteEntries(app, 50)
-                if (entries.length() == 0) return@execute
                 val bridge = ContactsBridge(app)
                 if (bridge.token().isBlank()) return@execute
-                val response = bridge.uploadDiagnostics(entries)
-                if (response.optInt("rejected", 0) == 0 && response.optInt("received", 0) >= entries.length()) {
+                // Drain the bounded local queue in batches. Failed requests leave all
+                // entries on disk; the next resume or new error retries them.
+                while (true) {
+                    val entries = AppLog.pendingRemoteEntries(app, 50)
+                    if (entries.length() == 0) break
+                    val response = bridge.uploadDiagnostics(entries)
+                    if (response.optInt("rejected", 0) != 0 ||
+                        response.optInt("received", 0) < entries.length()) break
                     val ids = (0 until entries.length()).mapNotNull { i ->
                         entries.optJSONObject(i)?.optString("event_id")?.takeIf { it.isNotBlank() }
                     }.toSet()
+                    if (ids.isEmpty()) break
                     AppLog.markRemoteUploaded(app, ids)
-                    // Continue immediately if the local queue contains another batch.
-                    if (AppLog.pendingRemoteEntries(app, 1).length() > 0) flush(app)
                 }
             } catch (_: Exception) {
                 // Keep the queue for the next foreground/resume or subsequent event.
