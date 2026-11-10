@@ -2,6 +2,8 @@ package com.mycontacts
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -249,6 +251,28 @@ echo "Изменения APK собираются через GitHub Actions по
 object DiagnosticsSync {
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    fun registerNetworkCallback(context: Context) {
+        if (networkCallback != null) return
+        val app = context.applicationContext
+        try {
+            val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    flush(app)
+                }
+            }
+            synchronized(this) {
+                if (networkCallback == null) {
+                    manager.registerDefaultNetworkCallback(callback)
+                    networkCallback = callback
+                }
+            }
+        } catch (_: Exception) {
+            // Foreground retries still work if Android refuses callback registration.
+        }
+    }
 
     fun flush(context: Context) {
         if (!running.compareAndSet(false, true)) return
