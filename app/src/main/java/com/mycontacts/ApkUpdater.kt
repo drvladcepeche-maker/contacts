@@ -174,8 +174,12 @@ object ApkUpdater {
                     ).show()
                 }
             } catch (error: Exception) {
-                AppLog.error(activity, "ApkUpdater", "Update failed", error)
                 val message = error.message ?: error.javaClass.simpleName
+                if (message.startsWith("Установлена последняя версия")) {
+                    AppLog.info(activity, "ApkUpdater", message)
+                } else {
+                    AppLog.error(activity, "ApkUpdater", "Update failed", error)
+                }
                 activity.runOnUiThread {
                     Toast.makeText(activity, "Обновление не установлено: $message", Toast.LENGTH_LONG).show()
                 }
