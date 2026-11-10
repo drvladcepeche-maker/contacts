@@ -36,3 +36,10 @@ This implementation intentionally does not embed a placeholder key, fetch remote
 ## Verification API
 
 `SignedRemoteConfig.verify(envelopeJson, pinnedPublicKey, nowEpochSeconds, lastAppliedSequence)` returns an immutable validated snapshot or throws on any validation failure. The caller is responsible for obtaining a trustworthy current time and persisting the sequence only after successful application.
+
+
+## Atomic local storage and rollback
+
+After signature verification, `RemoteConfigStore.applyVerified` writes one serialized state value containing the active snapshot, the previous last-known-good snapshot, and the monotonic `highest_sequence` watermark. The Android adapter uses a single synchronous `SharedPreferences.commit()` for the state value; callers must treat a false return as a failed apply and must not enable behavior from the candidate snapshot.
+
+`rollback(now)` restores the previous snapshot only while it remains unexpired. It never lowers `highest_sequence`, so rolling back cannot make an already accepted sequence replayable. `current(now)` returns no active configuration after expiry. The stored snapshot is not itself trusted as a network message; it is written only after successful signature and schema verification.

@@ -27,6 +27,7 @@ class SignedRemoteConfig private constructor(
         private const val MAX_PAYLOAD_BYTES = 65_536
         private const val MAX_LIFETIME_SECONDS = 30L * 24L * 60L * 60L
         private const val CLOCK_SKEW_SECONDS = 300L
+        private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
         @JvmStatic
         fun verify(
@@ -147,9 +148,11 @@ class SignedRemoteConfig private constructor(
             val value = obj.get(key)
             require(value is Number) { "$key must be an integer" }
             val number = value.toDouble()
-            require(number.isFinite() && number >= Long.MIN_VALUE.toDouble() &&
-                number <= Long.MAX_VALUE.toDouble() && number == number.toLong().toDouble()) {
-                "$key must be an integer"
+            require(number.isFinite() &&
+                number >= -MAX_SAFE_INTEGER.toDouble() &&
+                number <= MAX_SAFE_INTEGER.toDouble() &&
+                number == number.toLong().toDouble()) {
+                "$key must be a safe integer"
             }
             return value.toLong()
         }
