@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -57,8 +57,8 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Stable Android signing is configured."
           echo "stable_signing=true" >> "$GITHUB_OUTPUT"
-      - name: Build signed release APK
-        run: gradle assembleRelease --no-daemon
+      - name: Run JVM unit tests and build release APK
+        run: gradle testReleaseUnitTest assembleRelease --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: moi-kontakty-apk
