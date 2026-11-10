@@ -29,7 +29,7 @@
             </intent-filter>
         </activity>
         <service android:name=".BridgeNotificationService" android:exported="false" android:foregroundServiceType="dataSync" />
-        <service android:name=".TelegramMatchService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".TelegramMatchService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="dataSync" />
         <service
             android:name=".BraveAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
