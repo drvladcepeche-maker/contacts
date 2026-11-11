@@ -14,6 +14,14 @@ import android.provider.ContactsContract.CommonDataKinds.StructuredName
 
 data class ContactField(val mimetype: String, val values: Map<String, String>)
 
+data class ImportContact(
+    val name: String,
+    val phones: List<String>,
+    val telegram: String = "",
+    val telegramId: String = "",
+    val telegramUsername: String = ""
+)
+
 data class Contact(val id: Long, val name: String, val phones: List<String>, val accountSources: List<Acc> = emptyList(), val telegram: String = "", val telegramId: String = "", val telegramUsername: String = "", val fields: List<ContactField> = emptyList())
 
 data class Acc(val type: String?, val name: String?) {
@@ -121,6 +129,12 @@ class ContactRepo(private val cr: ContentResolver) {
     }
 
     fun add(name: String, phone: String, telegram: String = "") {
+        addImported(ImportContact(name, listOf(phone).filter { it.isNotBlank() }, telegram = telegram))
+    }
+
+    /** Creates one local contact while preserving every imported phone and Telegram identifier. */
+    fun addImported(contact: ImportContact) {
+        require(contact.name.isNotBlank()) { "Имя контакта не может быть пустым" }
         val ops = ArrayList<ContentProviderOperation>()
         ops.add(ContentProviderOperation.newInsert(CC.RawContacts.CONTENT_URI)
             .withValue(CC.RawContacts.ACCOUNT_TYPE, null)
@@ -128,20 +142,31 @@ class ContactRepo(private val cr: ContentResolver) {
         ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
             .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
             .withValue(CC.Data.MIMETYPE, StructuredName.CONTENT_ITEM_TYPE)
-            .withValue(StructuredName.DISPLAY_NAME, name).build())
-        if (phone.isNotBlank()) {
+            .withValue(StructuredName.DISPLAY_NAME, contact.name.trim()).build())
+
+        val seenPhones = HashSet<String>()
+        for (phone in contact.phones.map { it.trim() }.filter { it.isNotBlank() }) {
+            val digits = phone.filter { it.isDigit() }
+            if (digits.isBlank() || !seenPhones.add(digits.takeLast(10))) continue
             ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
                 .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
                 .withValue(CC.Data.MIMETYPE, Phone.CONTENT_ITEM_TYPE)
                 .withValue(Phone.NUMBER, phone)
                 .withValue(Phone.TYPE, Phone.TYPE_MOBILE).build())
         }
-        if (telegram.isNotBlank()) ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
-            .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
-            .withValue(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
-            .withValue(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
-            .withValue(Im.CUSTOM_PROTOCOL, "Telegram")
-            .withValue(Im.DATA, telegram.trim()).build())
+
+        fun addTelegramField(protocolName: String, value: String) {
+            if (value.isBlank()) return
+            ops.add(ContentProviderOperation.newInsert(CC.Data.CONTENT_URI)
+                .withValueBackReference(CC.Data.RAW_CONTACT_ID, 0)
+                .withValue(CC.Data.MIMETYPE, Im.CONTENT_ITEM_TYPE)
+                .withValue(Im.PROTOCOL, Im.PROTOCOL_CUSTOM)
+                .withValue(Im.CUSTOM_PROTOCOL, protocolName)
+                .withValue(Im.DATA, value.trim().removePrefix("@")).build())
+        }
+        addTelegramField("Telegram", contact.telegram)
+        addTelegramField("Telegram ID", contact.telegramId)
+        addTelegramField("Telegram username", contact.telegramUsername)
         cr.applyBatch(CC.AUTHORITY, ops)
     }
 
@@ -738,30 +763,86 @@ class ContactRepo(private val cr: ContentResolver) {
 
     // ---------- VCF / CSV ----------
 
+    private fun escapeVCard(value: String): String = value
+        .replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+
+    private fun unescapeVCard(value: String): String = value
+        .replace("\\n", "\n", ignoreCase = true)
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+
     fun toVcf(list: List<Contact>): String {
         val sb = StringBuilder()
         for (c in list) {
             sb.append("BEGIN:VCARD\r\nVERSION:3.0\r\n")
-            sb.append("FN:").append(c.name).append("\r\n")
-            sb.append("N:").append(c.name).append(";;;;\r\n")
-            if (c.telegram.isNotBlank()) sb.append("X-SOCIALPROFILE;TYPE=telegram:").append(c.telegram).append("\r\n")
-            for (p in c.phones) sb.append("TEL;TYPE=CELL:").append(p).append("\r\n")
+            sb.append("FN:").append(escapeVCard(c.name)).append("\r\n")
+            sb.append("N:").append(escapeVCard(c.name)).append(";;;;\r\n")
+            if (c.telegram.isNotBlank()) sb.append("X-SOCIALPROFILE;TYPE=telegram:").append(escapeVCard(c.telegram)).append("\r\n")
+            if (c.telegramId.isNotBlank()) sb.append("X-TELEGRAM-ID:").append(escapeVCard(c.telegramId)).append("\r\n")
+            if (c.telegramUsername.isNotBlank()) sb.append("X-TELEGRAM-USERNAME:").append(escapeVCard(c.telegramUsername)).append("\r\n")
+            for (p in c.phones) sb.append("TEL;TYPE=CELL:").append(escapeVCard(p)).append("\r\n")
             sb.append("END:VCARD\r\n")
         }
         return sb.toString()
     }
 
-    fun parseVcf(text: String): List<Pair<String, String>> {
-        val out = ArrayList<Pair<String, String>>()
+    fun parseVcf(text: String): List<ImportContact> {
+        val physicalLines = text.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n').lines()
+        val lines = ArrayList<String>()
+        for (line in physicalLines) {
+            if ((line.startsWith(" ") || line.startsWith("\t")) && lines.isNotEmpty()) {
+                lines[lines.lastIndex] = lines.last() + line.drop(1)
+            } else {
+                lines.add(line)
+            }
+        }
+
+        val out = ArrayList<ImportContact>()
         var name = ""
-        var phone = ""
-        for (raw in text.lines()) {
-            val line = raw.trim()
-            when {
-                line.startsWith("BEGIN:VCARD", true) -> { name = ""; phone = "" }
-                line.startsWith("FN", true) && line.contains(":") -> name = line.substringAfter(":")
-                line.startsWith("TEL", true) && line.contains(":") && phone.isEmpty() -> phone = line.substringAfter(":")
-                line.startsWith("END:VCARD", true) -> if (name.isNotBlank()) out.add(name to phone)
+        var structuredName = ""
+        var telegram = ""
+        var telegramId = ""
+        var telegramUsername = ""
+        var phones = ArrayList<String>()
+        fun finishCard() {
+            val resolvedName = name.ifBlank {
+                val parts = structuredName.split(';')
+                listOf(parts.getOrNull(1).orEmpty(), parts.getOrNull(0).orEmpty())
+                    .filter { it.isNotBlank() }.joinToString(" ").ifBlank { structuredName }
+            }.trim()
+            if (resolvedName.isNotBlank()) {
+                out.add(ImportContact(resolvedName, phones.toList(), telegram, telegramId, telegramUsername))
+            }
+        }
+
+        for (line in lines) {
+            if (line.equals("BEGIN:VCARD", true)) {
+                name = ""; structuredName = ""; telegram = ""; telegramId = ""; telegramUsername = ""
+                phones = ArrayList()
+                continue
+            }
+            if (line.equals("END:VCARD", true)) {
+                finishCard()
+                continue
+            }
+            val colon = line.indexOf(':')
+            if (colon <= 0) continue
+            val property = line.substring(0, colon).substringBefore(';').uppercase()
+            val value = unescapeVCard(line.substring(colon + 1).trim())
+            when (property) {
+                "FN" -> name = value
+                "N" -> structuredName = value
+                "TEL" -> if (value.isNotBlank()) phones.add(value)
+                "X-TELEGRAM-ID" -> telegramId = value
+                "X-TELEGRAM-USERNAME" -> telegramUsername = value.removePrefix("@")
+                "X-SOCIALPROFILE", "IMPP" -> {
+                    val header = line.substring(0, colon).lowercase()
+                    if (header.contains("telegram") || value.contains("t.me/", true)) telegram = value
+                }
             }
         }
         return out
@@ -780,13 +861,64 @@ class ContactRepo(private val cr: ContentResolver) {
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
-    fun parseCsv(text: String): List<Pair<String, String>> {
-        val out = ArrayList<Pair<String, String>>()
-        for ((i, line) in text.lines().withIndex()) {
-            if (i == 0 || line.isBlank()) continue
-            val parts = line.split(';', limit = 2).map { it.trim().trim('"').replace("\"\"", "\"") }
-            if (parts[0].isNotBlank()) out.add(parts[0] to (parts.getOrNull(1)?.substringBefore(",") ?: ""))
+    /** Parses the semicolon-delimited CSV produced by this app, including quoted delimiters and line breaks. */
+    fun parseCsv(text: String): List<ImportContact> {
+        val source = text.removePrefix("\uFEFF")
+        val rows = ArrayList<List<String>>()
+        var row = ArrayList<String>()
+        val field = StringBuilder()
+        var quoted = false
+        var i = 0
+        while (i < source.length) {
+            val ch = source[i]
+            when {
+                ch == '"' && quoted && i + 1 < source.length && source[i + 1] == '"' -> {
+                    field.append('"'); i++
+                }
+                ch == '"' -> quoted = !quoted
+                ch == ';' && !quoted -> {
+                    row.add(field.toString()); field.setLength(0)
+                }
+                (ch == '\n' || ch == '\r') && !quoted -> {
+                    if (ch == '\r' && i + 1 < source.length && source[i + 1] == '\n') i++
+                    row.add(field.toString()); field.setLength(0)
+                    if (row.any { it.isNotBlank() }) rows.add(row)
+                    row = ArrayList()
+                }
+                else -> field.append(ch)
+            }
+            i++
         }
-        return out
+        row.add(field.toString())
+        if (row.any { it.isNotBlank() }) rows.add(row)
+        if (rows.isEmpty()) return emptyList()
+
+        fun headerKey(value: String): String = value.trim().lowercase().replace("ё", "е")
+        val first = rows.first().map(::headerKey)
+        val hasHeader = first.firstOrNull() in setOf("имя", "name", "full name", "display name")
+        val start = if (hasHeader) 1 else 0
+        fun column(vararg aliases: String): Int {
+            if (!hasHeader) return -1
+            return first.indexOfFirst { it in aliases }
+        }
+        val nameIndex = column("имя", "name", "full name", "display name").takeIf { it >= 0 } ?: 0
+        val phonesIndex = column("телефоны", "телефон", "phones", "phone", "mobile").takeIf { it >= 0 } ?: 1
+        val idIndex = column("telegram id", "telegram_id", "telegramid").takeIf { it >= 0 } ?: 2
+        val usernameIndex = column("telegram username", "telegram_username", "username").takeIf { it >= 0 } ?: 3
+
+        return rows.drop(start).mapNotNull { cells ->
+            val contactName = cells.getOrNull(nameIndex)?.trim().orEmpty()
+            if (contactName.isBlank()) return@mapNotNull null
+            val phones = cells.getOrNull(phonesIndex).orEmpty()
+                .split(',', '\n')
+                .map { it.trim().trim('"') }
+                .filter { it.any(Char::isDigit) }
+            ImportContact(
+                name = contactName,
+                phones = phones,
+                telegramId = cells.getOrNull(idIndex)?.trim().orEmpty(),
+                telegramUsername = cells.getOrNull(usernameIndex)?.trim()?.removePrefix("@").orEmpty()
+            )
+        }
     }
 }
