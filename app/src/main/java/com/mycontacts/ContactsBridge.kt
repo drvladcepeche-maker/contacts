@@ -43,6 +43,13 @@ class ContactsBridge(context: Context) {
 
     private fun requestWithToken(token: String, body: JSONObject, endpoint: String = BASE_URL): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
+        // Report the installed package/version on every bridge request. This is
+        // diagnostic metadata, not an authorization or signature-trust decision.
+        val requestBody = JSONObject(body.toString()).put("_client", JSONObject()
+            .put("package_name", BuildConfig.APPLICATION_ID)
+            .put("version_name", BuildConfig.VERSION_NAME)
+            .put("version_code", BuildConfig.VERSION_CODE)
+            .put("build_type", BuildConfig.BUILD_TYPE))
         val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
@@ -52,7 +59,7 @@ class ContactsBridge(context: Context) {
             setRequestProperty("Authorization", "Bearer $token")
         }
         try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(requestBody.toString().toByteArray(Charsets.UTF_8)) }
             val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: "{}"
             val json = JSONObject(text)
