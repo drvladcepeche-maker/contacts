@@ -128,7 +128,7 @@ Deno.serve(async (req: Request) => {
 
     if (name === "contacts_status") {
       let devicesQuery = db.from("contact_bridge_devices")
-        .select("id, device_name, created_at, last_seen_at, revoked_at").is("revoked_at", null);
+        .select("id, device_name, created_at, last_seen_at, revoked_at, app_package_name, app_version_name, app_version_code, app_build_type, app_reported_at").is("revoked_at", null);
       if (!isAdminToken) devicesQuery = ownedDeviceIds.length ? devicesQuery.in("id", ownedDeviceIds) : devicesQuery.eq("id", "00000000-0000-0000-0000-000000000000");
       const { data: devices, error } = await devicesQuery;
       if (error) throw error;
