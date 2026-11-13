@@ -88,7 +88,7 @@ function clientAppMetadata(body: Record<string, unknown>): Record<string, unknow
   const versionName = String(raw.version_name ?? "").trim();
   const buildType = String(raw.build_type ?? "").trim();
   const versionCode = Number(raw.version_code);
-  if (/^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$/.test(packageName) && packageName.length <= 200) {
+  if (/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(packageName) && packageName.length <= 200) {
     metadata.app_package_name = packageName;
   }
   if (versionName && versionName.length <= 80) metadata.app_version_name = versionName;
