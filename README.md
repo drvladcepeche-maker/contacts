@@ -56,3 +56,5 @@ The Android app records a full-sync manifest only after every contact batch succ
 ## Android app identity reporting
 
 Every authenticated Android contacts-bridge request reports the installed package name, version name, version code, and build type. The bridge stores these values on the paired device record and exposes them through `contacts_status`. They are client-reported diagnostics, not an authentication factor; APK installation still requires matching package identity and signing certificate.
+
+Telegram matching is permitted only when the latest completed Android sync manifest is no older than 24 hours. The queue endpoint rejects stale manifests, and the worker pauses existing jobs until a fresh manifest is recorded; stale candidate IDs are skipped before Telegram API requests.
