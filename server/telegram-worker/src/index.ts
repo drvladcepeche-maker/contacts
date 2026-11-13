@@ -320,7 +320,7 @@ async function ensureTelegramConnected() {
   const apiId = Number(apiIdText);
   if (!Number.isInteger(apiId) || apiId <= 0) throw new Error("TELEGRAM_API_ID is missing or invalid");
   if (!apiHash || !sessionString) throw new Error("TELEGRAM_API_HASH or TELEGRAM_SESSION is missing");
-  
+
   if (sessionString.length < 100) {
     throw new Error("TELEGRAM_SESSION is too short; replace the GitHub secret with the complete session string.");
   }
