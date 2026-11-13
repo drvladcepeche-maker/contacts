@@ -136,7 +136,7 @@ class TelegramMatcherActivity : Activity() {
 
     private fun confirmMatch() {
         if (!session.isReady() || isMatching) return
-        val contacts = repo.loadAll()
+        val contacts = repo.loadAll(includeFields = false)
         // Match every valid international phone, not only the first phone stored on a contact.
         // Telegram import results are positional, so retain the exact contact for each number.
         val candidates = contacts.flatMap { contact ->

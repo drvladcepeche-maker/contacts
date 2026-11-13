@@ -1,19 +1,27 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { inspectApk } from "./apk-inspect.mjs";
-import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
+import { TerminalSessions } from "./terminal-sessions.mjs";
+import { requiresLocalApproval } from "./command-policy.mjs";
+import { ShizukuFiles } from "./shizuku-files.mjs";
 
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SJMrOazzL4h91DQ2nQaeaQ_FRyGSP7Y";
 const API_URL = process.env.TERMUX_BRIDGE_URL ||
   "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge";
-const TOKEN_PATH = resolve(homedir(), ".config/termux-bridge/device-token");
+const STATE_DIR = resolve(homedir(), ".config/termux-bridge");
+const TOKEN_PATH = resolve(STATE_DIR, "device-token");
+const STATE_PATH = resolve(STATE_DIR, "bridge-state.json");
 const WORKSPACE = resolve(process.env.WORKSPACE || process.cwd());
 const APK_DIR = resolve(homedir(), "storage", "downloads", "PnS_APK");
 const POLL_MS = Math.max(3000, Number(process.env.POLL_MS) || 5000);
 const MAX_OUTPUT = 30000;
 let stopping = false;
+const terminal = new TerminalSessions({ workspace: WORKSPACE });
+const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: process.env.RISH_BIN || resolve(WORKSPACE, "rish") });
 
 const token = (await readFile(TOKEN_PATH, "utf8")).trim();
 if (!/^[a-f0-9]{64}$/.test(token)) {
@@ -26,125 +34,111 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-function curlConfigQuote(value) {
-  return '"' + String(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\n") + '"';
+function transientTransportError(error) {
+  if (Number.isInteger(error?.status)) return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  return /Bridge (?:fetch|curl) transport failed|AbortError|timed out|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|TLS connect error|unexpected eof while reading|curl fallback failed \(exit (?:5|6|7|18|28|35|52|55|56|92)\)/i.test(String(error?.message || error));
 }
-
+function makeHttpError(status, data) {
+  const error = new Error(data?.error || ("Bridge HTTP " + status));
+  error.status = status;
+  return error;
+}
+function curlConfigQuote(value) {
+  return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n") + '"';
+}
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
 async function requestViaCurlOnce(body) {
-  const payload = JSON.stringify(body);
-  const marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
+  const payload = JSON.stringify(body), marker = "__TERMUX_BRIDGE_HTTP_STATUS__";
   const config = [
-    `url = ${curlConfigQuote(API_URL)}`,
-    'request = "POST"',
-    `header = ${curlConfigQuote("content-type: application/json")}`,
-    `header = ${curlConfigQuote("authorization: Bearer " + token)}`,
-    `data = ${curlConfigQuote(payload)}`,
-    `max-time = "20"`,
+    "url = " + curlConfigQuote(API_URL), 'request = "POST"',
+    "header = " + curlConfigQuote("content-type: application/json"),
+    "header = " + curlConfigQuote("authorization: Bearer " + token),
+    "data = " + curlConfigQuote(payload), 'connect-timeout = "10"', 'max-time = "20"',
   ].join("\n") + "\n";
-
   const result = await new Promise((resolveRun) => {
-    const child = spawn("curl", [
-      "--silent", "--show-error", "--ipv4", "--http1.1",
-      "--connect-timeout", "10", "--max-time", "20",
-      "--write-out", "\n" + marker + "%{http_code}", "--config", "-"
-    ], {
-      cwd: WORKSPACE,
-      shell: false,
-      env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined },
-      stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn("curl", ["--silent", "--show-error", "--ipv4", "--http1.1", "--connect-timeout", "10", "--max-time", "20", "--write-out", "\n" + marker + "%{http_code}", "--config", "-"], {
+      cwd: WORKSPACE, shell: false, env: { ...process.env, TERMUX_BRIDGE_TOKEN: undefined }, stdio: ["pipe", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
+    let stdout = "", stderr = "", settled = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), 22000);
     child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-MAX_OUTPUT - 128); });
     child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    child.on("error", error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveRun({ code: 127, stdout, stderr: error.message });
-    });
-    child.on("close", code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveRun({ code: Number.isInteger(code) ? code : 1, stdout, stderr });
-    });
+    child.on("error", error => { if (settled) return; settled = true; clearTimeout(timer); resolveRun({ code: 127, stdout, stderr: error.message }); });
+    child.on("close", code => { if (settled) return; settled = true; clearTimeout(timer); resolveRun({ code: Number.isInteger(code) ? code : 1, stdout, stderr }); });
     child.stdin.end(config);
   });
-
   const markerAt = result.stdout.lastIndexOf(marker);
   if (result.code !== 0 || markerAt < 0) {
-    throw new Error(`Bridge curl fallback failed (exit ${result.code}): ${result.stderr || "no HTTP status received"}`);
+    const error = new Error("Bridge curl transport failed (exit " + result.code + "): " + (result.stderr || "no HTTP status received"));
+    error.transport = true; throw error;
   }
   const responseText = result.stdout.slice(0, markerAt).replace(/\n$/, "");
-  const statusText = result.stdout.slice(markerAt + marker.length).trim();
-  const status = Number(statusText);
+  const status = Number(result.stdout.slice(markerAt + marker.length).trim());
   let data;
   try { data = responseText ? JSON.parse(responseText) : {}; }
-  catch { throw new Error(`Bridge returned invalid JSON (HTTP ${status})`); }
-  if (status < 200 || status >= 300) throw new Error(data.error || `Bridge HTTP ${status}`);
+  catch { throw new Error("Bridge returned invalid JSON (HTTP " + status + ")"); }
+  if (status < 200 || status >= 300) throw makeHttpError(status, data);
   return data;
 }
-
-async function requestViaCurl(body) {
-  const maxAttempts = 5;
+async function requestOnce(body, allowFallback = true) {
+  try {
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(20000),
+    });
+    const responseText = await response.text();
+    let data;
+    try { data = responseText ? JSON.parse(responseText) : {}; }
+    catch { throw new Error("Bridge returned invalid JSON (HTTP " + response.status + ")"); }
+    if (!response.ok) throw makeHttpError(response.status, data);
+    return data;
+  } catch (error) {
+    if (Number.isInteger(error?.status) || !allowFallback) throw error;
+    const reason = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 240);
+    console.error("Node fetch transport failed; trying curl for this request: " + reason);
+    return await requestViaCurlOnce(body);
+  }
+}
+async function request(body) {
+  // Only claim/complete have server-side idempotency keys; never replay upload-grant creation.
+  const retrySafe = body.action === "claim" || body.action === "complete";
+  const maxAttempts = retrySafe ? 5 : 1;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const data = await requestViaCurlOnce(body);
-      if (attempt > 1) {
-        console.error(`Curl transport recovered on attempt ${attempt}/${maxAttempts}.`);
-      }
+      const data = await requestOnce(body, retrySafe);
+      if (attempt > 1) console.error("Bridge request recovered on attempt " + attempt + "/" + maxAttempts + ".");
       return data;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const transientTlsFailure =
-        /Bridge curl fallback failed \(exit 35\)/i.test(message) ||
-        /TLS connect error|unexpected eof while reading/i.test(message);
-      if (!transientTlsFailure || attempt >= maxAttempts) throw error;
-      const delayMs = Math.min(10000, 750 * (2 ** (attempt - 1)));
-      const detail = message.replace(/[\r\n]+/g, " ").slice(0, 300);
-      console.error(
-        `Transient TLS failure on attempt ${attempt}/${maxAttempts}: ${detail}; retrying in ${delayMs} ms.`
-      );
+      if (!retrySafe || !transientTransportError(error) || attempt === maxAttempts) throw error;
+      const delayMs = Math.min(8000, 750 * (2 ** (attempt - 1)));
+      const detail = String(error?.message || error).replace(/[\r\n]+/g, " ").slice(0, 300);
+      console.error("Transient bridge failure on attempt " + attempt + "/" + maxAttempts + ": " + detail + "; retrying in " + delayMs + " ms.");
       await sleep(delayMs);
     }
   }
-  throw new Error("Curl transport exhausted its retry budget.");
+  throw new Error("Bridge request exhausted its retry budget.");
 }
-let preferCurlTransport = false;
-
-async function request(body) {
-  if (preferCurlTransport) return await requestViaCurl(body);
-  let response;
+async function loadBridgeState() {
+  await mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
   try {
-    response = await fetch(API_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20000),
-    });
+    const parsed = JSON.parse(await readFile(STATE_PATH, "utf8"));
+    if (!parsed || !/^[0-9a-f-]{36}$/i.test(parsed.claimToken || "")) throw new Error("Bridge state file has an invalid claim token; refusing to overwrite it.");
+    if (parsed.pending && (!parsed.pending.job || !/^[0-9a-f-]{36}$/i.test(parsed.pending.job.id || ""))) throw new Error("Bridge state file has an invalid pending job; refusing to overwrite it.");
+    return parsed;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    preferCurlTransport = true;
-    console.error(`Node fetch unavailable; using curl transport: ${reason}`);
-    return await requestViaCurl(body);
+    if (error?.code !== "ENOENT") throw error;
+    const initial = { claimToken: randomUUID(), pending: null };
+    await saveBridgeState(initial);
+    return initial;
   }
-
-  const text = await response.text();
-  let data;
-  try { data = text ? JSON.parse(text) : {}; }
-  catch { throw new Error(`Bridge returned invalid JSON (HTTP ${response.status})`); }
-  if (!response.ok) throw new Error(data.error || `Bridge HTTP ${response.status}`);
-  return data;
+}
+async function saveBridgeState(state) {
+  const temporaryPath = STATE_PATH + "." + process.pid + ".tmp";
+  await writeFile(temporaryPath, JSON.stringify(state), { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryPath, STATE_PATH);
 }
 
 function run(program, args, timeoutMs = 30000) {
@@ -296,11 +290,12 @@ async function installApk(args) {
   }
   const packageLine = metadata.output.split("\n").find(line => line.startsWith("package:"));
   const packageMatch = packageLine?.match(/\bname='([^']+)'/);
-  if (packageMatch?.[1] !== "com.mycontacts") {
+  const packageName = packageMatch?.[1] || "";
+  if (!["com.mycontacts", "com.mycontacts.pairing2", "com.mycontacts.bridgefix4"].includes(packageName)) {
     return {
       exitCode: 2,
       output: packageLine || metadata.output.slice(0, 1000),
-      errorText: "Rejected: only package com.mycontacts can be installed by this command.",
+      errorText: "Rejected: only com.mycontacts, com.mycontacts.pairing2, or isolated recovery package com.mycontacts.bridgefix4 can be installed.",
     };
   }
 
@@ -319,7 +314,7 @@ async function installApk(args) {
     };
   }
 
-  const installed = await run(rishBin, ["-c", "pm path com.mycontacts"], 15000);
+  const installed = await run(rishBin, ["-c", "pm path " + packageName], 15000);
   if (installed.exitCode !== 0 || !installed.output.includes("package:")) {
     return {
       exitCode: 3,
@@ -337,7 +332,7 @@ async function installApk(args) {
   );
   const report = [
     "APK: " + filename,
-    "Package: com.mycontacts",
+    "Package: " + packageName,
     "Size: " + info.size + " bytes",
     "SHA-256: " + hash,
     "Shizuku identity: " + identity.output.trim(),
@@ -366,23 +361,191 @@ async function listFiles(args) {
   return { exitCode: 0, output: lines.join("\n"), errorText: "" };
 }
 
-async function approveBuild(label) {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return false;
+
+
+async function braveAccessibility(args) {
+  const action = String(args.action || "snapshot");
+  const allowed = new Set(["snapshot", "click", "input", "scroll", "back", "open_url"]);
+  if (!allowed.has(action)) throw new Error("Unsupported Brave accessibility action.");
+  const packageName = String(args.app_package || "com.mycontacts.bridgefix4");
+  if (!["com.mycontacts.bridgefix4", "com.mycontacts.pairing2", "com.mycontacts"].includes(packageName)) {
+    throw new Error("Rejected companion package. Only approved My Contacts package IDs are allowed.");
   }
+
+  const requestId = randomUUID();
+  const fileName = "accessibility-result-" + requestId + ".json";
+  const responsePath = resolve(homedir(), "storage", "downloads", "TermuxBridge", fileName);
+  const payload = JSON.stringify({ ...args, action, request_id: requestId, wait_ms: args.wait_ms || 15000 });
+  if (payload.length > 12000) throw new Error("Accessibility payload exceeds 12000 characters.");
+  const component = packageName + "/com.mycontacts.BraveAccessibilityCommandReceiver";
+
+  let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
+  try { await access(rishBin); } catch { rishBin = "rish"; }
+  const identity = await run(rishBin, ["-c", "id"], 15000);
+  if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
+    throw new Error("Shizuku is unavailable or not authorized; expected Android shell uid=2000. " +
+      (identity.errorText || identity.output || ""));
+  }
+
+  const broadcastCommand = [
+    "am", "broadcast",
+    "-n", shellQuote(component),
+    "-a", shellQuote("com.mycontacts.BRAVE_ACCESSIBILITY_COMMAND"),
+    "--es", shellQuote("payload"), shellQuote(payload),
+  ].join(" ");
+  const sent = await run(rishBin, ["-c", broadcastCommand], 20000);
+  if (sent.exitCode !== 0) throw new Error("Could not send the Brave accessibility command from Termux: " + (sent.errorText || sent.output));
+
+  const deadline = Date.now() + Math.min(35000, Math.max(5000, Number(args.wait_ms) || 15000) + 5000);
+  while (Date.now() < deadline) {
+    try {
+      const raw = await readFile(responsePath, "utf8");
+      const result = JSON.parse(raw);
+      if (result.request_id !== requestId) throw new Error("Accessibility response request_id mismatch; stale response rejected.");
+      return {
+        exitCode: result.ok ? 0 : 1,
+        output: JSON.stringify(result, null, 2),
+        errorText: result.ok ? "" : String(result.error || "Accessibility command failed."),
+      };
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await sleep(250);
+  }
+  throw new Error("Timed out waiting for Accessibility Service response " + requestId +
+    ". The command may still be pending; check that Brave is allowed to open and the Accessibility service remains connected.");
+}
+
+async function uploadWorkspaceFile(args) {
+  const rel = String(args.path || "");
+  if (!rel || rel.startsWith("/") || rel.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+    throw new Error("file_upload requires a plain workspace-relative path without hidden or traversal segments.");
+  }
+  const leaf = basename(rel);
+  if (/(secret|token|credential|password|private|keystore|\.jks|\.p12|\.pem|\.env)/i.test(leaf)) {
+    throw new Error("Uploading sensitive filenames is blocked.");
+  }
+  let target;
+  if (rel.startsWith("@downloads/")) {
+    const tail = rel.slice("@downloads/".length);
+    if (!(tail.startsWith("TermuxBridge/") || tail.startsWith("PnS_APK/"))) {
+      throw new Error("Downloads uploads are limited to TermuxBridge/ and PnS_APK/.");
+    }
+    if (!tail || tail.split("/").some(part => !part || part === "." || part === ".." || part.startsWith("."))) {
+      throw new Error("Invalid @downloads path.");
+    }
+    target = resolve(homedir(), "storage", "downloads", tail);
+  } else {
+    target = withinWorkspace(rel);
+  }
+  const actual = await realpath(target);
+  const roots = [await realpath(WORKSPACE)];
+  try { roots.push(await realpath(resolve(homedir(), "storage", "downloads"))); } catch { /* shared storage is optional */ }
+  if (!roots.some(root => actual === root || actual.startsWith(root + sep))) throw new Error("Upload path resolves outside the workspace or approved Downloads folder.");
+  const info = await stat(actual);
+  if (!info.isFile()) throw new Error("file_upload accepts regular files only.");
+  if (info.size < 1 || info.size > 50 * 1024 * 1024) throw new Error("Upload size must be between 1 byte and 50 MiB.");
+  const content = await readFile(actual);
+  const contentType = String(args.content_type || "application/octet-stream").slice(0, 128);
+  const grant = await request({ action: "create_upload_url", filename: leaf, content_type: contentType, size: info.size });
+  if (!grant.signed_url || !grant.token || !grant.path) throw new Error("Server did not return a valid signed upload grant.");
+  const uploadUrl = new URL(grant.signed_url, API_URL);
+  if (uploadUrl.protocol !== "https:" || uploadUrl.hostname !== new URL(API_URL).hostname) {
+    throw new Error("Server returned an unexpected upload host; upload was blocked.");
+  }
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "apikey": SUPABASE_PUBLISHABLE_KEY,
+      "authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY,
+      "content-type": contentType,
+      "x-upsert": "false",
+    },
+    body: content,
+    signal: AbortSignal.timeout(120000),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error("Storage upload failed (HTTP " + response.status + "): " + body.slice(0, 1000));
+  return {
+    exitCode: 0,
+    output: JSON.stringify({ path: grant.path, size: info.size, sha256: createHash("sha256").update(content).digest("hex"), bucket: "termux-bridge-artifacts" }, null, 2),
+    errorText: "",
+  };
+}
+
+async function approveLocalAction(label, timeoutMs = 60000) {
+  // Fail closed when the bridge is running without a visible local terminal.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let timeoutHandle;
   try {
-    const answer = await rl.question(
-      `\nCONFIRMATION REQUIRED: ${label}\nWorkspace: ${WORKSPACE}\nThis runs repository build scripts. Execute? Type YES: `
-    );
-    return answer.trim() === "YES";
+    const answer = await Promise.race([
+      rl.question(
+        `\nLOCAL APPROVAL REQUIRED\n${label}\nWorkspace: ${WORKSPACE}\nType YES within ${Math.round(timeoutMs / 1000)} seconds to continue: `
+      ),
+      new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(""), timeoutMs);
+      }),
+    ]);
+    return String(answer).trim() === "YES";
+  } catch {
+    return false;
   } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     rl.close();
   }
 }
 
+function approvalDescription(job) {
+  const args = job.args && typeof job.args === "object" ? job.args : {};
+  const preview = (value, max = 500) => String(value ?? "")
+    .replace(/\b[a-f0-9]{64}\b/gi, "[REDACTED]")
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
+    .replace(/((?:password|token|secret|api[_-]?key)\s*[=:]\s*)[^\s"'&]+/gi, "$1[REDACTED]")
+    .slice(0, max);
+  switch (job.command_type) {
+    case "terminal_run":
+      return "Execute remote Termux shell command:\n" + preview(args.command) + "\nWorking directory: " + preview(args.cwd || ".", 160);
+    case "terminal_start":
+      return "Start an interactive Termux shell session. Initial command: " + preview(args.command || "(empty shell)");
+    case "terminal_input":
+      return "Send " + String(args.input ?? "").length + " characters to interactive shell session " + preview(args.session_id, 80) + ". Input is hidden.";
+    case "install_apk":
+      return "Install/update APK from the approved folder: " + preview(args.file, 180);
+    case "file_upload":
+      return "Upload a file to private project storage: " + preview(args.path, 240);
+    case "shizuku_file_mkdir":
+      return "Create shared-storage directory: " + preview(args.path, 240);
+    case "shizuku_file_copy":
+      return "Copy shared-storage file: " + preview(args.source, 200) + " -> " + preview(args.destination, 200);
+    case "shizuku_file_move":
+      return "Move shared-storage file: " + preview(args.source, 200) + " -> " + preview(args.destination, 200);
+    case "shizuku_file_delete":
+      return "Delete shared-storage file: " + preview(args.path, 240);
+    case "brave_accessibility":
+      return "Perform Brave UI action: " + preview(args.action, 80) + (args.url ? " " + preview(args.url, 240) : "");
+    default:
+      return "Approve requested device operation: " + String(job.command_type || "unknown");
+  }
+}
+
+async function approveBuild(label) {
+  return await approveLocalAction("Run repository build scripts: " + label);
+}
+
 async function execute(job) {
   const args = job.args && typeof job.args === "object" ? job.args : {};
+  if (requiresLocalApproval(job.command_type, args)) {
+    const approved = await approveLocalAction(approvalDescription(job));
+    if (!approved) {
+      return {
+        exitCode: 125,
+        output: "",
+        errorText: "Blocked: local on-device approval was not provided within 60 seconds. No operation was executed.",
+      };
+    }
+    console.log("Local on-device approval granted for " + job.command_type + ".");
+  }
   switch (job.command_type) {
     case "pwd":
       return { exitCode: 0, output: WORKSPACE, errorText: "" };
@@ -396,6 +559,30 @@ async function execute(job) {
       return await shizukuStorageCheck();
     case "install_apk":
       return await installApk(args);
+    case "terminal_run":
+      return await terminal.run(args);
+    case "terminal_start":
+      return { exitCode: 0, output: JSON.stringify(terminal.start(args), null, 2), errorText: "" };
+    case "terminal_input":
+      return { exitCode: 0, output: JSON.stringify(terminal.input(args), null, 2), errorText: "" };
+    case "terminal_read":
+      return { exitCode: 0, output: JSON.stringify(terminal.read(args), null, 2), errorText: "" };
+    case "terminal_stop":
+      return { exitCode: 0, output: JSON.stringify(terminal.stop(args), null, 2), errorText: "" };
+    case "shizuku_file_list":
+      return await shizukuFiles.list(args);
+    case "shizuku_file_mkdir":
+      return await shizukuFiles.mkdir(args);
+    case "shizuku_file_copy":
+      return await shizukuFiles.copy(args);
+    case "shizuku_file_move":
+      return await shizukuFiles.move(args);
+    case "shizuku_file_delete":
+      return await shizukuFiles.remove(args);
+    case "file_upload":
+      return await uploadWorkspaceFile(args);
+    case "brave_accessibility":
+      return await braveAccessibility(args);
     case "git_fetch_main":
       return await run("git", ["fetch", "origin", "main"], 120000);
     case "node_check_bridge":
@@ -433,42 +620,128 @@ async function execute(job) {
   }
 }
 
+async function runBraveCli(argv) {
+  const command = String(argv[0] || "");
+  let body;
+
+  if (command === "snapshot" || command === "back") {
+    if (argv.length !== 1) throw new Error("Usage: node tools/termux-bridge/bridge.mjs brave snapshot|back");
+    body = { action: "enqueue_brave", brave_action: command };
+  } else if (command === "open_url") {
+    if (argv.length !== 2 || argv[1] !== "https://www.reg.ru/") {
+      throw new Error("Only this exact URL is allowed: https://www.reg.ru/");
+    }
+    body = { action: "enqueue_brave", brave_action: "open_url", url: "https://www.reg.ru/" };
+  } else {
+    throw new Error("Allowed commands: brave snapshot, brave back, brave open_url https://www.reg.ru/");
+  }
+
+  const queued = await request(body);
+  const jobId = queued?.job_id ?? queued?.job?.id;
+  if (!/^[0-9a-f-]{36}$/i.test(String(jobId || ""))) {
+    throw new Error("Server did not return a valid queued Brave job.");
+  }
+  console.log("Queued Brave command:", jobId);
+
+  const deadline = Date.now() + 90000;
+  while (Date.now() < deadline) {
+    const status = await requestOnce({ action: "brave_status", job_id: jobId });
+    const job = status?.job;
+    if (!job) throw new Error("Server did not return the Brave job status.");
+    if (job.status === "succeeded" || job.status === "failed") {
+      if (job.output) console.log(job.output);
+      if (job.error_text) console.error(job.error_text);
+      process.exitCode = Number.isInteger(job.exit_code) ? job.exit_code : (job.status === "succeeded" ? 0 : 1);
+      return;
+    }
+    if (job.status !== "queued" && job.status !== "running") {
+      throw new Error("Unexpected Brave job status: " + String(job.status));
+    }
+    await sleep(1500);
+  }
+  throw new Error("Timed out waiting for the phone worker. Keep the normal bridge worker running in another Termux session; job " + jobId + " may still finish.");
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs[0] === "brave") {
+  try {
+    await runBraveCli(cliArgs.slice(1));
+  } catch (error) {
+    console.error("Brave command failed:", String(error?.message || error));
+    process.exitCode = 1;
+  }
+} else {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: pwd, list_files, file_read (bounded text/code only), apk_inventory, shizuku_storage_check (read-only Shizuku listing), apk_inspect, install_apk (com.mycontacts only; Shizuku PackageManager update), git_status, git_log, git_diff_stat, git_fetch_main, node_check_bridge, node_check_apk_inspect.");
+console.log("Automatic commands: existing diagnostics; terminal_run/start/input/read/stop; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
 console.log("Gradle commands require typing YES in this terminal.");
-console.log("No arbitrary shell command is accepted.");
+console.log("Terminal commands run as the ordinary Termux app user inside WORKSPACE, with bounded runtime/output and filtered environment. No root or automatic Shizuku elevation is used.");
 
 process.on("SIGINT", () => { stopping = true; });
 process.on("SIGTERM", () => { stopping = true; });
 
+let bridgeState = await loadBridgeState();
 while (!stopping) {
   try {
-    const response = await request({ action: "claim" });
-    const job = response.job;
-    if (!job) {
-      await sleep(POLL_MS);
+    const claimedThisCycle = !bridgeState.pending;
+    if (!bridgeState.pending) {
+      const response = await request({ action: "claim", claim_token: bridgeState.claimToken });
+      if (!response.job) {
+        bridgeState.claimToken = randomUUID();
+        await saveBridgeState(bridgeState);
+        await sleep(POLL_MS);
+        continue;
+      }
+      bridgeState.pending = { job: response.job, phase: "claimed" };
+      await saveBridgeState(bridgeState);
+    }
+    const pending = bridgeState.pending;
+    if (pending.phase === "executing" || (pending.phase === "claimed" && !claimedThisCycle)) {
+      pending.phase = "result";
+      pending.result = {
+        exitCode: 125, output: "",
+        errorText: "Bridge restarted while this job was in progress. Its execution outcome is unknown; the command was not automatically re-run.",
+      };
+      await saveBridgeState(bridgeState);
+    }
+    if (pending.phase === "result" && pending.result) {
+      await request({
+        action: "complete", job_id: pending.job.id,
+        output: String(pending.result.output || "").slice(0, MAX_OUTPUT),
+        error_text: String(pending.result.errorText || "").slice(0, 8000),
+        exit_code: Number.isInteger(pending.result.exitCode) ? pending.result.exitCode : 1,
+      });
+      console.log("Finished " + pending.job.id + " with exit code " + pending.result.exitCode);
+      bridgeState.pending = null;
+      bridgeState.claimToken = randomUUID();
+      await saveBridgeState(bridgeState);
       continue;
     }
-    console.log(`Received ${job.command_type} (${job.id})`);
-    let result;
-    try {
-      result = await execute(job);
-    } catch (error) {
-      result = { exitCode: 1, output: "", errorText: String(error?.message || error).slice(0, 8000) };
+    if (pending.phase === "claimed") {
+      pending.phase = "executing";
+      await saveBridgeState(bridgeState);
+      let result;
+      try {
+        console.log("Received " + pending.job.command_type + " (" + pending.job.id + ")");
+        result = await execute(pending.job);
+      } catch (error) {
+        result = { exitCode: 1, output: "", errorText: String(error?.message || error).slice(0, 8000) };
+      }
+      pending.result = {
+        exitCode: Number.isInteger(result.exitCode) ? result.exitCode : 1,
+        output: String(result.output || "").slice(0, MAX_OUTPUT),
+        errorText: String(result.errorText || "").slice(0, 8000),
+      };
+      pending.phase = "result";
+      await saveBridgeState(bridgeState);
     }
-    await request({
-      action: "complete",
-      job_id: job.id,
-      output: String(result.output || "").slice(0, MAX_OUTPUT),
-      error_text: String(result.errorText || "").slice(0, 8000),
-      exit_code: Number.isInteger(result.exitCode) ? result.exitCode : 1,
-    });
-    console.log(`Finished ${job.id} with exit code ${result.exitCode}`);
   } catch (error) {
     console.error("Bridge cycle failed:", String(error?.message || error));
     await sleep(POLL_MS);
   }
 }
+terminal.closeAll();
 console.log("Termux bridge stopped.");
+
+}

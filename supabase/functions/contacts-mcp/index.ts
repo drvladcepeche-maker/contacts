@@ -17,6 +17,7 @@ const tools = [
   { name: "contacts_list_v2", description: "List cached contacts filtered by account_name/account_type. Use this refreshed tool when filtering contacts by Android account.", inputSchema: { type: "object", properties: { device_id: { type: "string", description: "Device ID returned by contacts_status" }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_search_v2", description: "Search cached contacts by name, phone, or email, optionally restricted to one Android account source.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, query: { type: "string", minLength: 1 }, account_name: { type: "string", description: "Exact account name or label, case-insensitive" }, account_type: { type: "string", description: "Exact Android account type, case-insensitive" }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000, description: "Zero-based pagination offset; request successive pages." } }, required: ["device_id", "query"], additionalProperties: false } },
   { name: "contacts_request_change", description: "Queue a contact create/update/delete/merge/move request for Android. The phone displays a confirmation prompt before any write is applied. Delete, merge and move additionally require confirmed_by_user=true in this tool call.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, operation: { type: "string", enum: ["create", "update", "delete", "merge", "move"] }, id: { type: "integer", description: "Local Android contact ID for update/delete" }, name: { type: "string" }, phone: { type: "string" }, ids: { type: "array", items: { type: "integer" }, minItems: 2 }, source_account_name: { type: "string" }, source_account_type: { type: "string" }, target_account_name: { type: "string" }, target_account_type: { type: "string" }, confirmed_by_user: { type: "boolean", description: "Must be true for delete or merge when the user explicitly authorized the operation." } }, required: ["device_id", "operation"], additionalProperties: false } },
+  { name: "contacts_request_diagnostics", description: "Request a read-only live diagnostics snapshot from the paired Android app: APK version/build, Android device and permissions, bridge/service state, Telegram matching progress, recent redacted app logs and errors. The app can answer while minimized if its foreground bridge service is running.", inputSchema: { type: "object", properties: { device_id: { type: "string" } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_command_status", description: "Check whether a queued Android contact command has completed.", inputSchema: { type: "object", properties: { command_id: { type: "string" } }, required: ["command_id"], additionalProperties: false } },
   { name: "contacts_identifier_report", description: "Read classified identifiers and likely misplaced values for one paired device. This is evidence only; it never edits the Android contact.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, detected_type: { type: "string" }, misfiled_only: { type: "boolean" }, resolution_status: { type: "string", enum: ["pending","accepted","rejected","corrected"] }, limit: { type: "integer", minimum: 1, maximum: 500 }, offset: { type: "integer", minimum: 0, maximum: 10000 } }, required: ["device_id"], additionalProperties: false } },
   { name: "contacts_identifier_review", description: "Record a review decision for one identifier observation. This updates only the evidence ledger, never the source contact.", inputSchema: { type: "object", properties: { device_id: { type: "string" }, observation_id: { type: "string" }, resolution_status: { type: "string", enum: ["accepted","rejected","corrected"] }, corrected_value: { type: "string" }, review_note: { type: "string" } }, required: ["device_id","observation_id","resolution_status"], additionalProperties: false } },
@@ -127,15 +128,29 @@ Deno.serve(async (req: Request) => {
 
     if (name === "contacts_status") {
       let devicesQuery = db.from("contact_bridge_devices")
-        .select("id, device_name, created_at, last_seen_at, revoked_at").is("revoked_at", null);
+        .select("id, device_name, created_at, last_seen_at, revoked_at, app_package_name, app_version_name, app_version_code, app_build_type, app_reported_at").is("revoked_at", null);
       if (!isAdminToken) devicesQuery = ownedDeviceIds.length ? devicesQuery.in("id", ownedDeviceIds) : devicesQuery.eq("id", "00000000-0000-0000-0000-000000000000");
       const { data: devices, error } = await devicesQuery;
       if (error) throw error;
-      let countQuery = db.from("contact_bridge_snapshots").select("id", { count: "exact", head: true });
-      if (!isAdminToken) countQuery = ownedDeviceIds.length ? countQuery.in("device_id", ownedDeviceIds) : countQuery.eq("device_id", "00000000-0000-0000-0000-000000000000");
-      const { count, error: countError } = await countQuery;
-      if (countError) throw countError;
-      return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: count ?? 0 }));
+      const activeDeviceIds = (devices ?? []).map((device: any) => String(device.id));
+      let cachedContactCount = 0;
+      if (activeDeviceIds.length) {
+        const { data: manifests, error: manifestCountError } = await db
+          .from("contact_bridge_sync_manifests")
+          .select("device_id, contact_count, created_at")
+          .in("device_id", activeDeviceIds)
+          .order("created_at", { ascending: false });
+        if (manifestCountError) throw manifestCountError;
+        const latestCountByDevice = new Map<string, number>();
+        for (const manifest of manifests ?? []) {
+          const deviceId = String(manifest.device_id);
+          if (!latestCountByDevice.has(deviceId)) {
+            latestCountByDevice.set(deviceId, Math.max(0, Number(manifest.contact_count) || 0));
+          }
+        }
+        cachedContactCount = Array.from(latestCountByDevice.values()).reduce((sum, count) => sum + count, 0);
+      }
+      return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: cachedContactCount }));
     }
 
     if (name === "contacts_list" || name === "contacts_search" || name === "contacts_list_v2" || name === "contacts_search_v2") {
@@ -145,18 +160,50 @@ Deno.serve(async (req: Request) => {
       const offset = Math.min(Math.max(Number(args.offset ?? 0), 0), 10000);
       const limit = Math.min(Math.max(Number(args.limit ?? 500), 1), 500);
       let rows: any[] = [];
-      // Scan before filtering so account-scoped pagination covers the full device cache,
-      // rather than only filtering the requested page.
-      for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
-        const { data: page, error } = await db.from("contact_bridge_snapshots")
-          .select("local_contact_id, contact_data, synced_at, device_id")
-          .eq("device_id", deviceId)
-          .order("synced_at", { ascending: false })
-          .range(scanOffset, scanOffset + 499);
-        if (error) throw error;
-        const batch = page ?? [];
-        rows.push(...batch);
-        if (batch.length < 500) break;
+      // The latest completed full-sync manifest is the source of truth for the
+      // current address book. Never expose stale snapshots left by older syncs.
+      const { data: manifest, error: manifestError } = await db
+        .from("contact_bridge_sync_manifests")
+        .select("sync_id, local_contact_ids, contact_count, created_at")
+        .eq("device_id", deviceId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (manifestError) throw manifestError;
+      if (!manifest) {
+        return response(id, toolResult({
+          contacts: [], returned: 0, offset, limit, has_more: false, total_matching: 0,
+          manifest_required: true,
+          note: "No completed full-sync manifest exists for this device. Run a full Android sync first."
+        }));
+      }
+      const manifestIds = Array.isArray(manifest.local_contact_ids)
+        ? Array.from(new Set(manifest.local_contact_ids.map((value: unknown) => String(value))
+            .filter((value: string) => /^[1-9]\d*$/.test(value))))
+        : [];
+      if (manifestIds.length !== Number(manifest.contact_count)) {
+        throw new Error("Latest contact sync manifest is incomplete or inconsistent; refusing to return cached contacts.");
+      }
+      const idBatches: string[][] = [];
+      for (let i = 0; i < manifestIds.length; i += 400) idBatches.push(manifestIds.slice(i, i + 400));
+      // Bound concurrency and query only IDs in the latest manifest. This avoids
+      // both an unbounded table scan and returning historical contacts.
+      for (let batchOffset = 0; batchOffset < idBatches.length; batchOffset += 4) {
+        const pages = await Promise.all(idBatches.slice(batchOffset, batchOffset + 4).map(async (ids) => {
+          const { data, error } = await db.from("contact_bridge_snapshots")
+            .select("local_contact_id, contact_data, synced_at, device_id")
+            .eq("device_id", deviceId)
+            .in("local_contact_id", ids);
+          if (error) throw error;
+          return data ?? [];
+        }));
+        rows.push(...pages.flat());
+      }
+      rows.sort((a, b) => String(b.synced_at ?? "").localeCompare(String(a.synced_at ?? "")));
+      const returnedIds = new Set(rows.map((row: any) => String(row.local_contact_id)));
+      if (returnedIds.size !== manifestIds.length) {
+        const missingCount = Math.max(0, manifestIds.length - returnedIds.size);
+        throw new Error(`Latest sync manifest references ${missingCount} contacts missing from server snapshots; refusing to return partial results.`);
       }
       if (name === "contacts_search" || name === "contacts_search_v2") {
         const q = String(args.query ?? "").trim().toLocaleLowerCase();
@@ -189,7 +236,7 @@ Deno.serve(async (req: Request) => {
         });
       }
       const pageRows = rows.slice(offset, offset + limit);
-      return response(id, toolResult({ contacts: pageRows.map((r: any) => ({ ...r.contact_data, local_contact_id: r.local_contact_id, synced_at: r.synced_at })), returned: pageRows.length, offset, limit, has_more: offset + pageRows.length < rows.length, total_matching: rows.length, account_filter: accountFilterActive ? { account_name: accountName || null, account_type: accountType || null } : null }));
+      return response(id, toolResult({ contacts: pageRows.map((r: any) => ({ ...r.contact_data, local_contact_id: r.local_contact_id, synced_at: r.synced_at })), returned: pageRows.length, offset, limit, has_more: offset + pageRows.length < rows.length, total_matching: rows.length, account_filter: accountFilterActive ? { account_name: accountName || null, account_type: accountType || null } : null, source_manifest: manifest.sync_id, source_manifest_created_at: manifest.created_at, source_manifest_contact_count: manifest.contact_count }));
     }
 
 
@@ -325,6 +372,21 @@ Deno.serve(async (req: Request) => {
         .select("id, device_id, action, status, created_at").single();
       if (error) throw error;
       return response(id, toolResult({ queued: true, command: data, note: "Keep the Android app open. The phone will request confirmation before applying changes." }));
+    }
+
+    if (name === "contacts_request_diagnostics") {
+      const deviceId = String(args.device_id ?? "");
+      if (!deviceId) return response(id, toolResult({ error: "device_id required" }, true));
+      if (!canAccessDevice(deviceId)) return denied(id);
+      const { data, error } = await db.from("contact_bridge_commands")
+        .insert({ device_id: deviceId, action: "get_diagnostics", payload: {} })
+        .select("id, device_id, action, status, created_at").single();
+      if (error) throw error;
+      return response(id, toolResult({
+        queued: true,
+        command: data,
+        note: "The Android foreground bridge service will return a redacted diagnostics snapshot. Read the result with contacts_command_status using this command_id."
+      }));
     }
 
     if (name === "contacts_command_status") {

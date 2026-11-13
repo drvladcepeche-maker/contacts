@@ -99,17 +99,43 @@ function resolvedUserId(resolved: any): string | null {
   return users.length === 1 && users[0]?.id !== undefined ? String(users[0].id) : null;
 }
 function describeSession(value: string): string {
-  const length = value.length;
-  const hasWhitespace = /\s/.test(value);
-  const printable = /^[A-Za-z0-9+/=_-]+$/.test(value);
-  return `len=${length} whitespace=${hasWhitespace} charset_ok=${printable}`;
+  // Never log any portion or derived fingerprint of the reusable session secret.
+  return `len=${value.length}`;
 }
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const { error } = await supabase.from("telegram_match_jobs")
     .update({ ...patch, updated_at: new Date().toISOString() }).eq("id", jobId);
   if (error) throw error;
 }
+
+const currentManifestCache = new Map<string, { loadedAt: number; ids: Set<string> }>();
+async function isCurrentManifestContact(deviceId: string, localContactId: string): Promise<boolean> {
+  const cached = currentManifestCache.get(deviceId);
+  if (cached && Date.now() - cached.loadedAt < 30_000) return cached.ids.has(localContactId);
+
+  const { data: manifest, error } = await supabase
+    .from("contact_bridge_sync_manifests")
+    .select("local_contact_ids, contact_count")
+    .eq("device_id", deviceId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  const ids = Array.isArray(manifest?.local_contact_ids)
+    ? new Set<string>(manifest.local_contact_ids.map((value: unknown) => String(value)))
+    : new Set<string>();
+  if (manifest && ids.size !== Number(manifest.contact_count)) {
+    throw new Error("Latest contact sync manifest is incomplete or inconsistent; refusing stale Telegram writes.");
+  }
+  currentManifestCache.set(deviceId, { loadedAt: Date.now(), ids });
+  return ids.has(localContactId);
+}
+
 async function saveContactResult(candidate: PhoneCandidate, result: MatchResult) {
+  if (!(await isCurrentManifestContact(candidate.device_id, candidate.local_contact_id))) {
+    console.warn("Skipping Telegram result for a contact outside the latest completed sync manifest.");
+    return;
+  }
   const { data: row, error: readError } = await supabase.from("contact_bridge_snapshots")
     .select("contact_data")
     .eq("device_id", candidate.device_id)
@@ -138,7 +164,10 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
     prior.telegram_username,
     result.username,
   );
-  const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
+  // A transient/error result is not evidence that a previously confirmed
+  // Telegram match became invalid. Preserve confirmed fields for both statuses.
+  const preserveExistingMatch = alreadyMatched &&
+    (result.status === "not_resolved" || result.status === "error");
   const next: Record<string, unknown> = {
     ...prior,
     telegram_match_status: preserveExistingMatch ? existingStatus : result.status,
@@ -233,7 +262,7 @@ async function processJob(job: Job) {
         checked_at: checkedAt,
       };
       results.push(invalid);
-      await updateJob(job.id, { results, checked: results.length, matched: results.filter(x => x.status === "matched").length, errors: results.filter(x => x.status === "error").length });
+      await updateJob(job.id, { results, checked: results.length, matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length, errors: results.filter(x => x.status === "error").length });
       continue;
     }
 
@@ -310,13 +339,21 @@ async function processJob(job: Job) {
 async function claimJob(): Promise<Job | null> {
   console.log("Queue poll: requesting claim_telegram_match_job RPC");
   const rpc = supabase.rpc("claim_telegram_match_job");
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")), 20000);
+    timeoutHandle = setTimeout(
+      () => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")),
+      20000,
+    );
   });
-  const { data, error } = await Promise.race([rpc, timeout]);
-  if (error) throw error;
-  console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
-  return data ? data as Job : null;
+  try {
+    const { data, error } = await Promise.race([rpc, timeout]);
+    if (error) throw error;
+    console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
+    return data ? data as Job : null;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
 }
 async function ensureTelegramConnected() {
   if (telegram && ready) return;
