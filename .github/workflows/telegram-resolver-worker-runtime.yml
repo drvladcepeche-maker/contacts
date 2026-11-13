@@ -55,7 +55,7 @@ jobs:
         run: npm run build
 
   check-ready:
-    if: vars.TELEGRAM_RESOLVER_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.TELEGRAM_RESOLVER_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -101,7 +101,7 @@ jobs:
 
   process-queue:
     needs: check-ready
-    if: vars.TELEGRAM_RESOLVER_ENABLED == 'true' && needs.check-ready.outputs.ready == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.TELEGRAM_RESOLVER_ENABLED == 'true' && needs.check-ready.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
