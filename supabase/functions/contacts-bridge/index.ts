@@ -28,11 +28,17 @@ function stableJson(value: unknown): string {
 function contactCore(value: unknown): Record<string, unknown> {
   const data = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  // Compare the complete user-visible contact payload. Exclude only the local
-  // record ID and account metadata: those necessarily differ across accounts.
-  // Telegram fields and arbitrary typed Data values remain part of exact equality.
+  // Telegram resolver fields are server-managed enrichment, not part of the
+  // Android-authored contact snapshot. They are merged separately below and must
+  // not create false conflicts when the phone syncs a snapshot from before a
+  // queued Telegram update was applied.
   return Object.fromEntries(Object.entries(data).filter(([key]) =>
-    key !== "id" && key !== "accounts"
+    key !== "id" &&
+    key !== "accounts" &&
+    key !== "telegram_id" &&
+    key !== "telegram_username" &&
+    key !== "telegram" &&
+    !key.startsWith("telegram_match_")
   ));
 }
 
