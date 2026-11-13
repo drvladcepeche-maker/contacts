@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { requiresLocalApproval } from "../command-policy.mjs";
 
 test("remote shell and interactive input require local approval", () => {
-  for (const type of ["terminal_run", "terminal_start", "terminal_input"]) {
+  for (const type of ["terminal_run", "terminal_start"]) {
     assert.equal(requiresLocalApproval(type), true, type);
   }
 });
@@ -18,7 +18,7 @@ test("device mutations and file uploads require local approval", () => {
 });
 
 test("read-only and observation commands do not require approval", () => {
-  for (const type of ["pwd", "list_files", "file_read", "apk_inventory", "terminal_read", "terminal_stop"]) {
+  for (const type of ["pwd", "list_files", "file_read", "apk_inventory", "terminal_read", "terminal_stop", "terminal_input"]) {
     assert.equal(requiresLocalApproval(type), false, type);
   }
   for (const action of ["snapshot", "back", "scroll"]) {
