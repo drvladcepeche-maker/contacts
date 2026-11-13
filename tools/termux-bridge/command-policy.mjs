@@ -1,7 +1,6 @@
 const LOCAL_APPROVAL_COMMANDS = new Set([
   "terminal_run",
   "terminal_start",
-  "terminal_input",
   "install_apk",
   "file_upload",
   "shizuku_file_mkdir",
