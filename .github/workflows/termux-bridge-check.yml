@@ -14,6 +14,9 @@ on:
       - "supabase/functions/termux-bridge/**"
       - "supabase/migrations/*termux*"
 
+permissions:
+  contents: read
+
 jobs:
   source-checks:
     runs-on: ubuntu-latest
