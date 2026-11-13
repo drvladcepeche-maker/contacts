@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Bearer credentials and external API keys must never leave this device in backups. -->
+    <exclude domain="sharedpref" path="contacts_bridge.xml" />
+    <exclude domain="sharedpref" path="ai.xml" />
+
+    <!-- Telegram auth material is device-bound and must be re-authorized after restore. -->
+    <exclude domain="sharedpref" path="telegram_tdlib.xml" />
+    <exclude domain="file" path="telegram-tdlib/" />
+
+    <!-- Pending remote commands and diagnostic records may contain personal data. -->
+    <exclude domain="sharedpref" path="bridge_service_queue.xml" />
+    <exclude domain="sharedpref" path="mycontacts_diagnostics.xml" />
+    <exclude domain="file" path="mycontacts.log" />
+    <exclude domain="file" path="mycontacts-old.log" />
+</full-backup-content>
