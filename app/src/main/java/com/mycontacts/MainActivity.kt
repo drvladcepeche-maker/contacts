@@ -232,22 +232,26 @@ class MainActivity : Activity() {
                 android.util.Log.e("MainActivity", "Could not read pending command queue", e)
                 JSONArray()
             }
-        for (i in 0 until pending.length()) {
-            val command = pending.optJSONObject(i) ?: continue
-            val id = command.optString("id")
-            if (id.isBlank()) continue
-            // Read-only diagnostics and remote config refresh are owned by BridgeNotificationService.
-            // Never let the UI queue dispatcher race the foreground service.
-            if (command.optString("action") == "get_diagnostics" ||
-                command.optString("action") == "refresh_remote_config") continue
-            val alreadyHandling = synchronized(activeCommandIds) { !activeCommandIds.add(id) }
-            if (alreadyHandling) continue
-            try {
-                handleBridgeCommand(command)
-            } catch (e: Exception) {
-                synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-                android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
-            }
+        // Process one mutating command at a time: each write may open a confirmation dialog.
+        // Diagnostics and signed-config refresh are owned by BridgeNotificationService.
+        val command = (0 until pending.length())
+            .asSequence()
+            .mapNotNull { pending.optJSONObject(it) }
+            .firstOrNull {
+                it.optString("id").isNotBlank() &&
+                    it.optString("action") !in setOf("get_diagnostics", "refresh_remote_config")
+            } ?: return
+        val id = command.optString("id")
+        val canHandle = synchronized(activeCommandIds) {
+            if (activeCommandIds.isNotEmpty()) false else activeCommandIds.add(id)
+        }
+        if (!canHandle) return
+        try {
+            handleBridgeCommand(command)
+        } catch (e: Exception) {
+            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+            android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+            AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
         }
     }
 
@@ -461,20 +465,38 @@ class MainActivity : Activity() {
             }
             "update_telegram_fields" -> {
                 bg {
-                    try {
-                        val contactId = payload.optLong("id", -1)
-                        require(contactId > 0) { "Некорректный ID контакта" }
-                        val telegramId = payload.optString("telegram_id", "")
-                        val username = payload.optString("telegram_username", "")
-                        val contact = repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
-                            ?: throw IllegalStateException("Контакт не найден")
-                        val target = writableAccountFor(contact)
-                            ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
-                        repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
-                        completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
-                        runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
-                    } catch (e: Exception) {
-                        try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                    val contactId = payload.optLong("id", -1)
+                    val telegramId = payload.optString("telegram_id", "")
+                    val username = payload.optString("telegram_username", "")
+                    val contact = if (contactId > 0) {
+                        repo.loadAll(includeFields = false).firstOrNull { it.id == contactId }
+                    } else null
+                    runOnUiThread {
+                        if (contact == null) {
+                            bg { try { completeBridgeCommand(id, error = "Контакт не найден") } catch (_: Exception) {} }
+                        } else {
+                            AlertDialog.Builder(this).setTitle("Обновить Telegram-данные контакта?")
+                                .setMessage(
+                                    "Контакт: ${contact.name}\nTelegram ID: ${telegramId.ifBlank { "не указан" }}\nИмя пользователя: ${username.ifBlank { "не указан" }}"
+                                )
+                                .setPositiveButton("Разрешить") { _, _ ->
+                                    bg {
+                                        try {
+                                            val target = writableAccountFor(contact)
+                                                ?: throw IllegalStateException("Нет аккаунта контакта с разрешённой записью")
+                                            repo.updateTelegramLookupInAccount(contactId, telegramId, username, target)
+                                            completeBridgeCommand(id, JSONObject().put("ok", true).put("contact_id", contactId))
+                                            runOnUiThread { refresh(); toast("Telegram-данные контакта обновлены") }
+                                        } catch (e: Exception) {
+                                            try { completeBridgeCommand(id, error = e.message ?: "Не удалось обновить Telegram-поля") } catch (_: Exception) {}
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Отклонить") { _, _ ->
+                                    bg { try { completeBridgeCommand(id, error = "Отклонено пользователем на телефоне") } catch (_: Exception) {} }
+                                }
+                                .show()
+                        }
                     }
                 }
             }
