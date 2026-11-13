@@ -99,10 +99,8 @@ function resolvedUserId(resolved: any): string | null {
   return users.length === 1 && users[0]?.id !== undefined ? String(users[0].id) : null;
 }
 function describeSession(value: string): string {
-  const length = value.length;
-  const hasWhitespace = /\s/.test(value);
-  const printable = /^[A-Za-z0-9+/=_-]+$/.test(value);
-  return `len=${length} whitespace=${hasWhitespace} charset_ok=${printable}`;
+  // Never log any portion or derived fingerprint of the reusable session secret.
+  return `len=${value.length}`;
 }
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const { error } = await supabase.from("telegram_match_jobs")
@@ -138,7 +136,10 @@ async function saveContactResult(candidate: PhoneCandidate, result: MatchResult)
     prior.telegram_username,
     result.username,
   );
-  const preserveExistingMatch = alreadyMatched && result.status === "not_resolved";
+  // A transient/error result is not evidence that a previously confirmed
+  // Telegram match became invalid. Preserve confirmed fields for both statuses.
+  const preserveExistingMatch = alreadyMatched &&
+    (result.status === "not_resolved" || result.status === "error");
   const next: Record<string, unknown> = {
     ...prior,
     telegram_match_status: preserveExistingMatch ? existingStatus : result.status,
@@ -233,7 +234,7 @@ async function processJob(job: Job) {
         checked_at: checkedAt,
       };
       results.push(invalid);
-      await updateJob(job.id, { results, checked: results.length, matched: results.filter(x => x.status === "matched").length, errors: results.filter(x => x.status === "error").length });
+      await updateJob(job.id, { results, checked: results.length, matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length, errors: results.filter(x => x.status === "error").length });
       continue;
     }
 
@@ -310,13 +311,21 @@ async function processJob(job: Job) {
 async function claimJob(): Promise<Job | null> {
   console.log("Queue poll: requesting claim_telegram_match_job RPC");
   const rpc = supabase.rpc("claim_telegram_match_job");
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")), 20000);
+    timeoutHandle = setTimeout(
+      () => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")),
+      20000,
+    );
   });
-  const { data, error } = await Promise.race([rpc, timeout]);
-  if (error) throw error;
-  console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
-  return data ? data as Job : null;
+  try {
+    const { data, error } = await Promise.race([rpc, timeout]);
+    if (error) throw error;
+    console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
+    return data ? data as Job : null;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
 }
 async function ensureTelegramConnected() {
   if (telegram && ready) return;
