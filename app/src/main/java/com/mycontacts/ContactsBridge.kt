@@ -45,11 +45,15 @@ class ContactsBridge(context: Context) {
         require(token.isNotBlank()) { "Токен не указан" }
         // Report the installed package/version on every bridge request. This is
         // diagnostic metadata, not an authorization or signature-trust decision.
-        val requestBody = JSONObject(body.toString()).put("_client", JSONObject()
-            .put("package_name", BuildConfig.APPLICATION_ID)
-            .put("version_name", BuildConfig.VERSION_NAME)
-            .put("version_code", BuildConfig.VERSION_CODE)
-            .put("build_type", BuildConfig.BUILD_TYPE))
+        val requestBody = if (endpoint == BASE_URL) {
+            JSONObject(body.toString()).put("_client", JSONObject()
+                .put("package_name", BuildConfig.APPLICATION_ID)
+                .put("version_name", BuildConfig.VERSION_NAME)
+                .put("version_code", BuildConfig.VERSION_CODE)
+                .put("build_type", BuildConfig.BUILD_TYPE))
+        } else {
+            body
+        }
         val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
