@@ -155,4 +155,3 @@ jobs:
           else
             gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/report.md"
           fi
-          fi
