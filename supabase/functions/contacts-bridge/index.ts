@@ -79,6 +79,27 @@ function mergeContactData(previousValue: unknown, incomingValue: unknown): Recor
   return merged;
 }
 
+function clientAppMetadata(body: Record<string, unknown>): Record<string, unknown> {
+  const raw = body._client && typeof body._client === "object" && !Array.isArray(body._client)
+    ? body._client as Record<string, unknown>
+    : {};
+  const metadata: Record<string, unknown> = {};
+  const packageName = String(raw.package_name ?? "").trim();
+  const versionName = String(raw.version_name ?? "").trim();
+  const buildType = String(raw.build_type ?? "").trim();
+  const versionCode = Number(raw.version_code);
+  if (/^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$/.test(packageName) && packageName.length <= 200) {
+    metadata.app_package_name = packageName;
+  }
+  if (versionName && versionName.length <= 80) metadata.app_version_name = versionName;
+  if (Number.isSafeInteger(versionCode) && versionCode >= 0 && versionCode <= 2147483647) {
+    metadata.app_version_code = versionCode;
+  }
+  if (buildType && buildType.length <= 30) metadata.app_build_type = buildType;
+  if (Object.keys(metadata).length) metadata.app_reported_at = new Date().toISOString();
+  return metadata;
+}
+
 function phoneCandidates(data: Record<string, unknown>): string[] {
   const candidates = new Set<string>();
   const add = (value: unknown) => {
@@ -180,7 +201,7 @@ Deno.serve(async (req: Request) => {
     if (existingDevice) {
       const { data: updated, error: updateError } = await supabase
         .from("contact_bridge_devices")
-        .update({ token_hash: deviceTokenHash })
+        .update({ token_hash: deviceTokenHash, ...clientAppMetadata(body) })
         .eq("id", existingDevice.id)
         .is("revoked_at", null)
         .select("id, device_name, created_at")
@@ -191,7 +212,7 @@ Deno.serve(async (req: Request) => {
     } else {
       const { data: inserted, error: createError } = await supabase
         .from("contact_bridge_devices")
-        .insert({ device_name: deviceName, token_hash: deviceTokenHash })
+        .insert({ device_name: deviceName, token_hash: deviceTokenHash, ...clientAppMetadata(body) })
         .select("id, device_name, created_at")
         .single();
       if (createError) return json({ error: createError.message }, 500);
@@ -207,8 +228,9 @@ Deno.serve(async (req: Request) => {
   }
 
   if (role === "device") {
-    await supabase.from("contact_bridge_devices")
-      .update({ last_seen_at: new Date().toISOString() }).eq("id", deviceId);
+    const { error: deviceUpdateError } = await supabase.from("contact_bridge_devices")
+      .update({ last_seen_at: new Date().toISOString(), ...clientAppMetadata(body) }).eq("id", deviceId);
+    if (deviceUpdateError) return json({ error: deviceUpdateError.message }, 500);
 
     if (action === "record_sync_manifest") {
       const syncId = String(body.sync_id ?? "").trim();
