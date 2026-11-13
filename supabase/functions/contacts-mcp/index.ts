@@ -132,11 +132,25 @@ Deno.serve(async (req: Request) => {
       if (!isAdminToken) devicesQuery = ownedDeviceIds.length ? devicesQuery.in("id", ownedDeviceIds) : devicesQuery.eq("id", "00000000-0000-0000-0000-000000000000");
       const { data: devices, error } = await devicesQuery;
       if (error) throw error;
-      let countQuery = db.from("contact_bridge_snapshots").select("id", { count: "exact", head: true });
-      if (!isAdminToken) countQuery = ownedDeviceIds.length ? countQuery.in("device_id", ownedDeviceIds) : countQuery.eq("device_id", "00000000-0000-0000-0000-000000000000");
-      const { count, error: countError } = await countQuery;
-      if (countError) throw countError;
-      return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: count ?? 0 }));
+      const activeDeviceIds = (devices ?? []).map((device: any) => String(device.id));
+      let cachedContactCount = 0;
+      if (activeDeviceIds.length) {
+        const { data: manifests, error: manifestCountError } = await db
+          .from("contact_bridge_sync_manifests")
+          .select("device_id, contact_count, created_at")
+          .in("device_id", activeDeviceIds)
+          .order("created_at", { ascending: false });
+        if (manifestCountError) throw manifestCountError;
+        const latestCountByDevice = new Map<string, number>();
+        for (const manifest of manifests ?? []) {
+          const deviceId = String(manifest.device_id);
+          if (!latestCountByDevice.has(deviceId)) {
+            latestCountByDevice.set(deviceId, Math.max(0, Number(manifest.contact_count) || 0));
+          }
+        }
+        cachedContactCount = Array.from(latestCountByDevice.values()).reduce((sum, count) => sum + count, 0);
+      }
+      return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: cachedContactCount }));
     }
 
     if (name === "contacts_list" || name === "contacts_search" || name === "contacts_list_v2" || name === "contacts_search_v2") {
