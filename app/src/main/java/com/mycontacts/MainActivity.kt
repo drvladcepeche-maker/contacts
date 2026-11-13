@@ -313,7 +313,7 @@ class MainActivity : Activity() {
         } else {
             AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; reason=${error.take(500)}")
         }
-        AppLog.flush(this, force = true)
+        DiagnosticsSync.flush(this)
         // Persist the local result first. If this fails, the command must be
         // handled again rather than acknowledged as complete.
         try {
