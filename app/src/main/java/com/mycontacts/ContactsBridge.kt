@@ -9,16 +9,16 @@ import java.net.URL
 private class BridgeHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
 class ContactsBridge(context: Context) {
+    private val appContext = context.applicationContext
+
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
     }
 
-    private val prefs = context.getSharedPreferences("contacts_bridge", Context.MODE_PRIVATE)
-
-    fun token(): String = prefs.getString("device_token", "") ?: ""
-    fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
-    fun clearToken() { prefs.edit().remove("device_token").apply() }
+    fun token(): String = SecurePreferences.get(appContext, "contacts_bridge", "device_token")
+    fun saveToken(value: String) { SecurePreferences.put(appContext, "contacts_bridge", "device_token", value.trim()) }
+    fun clearToken() { SecurePreferences.remove(appContext, "contacts_bridge", "device_token") }
 
     private fun requestWithToken(token: String, body: JSONObject): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
