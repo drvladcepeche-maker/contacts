@@ -51,3 +51,8 @@ StringSession — полноценный секрет авторизованно
 The Android app records a full-sync manifest only after every contact batch succeeds. Contacts list/search tools use only the IDs in the latest completed manifest; older server snapshots remain archived and are not returned as current contacts. The device-authenticated `prune_contacts` action is available for explicit maintenance, but normal sync does not automatically delete historical snapshots.
 
 Удалённое изменение контакта обновляет только основной номер в выбранном аккаунте; дополнительные телефонные номера сохраняются. Удаление номера выполняется только при явно пустом значении поля телефона.
+
+
+## Android app identity reporting
+
+Every authenticated Android contacts-bridge request reports the installed package name, version name, version code, and build type. The bridge stores these values on the paired device record and exposes them through `contacts_status`. They are client-reported diagnostics, not an authentication factor; APK installation still requires matching package identity and signing certificate.
