@@ -27,6 +27,8 @@ coverage/
 *.keystore
 *.p12
 *.pfx
+*.pem
+*.key
 
 # Local diagnostic output
 *.log
