@@ -108,14 +108,20 @@ async function updateJob(jobId: string, patch: Record<string, unknown>) {
   if (error) throw error;
 }
 
-const currentManifestCache = new Map<string, { loadedAt: number; ids: Set<string> }>();
-async function isCurrentManifestContact(deviceId: string, localContactId: string): Promise<boolean> {
+type CurrentManifestCacheEntry = {
+  loadedAt: number;
+  ids: Set<string>;
+  createdAt: string | null;
+};
+const currentManifestCache = new Map<string, CurrentManifestCacheEntry>();
+
+async function getCurrentManifest(deviceId: string): Promise<CurrentManifestCacheEntry> {
   const cached = currentManifestCache.get(deviceId);
-  if (cached && Date.now() - cached.loadedAt < 30_000) return cached.ids.has(localContactId);
+  if (cached && Date.now() - cached.loadedAt < 30_000) return cached;
 
   const { data: manifest, error } = await supabase
     .from("contact_bridge_sync_manifests")
-    .select("local_contact_ids, contact_count")
+    .select("local_contact_ids, contact_count, created_at")
     .eq("device_id", deviceId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -127,10 +133,27 @@ async function isCurrentManifestContact(deviceId: string, localContactId: string
   if (manifest && ids.size !== Number(manifest.contact_count)) {
     throw new Error("Latest contact sync manifest is incomplete or inconsistent; refusing stale Telegram writes.");
   }
-  currentManifestCache.set(deviceId, { loadedAt: Date.now(), ids });
-  return ids.has(localContactId);
+  const entry: CurrentManifestCacheEntry = {
+    loadedAt: Date.now(),
+    ids,
+    createdAt: manifest?.created_at ? String(manifest.created_at) : null,
+  };
+  currentManifestCache.set(deviceId, entry);
+  return entry;
 }
 
+async function isCurrentManifestFresh(deviceId: string): Promise<boolean> {
+  const manifest = await getCurrentManifest(deviceId);
+  if (!manifest.createdAt) return false;
+  const createdAt = Date.parse(manifest.createdAt);
+  const ageMs = Date.now() - createdAt;
+  return Number.isFinite(createdAt) && ageMs >= -5 * 60_000 && ageMs <= 24 * 60 * 60_000;
+}
+
+async function isCurrentManifestContact(deviceId: string, localContactId: string): Promise<boolean> {
+  const manifest = await getCurrentManifest(deviceId);
+  return manifest.ids.has(localContactId);
+}
 async function saveContactResult(candidate: PhoneCandidate, result: MatchResult) {
   if (!(await isCurrentManifestContact(candidate.device_id, candidate.local_contact_id))) {
     console.warn("Skipping Telegram result for a contact outside the latest completed sync manifest.");
@@ -234,6 +257,28 @@ async function processJob(job: Job) {
   const candidates = Array.isArray(job.phones) ? job.phones : [];
   const results: MatchResult[] = Array.isArray(job.results) ? job.results : [];
   let lastRequestAt = job.last_request_at ?? null;
+
+  const deviceIds = Array.from(new Set(candidates
+    .map((candidate) => String(candidate?.device_id ?? ""))
+    .filter((value) => value.length > 0)));
+  for (const deviceId of deviceIds) {
+    let fresh = false;
+    try {
+      fresh = await isCurrentManifestFresh(deviceId);
+    } catch (error) {
+      console.error("Could not validate current Telegram contact manifest:", error instanceof Error ? error.message : String(error));
+    }
+    if (!fresh) {
+      const resumeAt = new Date(Date.now() + 15 * 60_000).toISOString();
+      await updateJob(job.id, {
+        status: "queued",
+        paused_until: resumeAt,
+        error_message: "Waiting for a fresh completed Android contact manifest (maximum age 24 hours).",
+      });
+      console.warn("Paused Telegram job until the device records a fresh completed contact manifest.");
+      return;
+    }
+  }
   const startIndex = results.length;
   let lookupsThisRun = 0;
   let staleSkippedSinceSave = 0;
