@@ -1,6 +1,8 @@
 name: Telegram Resolver Worker
 on:
   push:
+    branches:
+      - main
     paths:
       - '.github/workflows/telegram-resolver-worker-runtime.yml'
       - 'server/telegram-worker/src/**'
