@@ -205,9 +205,86 @@ Deno.serve(async (req: Request) => {
     await supabase.from("contact_bridge_devices")
       .update({ last_seen_at: new Date().toISOString() }).eq("id", deviceId);
 
+    if (action === "record_sync_manifest") {
+      const syncId = String(body.sync_id ?? "").trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(syncId)) {
+        return json({ error: "sync_id must be a UUID" }, 400);
+      }
+      const rawIds = Array.isArray(body.local_contact_ids) ? body.local_contact_ids : null;
+      if (!rawIds) return json({ error: "local_contact_ids must be an array" }, 400);
+      if (rawIds.length > 25000) return json({ error: "Sync manifest exceeds the 25000 contact safety limit" }, 413);
+
+      const normalizedIds: string[] = [];
+      for (const value of rawIds) {
+        if (typeof value !== "string" || !/^[1-9]\d*$/.test(value.trim())) {
+          return json({ error: "local_contact_ids must contain positive Android contact IDs as strings" }, 400);
+        }
+        normalizedIds.push(value.trim());
+      }
+      const localContactIds = Array.from(new Set(normalizedIds));
+      const rawSummary = body.sync_summary && typeof body.sync_summary === "object" && !Array.isArray(body.sync_summary)
+        ? body.sync_summary as Record<string, unknown>
+        : {};
+      const safeCount = (value: unknown, fallback: number) => {
+        const parsed = Number(value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
+      };
+      const syncSummary = {
+        attempted: safeCount(rawSummary.attempted, localContactIds.length),
+        unique_contacts: safeCount(rawSummary.unique_contacts, localContactIds.length),
+        inserted: safeCount(rawSummary.inserted, 0),
+        updated_existing: safeCount(rawSummary.updated_existing, 0),
+        skipped_existing: safeCount(rawSummary.skipped_existing, 0),
+        conflicts: safeCount(rawSummary.conflicts, 0),
+        duplicates: safeCount(rawSummary.duplicates, 0),
+      };
+      const rawConflictDetails = Array.isArray(body.conflict_details) ? body.conflict_details : [];
+      if (rawConflictDetails.length > 25000) {
+        return json({ error: "Conflict report exceeds the 25000 item safety limit" }, 413);
+      }
+      const conflictDetails: Array<{ id: string; fields: string[] }> = [];
+      for (const item of rawConflictDetails) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return json({ error: "Each conflict detail must be an object" }, 400);
+        }
+        const detail = item as Record<string, unknown>;
+        const id = typeof detail.id === "string" ? detail.id.trim() : "";
+        if (!/^[1-9]\d*$/.test(id)) {
+          return json({ error: "Conflict IDs must be positive Android contact IDs" }, 400);
+        }
+        if (!Array.isArray(detail.fields) || detail.fields.length > 64 ||
+            detail.fields.some((field) => typeof field !== "string" || !field.trim())) {
+          return json({ error: "Conflict fields must be an array of non-empty strings (max 64)" }, 400);
+        }
+        const fields = Array.from(new Set((detail.fields as string[])
+          .map((field) => field.trim().slice(0, 100)))).sort();
+        conflictDetails.push({ id, fields });
+      }
+
+      const { data: manifest, error: manifestError } = await supabase
+        .from("contact_bridge_sync_manifests")
+        .upsert({
+          device_id: deviceId,
+          sync_id: syncId,
+          local_contact_ids: localContactIds,
+          contact_count: localContactIds.length,
+          sync_summary: syncSummary,
+          conflict_details: conflictDetails,
+        }, { onConflict: "device_id,sync_id" })
+        .select("sync_id, contact_count, created_at")
+        .single();
+      if (manifestError) return json({ error: manifestError.message }, 500);
+      return json({
+        recorded: true,
+        sync_id: manifest.sync_id,
+        contact_count: manifest.contact_count,
+        created_at: manifest.created_at,
+      });
+    }
+
     if (action === "upload_diagnostics") {
       const entries = Array.isArray(body.entries) ? body.entries.slice(0, 50) : [];
-      if (!entries.length) return json({ received: 0, inserted: 0 });
+      if (!entries.length) return json({ received: 0, inserted: 0, rejected: 0 });
       const allowedLevels = new Set(["INFO", "WARN", "ERROR", "FATAL"]);
       const rows = entries.flatMap((entry: any) => {
         if (!entry || typeof entry !== "object") return [];
@@ -231,14 +308,18 @@ Deno.serve(async (req: Request) => {
         .upsert(rows, { onConflict: "device_id,event_id", ignoreDuplicates: true })
         .select("event_id");
       if (error) return json({ error: "Diagnostics upload failed: " + error.message }, 500);
-      return json({ received: entries.length, inserted: data?.length ?? 0, rejected: entries.length - rows.length });
+      return json({
+        received: entries.length,
+        inserted: data?.length ?? 0,
+        rejected: entries.length - rows.length,
+      });
     }
 
     if (action === "sync_contacts") {
       const contacts = Array.isArray(body.contacts) ? body.contacts : [];
       if (contacts.length > 1000) return json({ error: "Maximum 1000 contacts per sync batch" }, 413);
       // Android Contacts._ID is the stable per-contact key for this device.
-      // Existing IDs are immutable here: skip them, and report data divergence.
+      // Existing IDs are merged with the incoming Android snapshot; report divergent fields.
       const byLocalId = new Map<string, Record<string, unknown>>();
       const conflicts: Array<{ id: string; fields: string[] }> = [];
       for (const item of contacts as any[]) {
@@ -489,10 +570,18 @@ Deno.serve(async (req: Request) => {
         .select("id, action, status, payload")
         .eq("id", commandId)
         .eq("device_id", deviceId)
-        .eq("status", "claimed")
         .maybeSingle();
       if (commandReadError) return json({ error: commandReadError.message }, 500);
-      if (!command) return json({ error: "Command not found or not claimed" }, 404);
+
+      // The client persists local outcomes before sending this ACK. Repeated ACKs
+      // are expected after a lost response, so terminal commands are idempotent.
+      if (!command) return json({ ok: true, terminal: true, missing: true, cache_updated: false });
+      if (command.status === "completed" || command.status === "failed") {
+        return json({ ok: true, terminal: true, already_completed: true, status: command.status, cache_updated: false });
+      }
+      if (command.status !== "claimed") {
+        return json({ error: "Command is not currently claimed", status: command.status, retryable: true }, 409);
+      }
 
       let cacheUpdated = false;
       const commandPayload = command.payload && typeof command.payload === "object"
@@ -583,7 +672,21 @@ Deno.serve(async (req: Request) => {
         .eq("id", commandId).eq("device_id", deviceId).eq("status", "claimed")
         .select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
-      if (!data) return json({ error: "Command not found or not claimed" }, 404);
+      if (!data) {
+        // Another ACK may have committed between our read and update.
+        const { data: current, error: currentError } = await supabase
+          .from("contact_bridge_commands")
+          .select("id, status")
+          .eq("id", commandId)
+          .eq("device_id", deviceId)
+          .maybeSingle();
+        if (currentError) return json({ error: currentError.message }, 500);
+        if (!current || current.status === "completed" || current.status === "failed") {
+          return json({ ok: true, terminal: true, already_completed: Boolean(current), missing: !current,
+            status: current?.status ?? null, cache_updated: cacheUpdated });
+        }
+        return json({ error: "Command is not currently claimed", status: current.status, retryable: true }, 409);
+      }
       return json({ ok: true, cache_updated: cacheUpdated });
     }
 
