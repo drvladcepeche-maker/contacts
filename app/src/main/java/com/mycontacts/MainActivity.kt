@@ -306,10 +306,14 @@ class MainActivity : Activity() {
     }
 
     private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
-        if (error != null) {
-            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=" + id + "; reason=" + error.take(500))
-            AppLog.flush(this, force = true)
+        // Record every command outcome locally and upload it immediately. Previously
+        // normal success/failure branches acknowledged commands without AppLog events.
+        if (error == null) {
+            AppLog.info(this, "BridgeCommand", "Local outcome completed; command_id=$id")
+        } else {
+            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; reason=${error.take(500)}")
         }
+        AppLog.flush(this, force = true)
         // Persist the local result first. If this fails, the command must be
         // handled again rather than acknowledged as complete.
         try {
