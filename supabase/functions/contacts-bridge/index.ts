@@ -575,10 +575,18 @@ Deno.serve(async (req: Request) => {
         .select("id, action, status")
         .eq("id", commandId)
         .eq("device_id", deviceId)
-        .eq("status", "claimed")
         .maybeSingle();
       if (commandReadError) return json({ error: commandReadError.message }, 500);
-      if (!command) return json({ error: "Command not found or not claimed" }, 404);
+
+      // The client persists local outcomes before sending this ACK. Repeated ACKs
+      // are expected after a lost response, so terminal commands are idempotent.
+      if (!command) return json({ ok: true, terminal: true, missing: true, cache_updated: false });
+      if (command.status === "completed" || command.status === "failed") {
+        return json({ ok: true, terminal: true, already_completed: true, status: command.status, cache_updated: false });
+      }
+      if (command.status !== "claimed") {
+        return json({ error: "Command is not currently claimed", status: command.status, retryable: true }, 409);
+      }
 
       let cacheUpdated = false;
       if (status === "completed" && command.action === "upsert_contact") {
@@ -625,7 +633,21 @@ Deno.serve(async (req: Request) => {
         .eq("id", commandId).eq("device_id", deviceId).eq("status", "claimed")
         .select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
-      if (!data) return json({ error: "Command not found or not claimed" }, 404);
+      if (!data) {
+        // Another ACK may have committed between our read and update.
+        const { data: current, error: currentError } = await supabase
+          .from("contact_bridge_commands")
+          .select("id, status")
+          .eq("id", commandId)
+          .eq("device_id", deviceId)
+          .maybeSingle();
+        if (currentError) return json({ error: currentError.message }, 500);
+        if (!current || current.status === "completed" || current.status === "failed") {
+          return json({ ok: true, terminal: true, already_completed: Boolean(current), missing: !current,
+            status: current?.status ?? null, cache_updated: cacheUpdated });
+        }
+        return json({ error: "Command is not currently claimed", status: current.status, retryable: true }, 409);
+      }
       return json({ ok: true, cache_updated: cacheUpdated });
     }
 
