@@ -474,7 +474,7 @@ Deno.serve(async (req: Request) => {
       const manifestIds = Array.isArray(manifest.local_contact_ids)
         ? Array.from(new Set(manifest.local_contact_ids
             .map((value: unknown) => String(value))
-            .filter((value: string) => /^[1-9]\\d*$/.test(value))))
+            .filter((value: string) => /^[1-9]\d*$/.test(value))))
         : [];
       if (manifestIds.length !== Number(manifest.contact_count)) {
         return json({ error: "Latest contact sync manifest is incomplete or inconsistent; Telegram matching was not queued" }, 409);
