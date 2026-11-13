@@ -289,6 +289,8 @@ async function processJob(job: Job) {
         results, checked: results.length,
         matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
         errors: results.filter(x => x.status === "error").length,
+        paused_until: null,
+        error_message: null,
       });
       continue;
     }
