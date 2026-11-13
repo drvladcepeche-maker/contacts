@@ -529,6 +529,7 @@ Deno.serve(async (req: Request) => {
           expected: manifestIds.length,
           returned: returnedIds.size,
           source_manifest: manifest.sync_id,
+          source_manifest_created_at: manifest.created_at,
         }, 409);
       }
 
@@ -590,6 +591,7 @@ Deno.serve(async (req: Request) => {
         contacts: snapshots.length,
         unique_phone_count: candidates.length,
         source_manifest: manifest.sync_id,
+        source_manifest_created_at: manifest.created_at,
       });
     }
 
