@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="brave_accessibility_description">Allows the Termux bridge to inspect and operate the Brave browser screen when explicitly commanded through Shizuku.</string>
+</resources>

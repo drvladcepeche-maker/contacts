@@ -1,0 +1,31 @@
+name: Remote config Edge Function
+on:
+  push:
+    branches: [main, feature/brave-accessibility-control, 'fix/**']
+    paths:
+      - 'supabase/functions/remote-config/**'
+      - 'supabase/functions/contacts-bridge/**'
+      - 'supabase/migrations/**'
+      - 'docs/REMOTE_CONFIG_SIGNING.md'
+      - '.github/workflows/remote-config-check.yml'
+  pull_request:
+    branches: [main, feature/brave-accessibility-control]
+    paths:
+      - 'supabase/functions/remote-config/**'
+      - 'supabase/functions/contacts-bridge/**'
+      - 'supabase/migrations/**'
+      - 'docs/REMOTE_CONFIG_SIGNING.md'
+      - '.github/workflows/remote-config-check.yml'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check remote config Edge Function
+        run: deno check supabase/functions/remote-config/index.ts supabase/functions/contacts-bridge/index.ts

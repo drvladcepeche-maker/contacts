@@ -28,11 +28,16 @@ function stableJson(value: unknown): string {
 function contactCore(value: unknown): Record<string, unknown> {
   const data = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
-  // Compare the complete user-visible contact payload. Exclude only the local
-  // record ID and account metadata: those necessarily differ across accounts.
-  // Telegram fields and arbitrary typed Data values remain part of exact equality.
+  // Telegram resolver fields are server-managed enrichment, not part of the
+  // Android-authored contact snapshot. They are merged separately below and must
+  // not create false conflicts when the phone syncs a snapshot from before a
+  // queued Telegram update was applied.
   return Object.fromEntries(Object.entries(data).filter(([key]) =>
-    key !== "id" && key !== "accounts"
+    key !== "id" &&
+    key !== "accounts" &&
+    key !== "telegram_id" &&
+    key !== "telegram_username" &&
+    !key.startsWith("telegram_match_")
   ));
 }
 
@@ -72,6 +77,27 @@ function mergeContactData(previousValue: unknown, incomingValue: unknown): Recor
     if (key.startsWith("telegram_match_")) merged[key] = value;
   }
   return merged;
+}
+
+function clientAppMetadata(body: Record<string, unknown>): Record<string, unknown> {
+  const raw = body._client && typeof body._client === "object" && !Array.isArray(body._client)
+    ? body._client as Record<string, unknown>
+    : {};
+  const metadata: Record<string, unknown> = {};
+  const packageName = String(raw.package_name ?? "").trim();
+  const versionName = String(raw.version_name ?? "").trim();
+  const buildType = String(raw.build_type ?? "").trim();
+  const versionCode = Number(raw.version_code);
+  if (/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(packageName) && packageName.length <= 200) {
+    metadata.app_package_name = packageName;
+  }
+  if (versionName && versionName.length <= 80) metadata.app_version_name = versionName;
+  if (Number.isSafeInteger(versionCode) && versionCode >= 0 && versionCode <= 2147483647) {
+    metadata.app_version_code = versionCode;
+  }
+  if (buildType && buildType.length <= 30) metadata.app_build_type = buildType;
+  if (Object.keys(metadata).length) metadata.app_reported_at = new Date().toISOString();
+  return metadata;
 }
 
 function phoneCandidates(data: Record<string, unknown>): string[] {
@@ -175,7 +201,7 @@ Deno.serve(async (req: Request) => {
     if (existingDevice) {
       const { data: updated, error: updateError } = await supabase
         .from("contact_bridge_devices")
-        .update({ token_hash: deviceTokenHash })
+        .update({ token_hash: deviceTokenHash, ...clientAppMetadata(body) })
         .eq("id", existingDevice.id)
         .is("revoked_at", null)
         .select("id, device_name, created_at")
@@ -186,7 +212,7 @@ Deno.serve(async (req: Request) => {
     } else {
       const { data: inserted, error: createError } = await supabase
         .from("contact_bridge_devices")
-        .insert({ device_name: deviceName, token_hash: deviceTokenHash })
+        .insert({ device_name: deviceName, token_hash: deviceTokenHash, ...clientAppMetadata(body) })
         .select("id, device_name, created_at")
         .single();
       if (createError) return json({ error: createError.message }, 500);
@@ -202,8 +228,9 @@ Deno.serve(async (req: Request) => {
   }
 
   if (role === "device") {
-    await supabase.from("contact_bridge_devices")
-      .update({ last_seen_at: new Date().toISOString() }).eq("id", deviceId);
+    const { error: deviceUpdateError } = await supabase.from("contact_bridge_devices")
+      .update({ last_seen_at: new Date().toISOString(), ...clientAppMetadata(body) }).eq("id", deviceId);
+    if (deviceUpdateError) return json({ error: deviceUpdateError.message }, 500);
 
     if (action === "record_sync_manifest") {
       const syncId = String(body.sync_id ?? "").trim();
@@ -389,10 +416,7 @@ Deno.serve(async (req: Request) => {
             .from("contact_bridge_snapshots")
             .upsert(newRows, { onConflict: "device_id,local_contact_id", ignoreDuplicates: true })
             .select("local_contact_id");
-          if (insertError?.code === "23505") {
-        return json({ error: "A Telegram matching job is already queued or running" }, 409);
-      }
-      if (insertError) return json({ error: insertError.message }, 500);
+          if (insertError) return json({ error: insertError.message }, 500);
           insertedCount = inserted?.length ?? 0;
           skippedCount += newRows.length - insertedCount;
         }
@@ -458,22 +482,49 @@ Deno.serve(async (req: Request) => {
         return json({ error: "A Telegram matching job is already queued or running", job_id: activeJobs[0].id }, 409);
       }
 
-      const { count: snapshotCount, error: countError } = await supabase
-        .from("contact_bridge_snapshots")
-        .select("local_contact_id", { count: "exact", head: true })
-        .eq("device_id", deviceId);
-      if (countError) return json({ error: countError.message }, 500);
+      const { data: manifest, error: manifestError } = await supabase
+        .from("contact_bridge_sync_manifests")
+        .select("sync_id, local_contact_ids, contact_count")
+        .eq("device_id", deviceId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (manifestError) return json({ error: manifestError.message }, 500);
+      if (!manifest) {
+        return json({ error: "No completed full-sync manifest; sync contacts before starting Telegram matching" }, 409);
+      }
+      const manifestIds = Array.isArray(manifest.local_contact_ids)
+        ? Array.from(new Set(manifest.local_contact_ids
+            .map((value: unknown) => String(value))
+            .filter((value: string) => /^[1-9]\d*$/.test(value))))
+        : [];
+      if (manifestIds.length !== Number(manifest.contact_count)) {
+        return json({ error: "Latest contact sync manifest is incomplete or inconsistent; Telegram matching was not queued" }, 409);
+      }
+
       const snapshots: Array<{ local_contact_id: string; contact_data: unknown }> = [];
-      for (let offset = 0; ; offset += 1000) {
-        const { data: page, error: pageError } = await supabase
-          .from("contact_bridge_snapshots")
-          .select("local_contact_id, contact_data")
-          .eq("device_id", deviceId)
-          .order("local_contact_id", { ascending: true })
-          .range(offset, offset + 999);
-        if (pageError) return json({ error: pageError.message }, 500);
-        snapshots.push(...(page ?? []));
-        if (!page || page.length < 1000) break;
+      const idBatches: string[][] = [];
+      for (let i = 0; i < manifestIds.length; i += 400) idBatches.push(manifestIds.slice(i, i + 400));
+      for (let batchOffset = 0; batchOffset < idBatches.length; batchOffset += 4) {
+        const pages = await Promise.all(idBatches.slice(batchOffset, batchOffset + 4).map(async (ids) => {
+          const { data, error } = await supabase
+            .from("contact_bridge_snapshots")
+            .select("local_contact_id, contact_data")
+            .eq("device_id", deviceId)
+            .in("local_contact_id", ids);
+          if (error) throw error;
+          return data ?? [];
+        }));
+        snapshots.push(...pages.flat());
+      }
+      const returnedIds = new Set(snapshots.map((row) => String(row.local_contact_id)));
+      if (returnedIds.size !== manifestIds.length) {
+        return json({
+          error: "Latest contact sync manifest references missing snapshots; Telegram matching was not queued",
+          expected: manifestIds.length,
+          returned: returnedIds.size,
+          source_manifest: manifest.sync_id,
+        }, 409);
       }
 
       const byPhone = new Map<string, {
@@ -510,7 +561,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Telegram match job exceeds the 25000 unique-phone safety limit" }, 413);
       }
       if (!candidates.length) {
-        return json({ queued: false, contacts: (snapshots ?? []).length, unique_phone_count: 0 });
+        return json({ queued: false, contacts: snapshots.length, unique_phone_count: 0, source_manifest: manifest.sync_id });
       }
       const { data: job, error: insertError } = await supabase
         .from("telegram_match_jobs")
@@ -524,12 +575,16 @@ Deno.serve(async (req: Request) => {
         })
         .select("id")
         .single();
+      if (insertError?.code === "23505") {
+        return json({ error: "A Telegram matching job is already queued or running" }, 409);
+      }
       if (insertError) return json({ error: insertError.message }, 500);
       return json({
         queued: true,
         job_id: job.id,
-        contacts: (snapshots ?? []).length,
+        contacts: snapshots.length,
         unique_phone_count: candidates.length,
+        source_manifest: manifest.sync_id,
       });
     }
 
@@ -722,7 +777,7 @@ Deno.serve(async (req: Request) => {
 
   if (action === "queue_command") {
     const commandAction = String(body.command_action ?? "");
-    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts", "update_telegram_fields", "move_contact"];
+    const allowed = ["list_contacts", "search_contacts", "upsert_contact", "delete_contact", "merge_contacts", "sync_contacts", "update_telegram_fields", "refresh_remote_config"];
     if (!allowed.includes(commandAction)) return json({ error: "Unsupported command_action" }, 400);
     if (!deviceId && body.device_id) deviceId = String(body.device_id);
     if (!deviceId) {

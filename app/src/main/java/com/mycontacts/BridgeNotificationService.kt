@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import org.json.JSONArray
+import org.json.JSONObject
 
 /** The sole server command poller; claimed commands are persisted before alerts. */
 class BridgeNotificationService : Service() {
@@ -27,9 +28,9 @@ class BridgeNotificationService : Service() {
             bridge = ContactsBridge(this)
             createChannels()
             Log.i(TAG, "Service created; notification channels checked")
+            AppLog.info(this, TAG, "Service created")
         } catch (e: Exception) {
             Log.e(TAG, "Service initialization failed", e)
-            AppLog.error(this, TAG, "Service initialization failed", e)
             stopSelf()
         }
     }
@@ -45,14 +46,15 @@ class BridgeNotificationService : Service() {
             createChannels()
             startForeground(ONGOING_ID, buildNotification("Ожидание команд", false))
             Log.i(TAG, "Foreground service started")
+            AppLog.info(this, TAG, "Foreground service started")
             if (!running) {
                 running = true
                 handler.post(pollTask)
             }
+            recordDiagnostic("service_state", "running")
             return START_STICKY
         } catch (e: Exception) {
             Log.e(TAG, "Unable to start foreground service", e)
-            AppLog.error(this, TAG, "Unable to start foreground service", e)
             running = false
             stopSelf(startId)
             return START_NOT_STICKY
@@ -67,7 +69,6 @@ class BridgeNotificationService : Service() {
                     val commands = bridge.poll()
                     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
                     var pendingCount = 0
-                    var pendingCommands = JSONArray()
                     synchronized(QUEUE_LOCK) {
                         val pending = readPending(prefs.getString(KEY_PENDING, "[]"))
                         val known = HashSet<String>()
@@ -85,9 +86,13 @@ class BridgeNotificationService : Service() {
                             Log.i(TAG, "Persisted " + added + " command(s); pending=" + pending.length())
                         }
                         pendingCount = pending.length()
-                        pendingCommands = pending
                     }
-                    if (pendingCount > 0) postPendingNotification(pendingCommands)
+                    processDiagnosticsCommands()
+                    processRemoteConfigCommands()
+                    synchronized(QUEUE_LOCK) {
+                        pendingCount = readPending(prefs.getString(KEY_PENDING, "[]")).length()
+                    }
+                    if (pendingCount > 0) postPendingNotification(pendingCount)
                     else getSystemService(NotificationManager::class.java).cancel(ALERT_ID)
                     recordDiagnostic("last_poll_at", System.currentTimeMillis().toString())
                     recordDiagnostic("last_poll_error", "")
@@ -107,9 +112,8 @@ class BridgeNotificationService : Service() {
         }
     }
 
-    private fun postPendingNotification(pending: JSONArray) {
+    private fun postPendingNotification(count: Int) {
         val manager = getSystemService(NotificationManager::class.java)
-        val count = pending.length()
         val enabled = manager.areNotificationsEnabled()
         val permission = Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -120,42 +124,13 @@ class BridgeNotificationService : Service() {
             return
         }
         try {
-            val descriptions = (0 until minOf(count, 3)).mapNotNull { i -> pending.optJSONObject(i)?.let { commandSummary(it) } }
-            val more = if (count > 3) "\nИ ещё команд: " + (count - 3) else ""
-            val message = "Ожидают решения: " + count + "\n" + descriptions.joinToString("\n") + more
-            manager.notify(ALERT_ID, buildNotification(message, true, pending))
+            manager.notify(ALERT_ID, buildNotification("Ожидают подтверждения: " + count, true))
             recordDiagnostic("last_notification_error", "")
             Log.i(TAG, "Pending-command notification posted; count=" + count)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to publish pending-command notification", e)
-            AppLog.error(this, TAG, "Failed to publish pending-command notification", e)
             recordDiagnostic("last_notification_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
         }
-    }
-
-    private fun commandSummary(command: org.json.JSONObject): String {
-        val action = command.optString("action")
-        val payload = command.optJSONObject("payload") ?: org.json.JSONObject()
-        val id = payload.optLong("id", -1)
-        val name = payload.optString("name").trim()
-        val phone = payload.optString("phone").trim()
-        return when (action) {
-            "upsert_contact" -> (if (id > 0) "Изменить контакт" else "Создать контакт") + ": " + name.ifBlank { "без имени" } +
-                (if (phone.isNotBlank()) " · " + maskPhone(phone) else "")
-            "delete_contact" -> "Удалить контакт: " + name.ifBlank { "ID " + id }
-            "merge_contacts" -> "Объединить контакты · " + (payload.optJSONArray("ids")?.length() ?: 0) + " записей"
-            "update_telegram_fields" -> "Изменить Telegram-поля · ID " + id + " · " + payload.optString("telegram_username")
-            "move_contact" -> "Перенести " + name.ifBlank { "контакт · ID " + id } + " · " + payload.optString("source_account_name") + " → " + payload.optString("target_account_name")
-            "sync_contacts" -> "Синхронизировать контакты с сервером"
-            "list_contacts" -> "Передать список контактов"
-            "search_contacts" -> "Найти контакты: " + payload.optString("query").take(50)
-            else -> action.ifBlank { "Команда" }
-        }
-    }
-
-    private fun maskPhone(value: String): String {
-        val digits = value.filter { it.isDigit() }
-        return if (digits.length <= 4) "••••" else "•••• " + digits.takeLast(4)
     }
 
     private fun readPending(value: String?): JSONArray =
@@ -163,6 +138,98 @@ class BridgeNotificationService : Service() {
             Log.e(TAG, "Pending queue JSON is corrupt; using an empty queue", e)
             JSONArray()
         }
+
+    /** Read-only diagnostics are answered in the foreground service, even while the Activity is minimized. */
+    private fun processDiagnosticsCommands() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val pending = synchronized(QUEUE_LOCK) {
+            readPending(prefs.getString(KEY_PENDING, "[]"))
+        }
+        val requests = (0 until pending.length()).mapNotNull { pending.optJSONObject(it) }
+            .filter { it.optString("action") == "get_diagnostics" }
+        for (command in requests) {
+            val id = command.optString("id")
+            if (id.isBlank()) continue
+            try {
+                val result = JSONObject().put("diagnostics", AppDiagnostics.collect(this))
+                bridge.complete(id, result)
+                synchronized(QUEUE_LOCK) {
+                    val current = readPending(prefs.getString(KEY_PENDING, "[]"))
+                    val kept = JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        if (item.optString("id") != id) kept.put(item)
+                    }
+                    if (!prefs.edit().putString(KEY_PENDING, kept.toString()).commit()) {
+                        throw IllegalStateException("Could not remove completed diagnostics request from local queue")
+                    }
+                }
+                Log.i(TAG, "Answered on-demand diagnostics request " + id)
+            } catch (e: Exception) {
+                Log.e(TAG, "Diagnostics request failed: " + id, e)
+                AppLog.error(this, TAG, "Diagnostics request failed", e)
+                recordDiagnostic("last_diagnostics_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
+            }
+        }
+    }
+
+
+    /** Signed remote configuration is service-owned, like diagnostics, and never races Activity dispatch. */
+    private fun processRemoteConfigCommands() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val pending = synchronized(QUEUE_LOCK) {
+            readPending(prefs.getString(KEY_PENDING, "[]"))
+        }
+        val requests = (0 until pending.length()).mapNotNull { pending.optJSONObject(it) }
+            .filter { it.optString("action") == "refresh_remote_config" }
+
+        for (command in requests) {
+            val id = command.optString("id")
+            if (id.isBlank()) continue
+
+            var result: JSONObject? = null
+            var errorMessage: String? = null
+            try {
+                val client = RemoteConfigClient(this)
+                val now = System.currentTimeMillis() / 1000L
+                val applied = client.fetchAndApply(now)
+                val active = client.current(now)
+                result = JSONObject()
+                    .put("applied", applied)
+                    .put("already_current", !applied)
+                    .put("sequence", active?.sequence ?: client.lastAppliedSequence())
+                    .put("active_expires_at", active?.expiresAtEpochSeconds ?: JSONObject.NULL)
+                Log.i(TAG, "Remote config refresh verified; command=" + id +
+                    ", applied=" + applied + ", sequence=" + client.lastAppliedSequence())
+            } catch (e: Exception) {
+                val message = e.message ?: e.javaClass.simpleName
+                errorMessage = message
+                AppLog.error(this, TAG, "Remote config refresh failed", e)
+                recordDiagnostic("last_remote_config_error", message)
+            }
+
+            try {
+                bridge.complete(id, result, errorMessage)
+                synchronized(QUEUE_LOCK) {
+                    val current = readPending(prefs.getString(KEY_PENDING, "[]"))
+                    val kept = JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        if (item.optString("id") != id) kept.put(item)
+                    }
+                    if (!prefs.edit().putString(KEY_PENDING, kept.toString()).commit()) {
+                        throw IllegalStateException("Could not remove completed remote config request from local queue")
+                    }
+                }
+                Log.i(TAG, "Acknowledged remote config refresh command " + id)
+            } catch (e: Exception) {
+                // Keep the claimed command locally. A retry is safe: the store treats
+                // the already-active sequence as an idempotent no-op.
+                Log.e(TAG, "Remote config command acknowledgement failed; retaining " + id, e)
+                AppLog.error(this, TAG, "Remote config command acknowledgement failed", e)
+            }
+        }
+    }
 
     private fun recordDiagnostic(key: String, value: String) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(key, value).apply()
@@ -178,7 +245,7 @@ class BridgeNotificationService : Service() {
         }
     }
 
-    private fun buildNotification(message: String, alert: Boolean, pending: JSONArray? = null): Notification {
+    private fun buildNotification(message: String, alert: Boolean): Notification {
         val open = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("open_bridge_queue", true)
@@ -191,46 +258,17 @@ class BridgeNotificationService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        builder.setSmallIcon(android.R.drawable.stat_notify_sync)
+        return builder.setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Мои контакты").setContentText(message)
             .setContentIntent(pendingIntent).setAutoCancel(false).setOnlyAlertOnce(true)
-            .setStyle(Notification.BigTextStyle().bigText(message))
-            .setOngoing(!alert).setCategory(Notification.CATEGORY_SERVICE)
-        if (alert && pending != null) {
-            for (i in 0 until pending.length()) {
-                val command = pending.optJSONObject(i) ?: continue
-                val action = command.optString("action")
-                if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields", "move_contact")) continue
-                val id = command.optString("id")
-                val open = Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    putExtra("notification_command_id", id)
-                    putExtra("notification_decision", "approve")
-                }
-                val approveIntent = PendingIntent.getActivity(
-                    this, (id + ":approve").hashCode(), open,
-                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                )
-                builder.addAction(android.R.drawable.ic_menu_save, "Подтвердить", approveIntent)
-                val reject = Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    putExtra("notification_command_id", id)
-                    putExtra("notification_decision", "reject")
-                }
-                val rejectIntent = PendingIntent.getActivity(
-                    this, (id + ":reject").hashCode(), reject,
-                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                )
-                builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Отклонить", rejectIntent)
-                break
-            }
-        }
-        return builder.build()
+            .setOngoing(!alert).setCategory(Notification.CATEGORY_SERVICE).build()
     }
 
     override fun onDestroy() {
         running = false
         handler.removeCallbacksAndMessages(null)
+        recordDiagnostic("service_state", "stopped")
+        AppLog.info(this, TAG, "Foreground service destroyed")
         Log.w(TAG, "Foreground service destroyed")
         super.onDestroy()
     }

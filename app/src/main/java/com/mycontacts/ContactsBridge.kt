@@ -6,12 +6,33 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+data class SyncSummary(
+    val attempted: Int = 0, val unique: Int = 0, val inserted: Int = 0,
+    val updated: Int = 0, val skipped: Int = 0, val duplicates: Int = 0,
+    val conflicts: Map<String, List<String>> = emptyMap(),
+    val manifestRecorded: Boolean = false,
+    val manifestError: String? = null,
+    val syncId: String? = null
+) {
+    val synced: Int get() = inserted + updated
+    fun toJson(): JSONObject = JSONObject().put("attempted", attempted)
+        .put("unique_contacts", unique).put("inserted", inserted)
+        .put("updated_existing", updated).put("skipped_existing", skipped)
+        .put("duplicate_ids_in_batch_removed", duplicates)
+        .put("manifest_recorded", manifestRecorded)
+        .put("manifest_error", manifestError ?: JSONObject.NULL)
+        .put("sync_id", syncId ?: JSONObject.NULL)
+        .put("conflicts", JSONArray().apply { conflicts.forEach { (id, fields) ->
+            put(JSONObject().put("id", id).put("fields", JSONArray(fields)))
+        } })
+}
 private class BridgeHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
 class ContactsBridge(context: Context) {
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
+        const val REMOTE_CONFIG_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/remote-config"
     }
 
     private val prefs = context.getSharedPreferences("contacts_bridge", Context.MODE_PRIVATE)
@@ -20,18 +41,29 @@ class ContactsBridge(context: Context) {
     fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
     fun clearToken() { prefs.edit().remove("device_token").apply() }
 
-    private fun requestWithToken(token: String, body: JSONObject): JSONObject {
+    private fun requestWithToken(token: String, body: JSONObject, endpoint: String = BASE_URL): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
-        val conn = (URL(BASE_URL).openConnection() as HttpURLConnection).apply {
+        // Report the installed package/version on every bridge request. This is
+        // diagnostic metadata, not an authorization or signature-trust decision.
+        val requestBody = if (endpoint == BASE_URL) {
+            JSONObject(body.toString()).put("_client", JSONObject()
+                .put("package_name", BuildConfig.APPLICATION_ID)
+                .put("version_name", BuildConfig.VERSION_NAME)
+                .put("version_code", BuildConfig.VERSION_CODE)
+                .put("build_type", BuildConfig.BUILD_TYPE))
+        } else {
+            body
+        }
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15000
-            readTimeout = 45000
+            readTimeout = 20000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Authorization", "Bearer $token")
         }
         try {
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { it.write(requestBody.toString().toByteArray(Charsets.UTF_8)) }
             val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: "{}"
             val json = JSONObject(text)
@@ -69,92 +101,106 @@ class ContactsBridge(context: Context) {
         return response
     }
 
-    @Volatile var lastSyncConflicts: List<String> = emptyList()
+
+    /** Fetches the signed remote configuration using the paired device token. */
+    fun requestRemoteConfigEnvelope(): JSONObject {
+        val current = token()
+        require(current.isNotBlank()) { "Сначала привяжите устройство" }
+        return try {
+            requestWithToken(current, JSONObject(), REMOTE_CONFIG_URL)
+        } catch (e: BridgeHttpException) {
+            if (e.statusCode == 401) {
+                clearToken()
+                throw IllegalStateException(
+                    "Токен устройства отклонён сервером. Требуется повторная привязка.", e
+                )
+            }
+            throw e
+        }
+    }
+
+    @Volatile var lastSyncSummary: SyncSummary = SyncSummary()
         private set
 
-    private val appContext = context.applicationContext
+    fun sync(contacts: List<Contact>): Int = syncBatches(sequenceOf(contacts)).synced
 
-    private fun requestSyncBatch(body: JSONObject): JSONObject {
-        var retry = 0
-        while (true) {
-            try {
-                return request(body)
-            } catch (e: Exception) {
-                val retryable = e is java.io.IOException ||
-                    (e is BridgeHttpException && e.statusCode in setOf(408, 425, 429, 500, 502, 503, 504))
-                if (!retryable || retry >= 3) throw e
-                val delayMs = 1000L shl retry
-                Thread.sleep(delayMs)
-                retry++
-            }
-        }
-    }
-
-    fun sync(contacts: List<Contact>): Int {
-        var total = 0
-        val conflicts = LinkedHashSet<String>()
-        val batches = contacts.chunked(250)
-        AppLog.info(appContext, "ContactsSync", "Starting sync: contacts=${contacts.size}, batches=${batches.size}")
-        var completedContacts = 0
-        var currentBatch = 0
-        try {
-            batches.forEachIndexed { index, batch ->
-                currentBatch = index + 1
-                val arr = JSONArray()
-                batch.forEach { c ->
-                    arr.put(JSONObject()
-                        .put("id", c.id.toString())
-                        .put("name", c.name)
-                        .put("phones", JSONArray(c.phones))
-                        .put("telegram_id", c.telegramId)
-                        .put("telegram_username", c.telegramUsername)
-                        .put("fields", JSONArray().apply {
-                            c.fields.forEach { field ->
-                                put(JSONObject()
-                                    .put("mimetype", field.mimetype)
-                                    .put("values", JSONObject().apply {
-                                        field.values.toSortedMap().forEach { (key, value) -> put(key, value) }
-                                    })
-                                )
-                            }
-                        })
-                        .put("accounts", JSONArray().apply {
-                            c.accountSources.forEach { account ->
-                                put(JSONObject()
-                                    .put("account_name", account.name ?: JSONObject.NULL)
-                                    .put("account_type", account.type ?: JSONObject.NULL)
-                                    .put("label", account.label))
-                            }
+    fun syncBatches(batches: Sequence<List<Contact>>): SyncSummary {
+        var attempted = 0; var unique = 0; var inserted = 0; var updated = 0
+        var skipped = 0; var duplicates = 0
+        val conflicts = LinkedHashMap<String, LinkedHashSet<String>>()
+        val localContactIds = LinkedHashSet<String>()
+        val syncId = java.util.UUID.randomUUID().toString()
+        for (contacts in batches) for (batch in contacts.chunked(100)) {
+            if (batch.isEmpty()) continue
+            attempted += batch.size
+            batch.forEach { localContactIds.add(it.id.toString()) }
+            val arr = JSONArray()
+            batch.forEach { c ->
+                arr.put(JSONObject()
+                    .put("id", c.id.toString()).put("name", c.name)
+                    .put("phones", JSONArray(c.phones))
+                    .put("telegram_id", c.telegramId).put("telegram_username", c.telegramUsername)
+                    .put("fields", JSONArray().apply { c.fields.forEach { field ->
+                        put(JSONObject().put("mimetype", field.mimetype).put("values", JSONObject().apply {
+                            field.values.toSortedMap().forEach { (key, value) -> put(key, value) }
                         }))
-                }
-                val response = requestSyncBatch(JSONObject().put("action", "sync_contacts").put("contacts", arr))
-                total += response.optInt("synced")
-                completedContacts += batch.size
-                val rows = response.optJSONArray("conflicts") ?: JSONArray()
-                for (i in 0 until rows.length()) {
-                    val item = rows.optJSONObject(i) ?: continue
-                    val id = item.optString("id")
-                    if (id.isNotBlank()) conflicts.add(id)
-                }
+                    } })
+                    .put("accounts", JSONArray().apply { c.accountSources.forEach { account ->
+                        put(JSONObject().put("account_name", account.name ?: JSONObject.NULL)
+                            .put("account_type", account.type ?: JSONObject.NULL).put("label", account.label))
+                    } }))
             }
-        } catch (e: Exception) {
-            val message = "Sync failed at batch ${currentBatch}/${batches.size}; " +
-                "completed_batches=${currentBatch - 1}; completed_contacts=${completedContacts}; " +
-                "new_or_updated=${total}; error=${e.javaClass.simpleName}: ${e.message}"
-            AppLog.error(appContext, "ContactsSync", message, e)
-            AppLog.flush(appContext, force = true)
-            throw IllegalStateException(
-                "Синхронизация остановилась на партии $currentBatch из ${batches.size}; " +
-                    "успешно обработано $completedContacts контактов: ${e.message}",
-                e
-            )
+            val response = request(JSONObject().put("action", "sync_contacts").put("contacts", arr))
+            unique += response.optInt("unique_contacts", batch.size)
+            inserted += response.optInt("inserted"); updated += response.optInt("updated_existing")
+            skipped += response.optInt("skipped_existing")
+            duplicates += response.optInt("duplicate_ids_in_batch_removed")
+            val rows = response.optJSONArray("conflicts") ?: JSONArray()
+            for (i in 0 until rows.length()) {
+                val item = rows.optJSONObject(i) ?: continue
+                val id = item.optString("id"); if (id.isBlank()) continue
+                val fields = conflicts.getOrPut(id) { LinkedHashSet() }
+                val names = item.optJSONArray("fields") ?: JSONArray()
+                for (j in 0 until names.length()) names.optString(j).takeIf { it.isNotBlank() }?.let(fields::add)
+            }
         }
-        // Do not prune snapshots during routine sync: the server is append-only by contact ID.
-        lastSyncConflicts = conflicts.toList()
-        AppLog.info(appContext, "ContactsSync", "Sync completed: contacts=${contacts.size}, synced=${total}, conflicts=${conflicts.size}")
-        AppLog.flush(appContext, force = true)
-        return total
+
+        var manifestRecorded = false
+        var manifestError: String? = null
+        try {
+            val manifestResponse = request(JSONObject()
+                .put("action", "record_sync_manifest")
+                .put("sync_id", syncId)
+                .put("local_contact_ids", JSONArray(localContactIds))
+                .put("sync_summary", JSONObject()
+                    .put("attempted", attempted)
+                    .put("unique_contacts", unique)
+                    .put("inserted", inserted)
+                    .put("updated_existing", updated)
+                    .put("skipped_existing", skipped)
+                    .put("conflicts", conflicts.size)
+                    .put("duplicates", duplicates))
+                .put("conflict_details", JSONArray().apply {
+                    conflicts.forEach { (id, fields) ->
+                        put(JSONObject().put("id", id).put("fields", JSONArray(fields)))
+                    }
+                }))
+            manifestRecorded = manifestResponse.optBoolean("recorded", false)
+            if (!manifestRecorded) manifestError = "Сервер не подтвердил запись реестра"
+        } catch (error: Exception) {
+            manifestError = error.message ?: error.javaClass.simpleName
+        }
+
+        val summary = SyncSummary(
+            attempted, unique, inserted, updated, skipped, duplicates,
+            conflicts.mapValues { it.value.toList() }, manifestRecorded, manifestError, syncId
+        )
+        lastSyncSummary = summary
+        return summary
     }
+    fun uploadDiagnostics(entries: JSONArray): JSONObject = request(
+        JSONObject().put("action", "upload_diagnostics").put("entries", entries)
+    )
 
     fun queueTelegramMatch(): JSONObject = request(JSONObject().put("action", "queue_telegram_match"))
 

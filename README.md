@@ -11,7 +11,17 @@ APK собирается автоматически: GitHub → Actions → «Bu
 - Claude: то же самое через собственный API-ключ Anthropic (выбор «ChatGPT / Claude» в диалоге ИИ-помощника): вопросы по контактам и предложение правок с подтверждением. Ключ хранится только на устройстве.
 - «Связь с Claude»: тот же мост с сервером, плюс копирование адреса MCP для подключения коннектора в Claude.
 
-- «Аккаунты синхронизации»: отдельно управляет участием аккаунта, чтением и записью для моста ChatGPT/Claude. Изменение и удаление через мост ограничены выбранным разрешённым аккаунтом. Если агрегированный Android-контакт содержит записи из отключённого для чтения аккаунта, весь такой контакт исключается из передачи, чтобы не раскрывать поля отключённого источника.
+- «Аккаунты синхронизации»: отдельно управляет участием аккаунта, чтением и записью для моста ChatGPT/Claude. Изменение и удаление через мост ограничены выбранным разрешённым аккаунтом. Если агрегированный Android-контакт содержит записи из отключённого для чтения аккаунта, весь такой контакт исключается из передачи, чтобы не раскрывать поля отключённого источника. Если отключены все аккаунты для чтения, приложение записывает пустой завершённый манифест: серверные списки и поиск перестают возвращать контакты, хотя исторические снимки сохраняются в архиве.
+
+## Доступ Shizuku
+
+В приложении есть кнопка «Доступ Shizuku»: она проверяет, запущена ли служба, и запрашивает разрешение для самого приложения через официальный Shizuku API. Разрешение выдаётся отдельно каждому приложению. Для команды `rish` в Termux Termux также должен быть отдельно авторизован в Shizuku; запрос из «Моих контактов» не заменяет разрешение Termux.
+
+## Обновление приложения через Shizuku
+
+После установки версии с обновлятором в приложении появится кнопка **«Проверить обновления»**. Она проверяет последний APK в GitHub Release, скачивает его в фоне, сверяет SHA-256 и сертификат подписи с установленным приложением и только затем выполняет установку через Shizuku (pm install -r). Данные приложения и локальная база контактов сохраняются; при несовпадении подписи или пакета установка блокируется.
+
+Условия: Shizuku должен быть запущен, приложению «Мои контакты» нужно отдельно выдать разрешение Shizuku; автоматическая установка поддерживается на Android 10 и новее. Первая установка обновлятора остаётся ручной. Последующие проверки и установки запускаются кнопкой внутри приложения. GitHub Actions публикует подписанный APK и SHA-256 в отдельный предварительный релиз с тегом mycontacts-app-<commit> только при наличии стабильного ключа подписи.
 
 ## Постоянная подпись APK
 
@@ -38,6 +48,11 @@ APK собирается автоматически: GitHub → Actions → «Bu
 
 StringSession — полноценный секрет авторизованного Telegram-сеанса. Не отправляйте его в чат, не добавляйте в исходники, issues или коммиты. Вставляйте его только в приватный GitHub Actions secret. До включения переменной `TELEGRAM_RESOLVER_ENABLED` задания остаются в очереди и не обрабатываются.
 
-The device-authenticated `prune_contacts` action only affects the calling device. It runs after every contact batch succeeds; an empty permitted set removes that device's server snapshot, while an interrupted sync leaves the previous snapshot intact.
+The Android app records a full-sync manifest only after every contact batch succeeds. Contacts list/search tools use only the IDs in the latest completed manifest; older server snapshots remain archived and are not returned as current contacts. The device-authenticated `prune_contacts` action is available for explicit maintenance, but normal sync does not automatically delete historical snapshots.
 
 Удалённое изменение контакта обновляет только основной номер в выбранном аккаунте; дополнительные телефонные номера сохраняются. Удаление номера выполняется только при явно пустом значении поля телефона.
+
+
+## Android app identity reporting
+
+Every authenticated Android contacts-bridge request reports the installed package name, version name, version code, and build type. The bridge stores these values on the paired device record and exposes them through `contacts_status`. They are client-reported diagnostics, not an authentication factor; APK installation still requires matching package identity and signing certificate.
