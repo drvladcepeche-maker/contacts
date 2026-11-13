@@ -65,9 +65,10 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Verify APK package, signature and checksum
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'
+        if: success() && (github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/brave-accessibility-control') && steps.signing.outputs.stable_signing == 'true'))
         shell: bash
         run: |
+          echo "Stable signing enabled: ${{ steps.signing.outputs.stable_signing }}"
           APK="app/build/outputs/apk/release/app-release.apk"
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
           AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
