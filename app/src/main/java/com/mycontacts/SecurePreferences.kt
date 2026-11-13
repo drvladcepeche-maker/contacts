@@ -32,6 +32,7 @@ object SecurePreferences {
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .setRandomizedEncryptionRequired(true)
+                    .setKeySize(256)
                     .build()
             )
             generator.generateKey()
@@ -39,9 +40,10 @@ object SecurePreferences {
         return store.getKey(KEY_ALIAS, null) as SecretKey
     }
 
-    private fun encrypt(value: String): String {
+    private fun encrypt(value: String, associatedData: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
+        cipher.updateAAD(associatedData.toByteArray(Charsets.UTF_8))
         val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
         val packed = ByteArrayOutputStream().apply {
             write(cipher.iv)
@@ -50,7 +52,7 @@ object SecurePreferences {
         return Base64.encodeToString(packed, Base64.NO_WRAP)
     }
 
-    private fun decrypt(value: String): String {
+    private fun decrypt(value: String, associatedData: String): String {
         val packed = Base64.decode(value, Base64.NO_WRAP)
         require(packed.size > IV_SIZE) { "Encrypted preference is malformed" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -59,6 +61,7 @@ object SecurePreferences {
             key(),
             GCMParameterSpec(128, packed.copyOfRange(0, IV_SIZE))
         )
+        cipher.updateAAD(associatedData.toByteArray(Charsets.UTF_8))
         return cipher.doFinal(packed.copyOfRange(IV_SIZE, packed.size)).toString(Charsets.UTF_8)
     }
 
@@ -67,13 +70,13 @@ object SecurePreferences {
         val encryptedName = "${name}_encrypted"
         val encrypted = prefs.getString(encryptedName, null)
         if (!encrypted.isNullOrBlank()) {
-            return try { decrypt(encrypted) } catch (_: Exception) { "" }
+            return try { decrypt(encrypted, "$preferencesName:$name") } catch (_: Exception) { "" }
         }
 
         val legacy = prefs.getString(name, null) ?: return ""
         if (legacy.isBlank()) return ""
         return try {
-            val ciphertext = encrypt(legacy)
+            val ciphertext = encrypt(legacy, "$preferencesName:$name")
             if (prefs.edit().putString(encryptedName, ciphertext).remove(name).commit()) legacy
             else legacy
         } catch (_: Exception) {
@@ -88,7 +91,7 @@ object SecurePreferences {
             remove(context, preferencesName, name)
             return
         }
-        val ciphertext = encrypt(value)
+        val ciphertext = encrypt(value, "$preferencesName:$name")
         check(prefs.edit().putString("${name}_encrypted", ciphertext).remove(name).commit()) {
             "Could not persist encrypted app credential"
         }
