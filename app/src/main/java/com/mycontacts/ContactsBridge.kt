@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 
 private class BridgeHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
@@ -97,6 +98,10 @@ class ContactsBridge(context: Context) {
         AppLog.info(appContext, "ContactsSync", "Starting sync: contacts=${contacts.size}, batches=${batches.size}")
         var completedContacts = 0
         var currentBatch = 0
+        var insertedCount = 0
+        var updatedExistingCount = 0
+        var skippedExistingCount = 0
+        val conflictDetails = JSONArray()
         try {
             batches.forEachIndexed { index, batch ->
                 currentBatch = index + 1
@@ -129,12 +134,20 @@ class ContactsBridge(context: Context) {
                 }
                 val response = requestSyncBatch(JSONObject().put("action", "sync_contacts").put("contacts", arr))
                 total += response.optInt("synced")
+                insertedCount += response.optInt("inserted")
+                updatedExistingCount += response.optInt("updated_existing")
+                skippedExistingCount += response.optInt("skipped_existing")
                 completedContacts += batch.size
                 val rows = response.optJSONArray("conflicts") ?: JSONArray()
                 for (i in 0 until rows.length()) {
                     val item = rows.optJSONObject(i) ?: continue
                     val id = item.optString("id")
-                    if (id.isNotBlank()) conflicts.add(id)
+                    if (id.isNotBlank()) {
+                        conflicts.add(id)
+                        conflictDetails.put(JSONObject()
+                            .put("id", id)
+                            .put("fields", item.optJSONArray("fields") ?: JSONArray()))
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -148,6 +161,35 @@ class ContactsBridge(context: Context) {
                     "успешно обработано $completedContacts контактов: ${e.message}",
                 e
             )
+        }
+        // Record the complete set of IDs only after every contact batch succeeded.
+        // This manifest lets Telegram matching ignore historical snapshots for contacts
+        // that no longer exist on the device, without deleting their archived data.
+        if (contacts.isNotEmpty()) {
+            try {
+                val uniqueIds = contacts.map { it.id.toString() }.distinct()
+                val manifest = requestSyncBatch(JSONObject()
+                    .put("action", "record_sync_manifest")
+                    .put("sync_id", UUID.randomUUID().toString())
+                    .put("local_contact_ids", JSONArray(uniqueIds))
+                    .put("sync_summary", JSONObject()
+                        .put("attempted", contacts.size)
+                        .put("unique_contacts", uniqueIds.size)
+                        .put("inserted", insertedCount)
+                        .put("updated_existing", updatedExistingCount)
+                        .put("skipped_existing", skippedExistingCount)
+                        .put("conflicts", conflictDetails.length())
+                        .put("duplicates", contacts.size - uniqueIds.size))
+                    .put("conflict_details", conflictDetails))
+                if (!manifest.optBoolean("recorded")) {
+                    throw IllegalStateException("Сервер не подтвердил сохранение манифеста синхронизации")
+                }
+                AppLog.info(appContext, "ContactsSync", "Current-contact manifest recorded: contacts=${uniqueIds.size}")
+            } catch (e: Exception) {
+                // Contact batches are already safely stored. Keep sync successful but
+                // make the missing manifest visible; resolver will retain its last valid set.
+                AppLog.error(appContext, "ContactsSync", "Contact data synced, but current-contact manifest was not recorded; Telegram matching must use the previous manifest.", e)
+            }
         }
         // Do not prune snapshots during routine sync: the server is append-only by contact ID.
         lastSyncConflicts = conflicts.toList()
