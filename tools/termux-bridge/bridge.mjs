@@ -499,13 +499,13 @@ async function approveLocalAction(label, timeoutMs = 60000) {
 function approvalDescription(job) {
   const args = job.args && typeof job.args === "object" ? job.args : {};
   const preview = (value, max = 500) => String(value ?? "")
-    .replace(/\\b[a-f0-9]{64}\\b/gi, "[REDACTED]")
-    .replace(/Bearer\\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
-    .replace(/((?:password|token|secret|api[_-]?key)\\s*[=:]\\s*)[^\\s"'&]+/gi, "$1[REDACTED]")
+    .replace(/\b[a-f0-9]{64}\b/gi, "[REDACTED]")
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
+    .replace(/((?:password|token|secret|api[_-]?key)\s*[=:]\s*)[^\s"'&]+/gi, "$1[REDACTED]")
     .slice(0, max);
   switch (job.command_type) {
     case "terminal_run":
-      return "Execute remote Termux shell command:\\n" + preview(args.command) + "\\nWorking directory: " + preview(args.cwd || ".", 160);
+      return "Execute remote Termux shell command:\n" + preview(args.command) + "\nWorking directory: " + preview(args.cwd || ".", 160);
     case "terminal_start":
       return "Start an interactive Termux shell session. Initial command: " + preview(args.command || "(empty shell)");
     case "terminal_input":
