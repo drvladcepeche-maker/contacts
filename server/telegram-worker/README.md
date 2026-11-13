@@ -9,6 +9,7 @@ A standalone Node.js MTProto worker for Hostless. It resolves phone numbers alre
 - Enforces a minimum 5-second interval between Telegram lookup requests, plus random additive jitter (default 0–3 seconds).
 - On Telegram FloodWait, stops processing the current job and re-queues it with `paused_until` set beyond the server-specified wait.
 - Persists each result and progress to Supabase immediately; a restarted worker resumes at the first unprocessed candidate.
+- Processes only contact IDs present in the latest completed device sync manifest. Stale candidates are skipped before consuming a Telegram API request and do not create Android update commands.
 - Updates the corresponding `contact_bridge_snapshots.contact_data` record by `device_id + local_contact_id`.
 - Stores the real username when present. If Telegram resolves a user but no username is returned, stores `СКРЫТ` in `telegram_username`. Unresolvable numbers are marked `not_resolved`, never `СКРЫТ`.
 - Does not import contacts, send messages, or change Telegram account contact lists.
