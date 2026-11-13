@@ -146,19 +146,46 @@ Deno.serve(async (req: Request) => {
       const offset = Math.min(Math.max(Number(args.offset ?? 0), 0), 10000);
       const limit = Math.min(Math.max(Number(args.limit ?? 500), 1), 500);
       let rows: any[] = [];
-      // Scan before filtering so account-scoped pagination covers the full device cache,
-      // rather than only filtering the requested page.
-      for (let scanOffset = 0; scanOffset < 10000; scanOffset += 500) {
-        const { data: page, error } = await db.from("contact_bridge_snapshots")
-          .select("local_contact_id, contact_data, synced_at, device_id")
-          .eq("device_id", deviceId)
-          .order("synced_at", { ascending: false })
-          .range(scanOffset, scanOffset + 499);
-        if (error) throw error;
-        const batch = page ?? [];
-        rows.push(...batch);
-        if (batch.length < 500) break;
+      // The latest completed full-sync manifest is the source of truth for the
+      // current address book. Never expose stale snapshots left by older syncs.
+      const { data: manifest, error: manifestError } = await db
+        .from("contact_bridge_sync_manifests")
+        .select("sync_id, local_contact_ids, contact_count, created_at")
+        .eq("device_id", deviceId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (manifestError) throw manifestError;
+      if (!manifest) {
+        return response(id, toolResult({
+          contacts: [], returned: 0, offset, limit, has_more: false, total_matching: 0,
+          manifest_required: true,
+          note: "No completed full-sync manifest exists for this device. Run a full Android sync first."
+        }));
       }
+      const manifestIds = Array.isArray(manifest.local_contact_ids)
+        ? Array.from(new Set(manifest.local_contact_ids.map((value: unknown) => String(value))
+            .filter((value: string) => /^[1-9]\\d*$/.test(value)))
+        : [];
+      if (manifestIds.length !== Number(manifest.contact_count)) {
+        throw new Error("Latest contact sync manifest is incomplete or inconsistent; refusing to return cached contacts.");
+      }
+      const idBatches: string[][] = [];
+      for (let i = 0; i < manifestIds.length; i += 400) idBatches.push(manifestIds.slice(i, i + 400));
+      // Bound concurrency and query only IDs in the latest manifest. This avoids
+      // both an unbounded table scan and returning historical contacts.
+      for (let batchOffset = 0; batchOffset < idBatches.length; batchOffset += 4) {
+        const pages = await Promise.all(idBatches.slice(batchOffset, batchOffset + 4).map(async (ids) => {
+          const { data, error } = await db.from("contact_bridge_snapshots")
+            .select("local_contact_id, contact_data, synced_at, device_id")
+            .eq("device_id", deviceId)
+            .in("local_contact_id", ids);
+          if (error) throw error;
+          return data ?? [];
+        }));
+        rows.push(...pages.flat());
+      }
+      rows.sort((a, b) => String(b.synced_at ?? "").localeCompare(String(a.synced_at ?? "")));
       if (name === "contacts_search" || name === "contacts_search_v2") {
         const q = String(args.query ?? "").trim().toLocaleLowerCase();
         if (!q) return response(id, toolResult({ error: "query required" }, true));
@@ -190,7 +217,7 @@ Deno.serve(async (req: Request) => {
         });
       }
       const pageRows = rows.slice(offset, offset + limit);
-      return response(id, toolResult({ contacts: pageRows.map((r: any) => ({ ...r.contact_data, local_contact_id: r.local_contact_id, synced_at: r.synced_at })), returned: pageRows.length, offset, limit, has_more: offset + pageRows.length < rows.length, total_matching: rows.length, account_filter: accountFilterActive ? { account_name: accountName || null, account_type: accountType || null } : null }));
+      return response(id, toolResult({ contacts: pageRows.map((r: any) => ({ ...r.contact_data, local_contact_id: r.local_contact_id, synced_at: r.synced_at })), returned: pageRows.length, offset, limit, has_more: offset + pageRows.length < rows.length, total_matching: rows.length, account_filter: accountFilterActive ? { account_name: accountName || null, account_type: accountType || null } : null, source_manifest: manifest.sync_id, source_manifest_created_at: manifest.created_at, source_manifest_contact_count: manifest.contact_count }));
     }
 
 
