@@ -10,7 +10,7 @@ on:
       - "supabase/migrations/*contact_bridge_sync*"
       - ".github/workflows/termux-bridge-check.yml"
   push:
-    branches: [main, feature/brave-accessibility-control]
+    branches: [main, feature/brave-accessibility-control, "integration/**"]
     paths:
       - "tools/termux-bridge/**"
       - "supabase/functions/termux-bridge/**"
