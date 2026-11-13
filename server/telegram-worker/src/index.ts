@@ -236,6 +236,7 @@ async function processJob(job: Job) {
   let lastRequestAt = job.last_request_at ?? null;
   const startIndex = results.length;
   let lookupsThisRun = 0;
+  let staleSkippedSinceSave = 0;
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
     if (lookupsThisRun >= maxCandidatesPerRun) {
@@ -287,12 +288,16 @@ async function processJob(job: Job) {
         checked_at: checkedAt,
       };
       results.push(stale);
-      await updateJob(job.id, {
-        results,
-        checked: results.length,
-        matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
-        errors: results.filter(x => x.status === "error").length,
-      });
+      staleSkippedSinceSave += 1;
+      if (staleSkippedSinceSave >= 50) {
+        await updateJob(job.id, {
+          results,
+          checked: results.length,
+          matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
+          errors: results.filter(x => x.status === "error").length,
+        });
+        staleSkippedSinceSave = 0;
+      }
       console.warn("Skipping stale Telegram candidate before lookup.");
       continue;
     }
@@ -359,6 +364,7 @@ async function processJob(job: Job) {
       errors: results.filter(x => x.status === "error").length,
       last_request_at: lastRequestAt, paused_until: null, error_message: null,
     });
+    staleSkippedSinceSave = 0;
   }
   if (!stopping) {
     await updateJob(job.id, {
