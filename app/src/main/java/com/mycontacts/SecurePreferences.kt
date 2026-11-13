@@ -70,7 +70,13 @@ object SecurePreferences {
         val encryptedName = "${name}_encrypted"
         val encrypted = prefs.getString(encryptedName, null)
         if (!encrypted.isNullOrBlank()) {
-            return try { decrypt(encrypted, "$preferencesName:$name") } catch (_: Exception) { "" }
+            return try {
+                val plaintext = decrypt(encrypted, "$preferencesName:$name")
+                if (prefs.contains(name)) prefs.edit().remove(name).apply()
+                plaintext
+            } catch (_: Exception) {
+                ""
+            }
         }
 
         val legacy = prefs.getString(name, null) ?: return ""
