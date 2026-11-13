@@ -52,12 +52,12 @@ If the repository is already cloned:
 
     cd ~/contacts
     git fetch origin
-    git checkout feature/brave-accessibility-control
-    git pull --ff-only origin feature/brave-accessibility-control
+    git checkout main
+    git pull --ff-only origin main
 
 Otherwise:
 
-    git clone -b feature/brave-accessibility-control https://github.com/drvladcepeche-maker/contacts.git ~/contacts
+    git clone -b main https://github.com/drvladcepeche-maker/contacts.git ~/contacts
     cd ~/contacts
 
 Do not run setup.mjs again if the device is already registered. Keep the existing token file at ~/.config/termux-bridge/device-token.
