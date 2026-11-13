@@ -233,6 +233,7 @@ class MainActivity : Activity() {
         val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) }
             catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Could not read pending command queue", e)
+                AppLog.error(this, "MainActivity", "Could not read pending command queue", e)
                 JSONArray()
             }
         // Process one mutating command at a time: each write may open a confirmation dialog.
