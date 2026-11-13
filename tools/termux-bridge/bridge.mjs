@@ -483,7 +483,7 @@ async function approveLocalAction(label, timeoutMs = 60000) {
       rl.question(
         `\nLOCAL APPROVAL REQUIRED\n${label}\nWorkspace: ${WORKSPACE}\nType YES within ${Math.round(timeoutMs / 1000)} seconds to continue: `
       ),
-      new Promise<string>((resolve) => {
+      new Promise((resolve) => {
         timeoutHandle = setTimeout(() => resolve(""), timeoutMs);
       }),
     ]);
