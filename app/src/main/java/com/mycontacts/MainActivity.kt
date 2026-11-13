@@ -1185,7 +1185,10 @@ try {
             try {
                 AppLog.info(this, "TelegramResolver", "Contact synchronization started for server check")
                 val summary = syncContacts()
-                AppLog.info(this, "TelegramResolver", "Contact synchronization completed: attempted=${summary.attempted}, synced=${summary.synced}")
+                AppLog.info(this, "TelegramResolver", "Contact synchronization completed: attempted=${summary.attempted}, synced=${summary.synced}, manifestRecorded=${summary.manifestRecorded}")
+                if (!summary.manifestRecorded) {
+                    throw IllegalStateException("Сервер не подтвердил полный снимок контактов; проверка Telegram не запущена")
+                }
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
