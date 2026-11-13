@@ -249,7 +249,8 @@ def main():
         assert any(x["detected_type"]=="profile_url" for x in obs)
         assert "sample_handle" in candidates and "second_handle" in candidates and "another_name" in candidates
         assert not any(x["detected_type"]=="email" and x.get("normalized_value")=="b.example" for x in obs)
-        assert expected_for_mime("vnd.android.cursor.item/website") is None
+        assert expected_for_mime("vnd.android.cursor.item/website") == "profile_url"
+        assert expected_for_mime("vnd.android.cursor.item/email_v2") == "email"
         assert expected_for_mime("vnd.android.cursor.item/im") == "username"
         assert canonical_platform("X") == canonical_platform("Twitter") == "Twitter"
         print("Sherlock worker self-test passed")
@@ -292,7 +293,8 @@ def main():
         site_union=set().union(*(x["sites"] for x in contacts)) or set(SITES)
         _, selected_sites=selected_catalog_sites(site_union)
         cached=latest_cache(username,selected_sites)
-        required_cache_keys={canonical_platform(site) for site in selected_sites}\n        if required_cache_keys and required_cache_keys.issubset(cached):
+        required_cache_keys={canonical_platform(site) for site in selected_sites}
+        if required_cache_keys and required_cache_keys.issubset(cached):
             continue
         try:
             results=run_sherlock(username,selected_sites)
