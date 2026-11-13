@@ -37,7 +37,6 @@ function contactCore(value: unknown): Record<string, unknown> {
     key !== "accounts" &&
     key !== "telegram_id" &&
     key !== "telegram_username" &&
-    key !== "telegram" &&
     !key.startsWith("telegram_match_")
   ));
 }
