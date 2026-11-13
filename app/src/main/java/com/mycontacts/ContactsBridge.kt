@@ -14,11 +14,9 @@ class ContactsBridge(context: Context) {
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
     }
 
-    private val prefs = context.getSharedPreferences("contacts_bridge", Context.MODE_PRIVATE)
-
-    fun token(): String = prefs.getString("device_token", "") ?: ""
-    fun saveToken(value: String) { prefs.edit().putString("device_token", value.trim()).apply() }
-    fun clearToken() { prefs.edit().remove("device_token").apply() }
+    fun token(): String = SecurePreferences.get(context, "contacts_bridge", "device_token")
+    fun saveToken(value: String) { SecurePreferences.put(context, "contacts_bridge", "device_token", value.trim()) }
+    fun clearToken() { SecurePreferences.remove(context, "contacts_bridge", "device_token") }
 
     private fun requestWithToken(token: String, body: JSONObject): JSONObject {
         require(token.isNotBlank()) { "Токен не указан" }
