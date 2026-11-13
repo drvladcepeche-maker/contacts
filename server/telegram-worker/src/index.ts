@@ -5,6 +5,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
 import { calculateBatchResumeAt } from "./rate-limit.js";
+import { filterActiveContactIds } from "./contact-manifest.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -313,14 +314,8 @@ async function processJob(job: Job) {
       continue;
     }
 
-    const targetContactIds = Array.from(new Set([
-      candidate.local_contact_id,
-      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0)));
-    const currentContactIds: string[] = [];
-    for (const localContactId of targetContactIds) {
-      if (await isCurrentManifestContact(candidate.device_id, localContactId)) currentContactIds.push(localContactId);
-    }
+    const currentManifest = await getCurrentManifest(candidate.device_id);
+    const currentContactIds = filterActiveContactIds(candidate, currentManifest.ids);
     if (currentContactIds.length === 0) {
       const stale: MatchResult = {
         device_id: candidate.device_id,
