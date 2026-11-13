@@ -7,3 +7,26 @@ local.properties
 # Private Android signing material (never commit)
 mycontacts-signing.p12
 mycontacts-signing-base64.txt
+
+# Local credentials and environment files (keep the documented template)
+.env
+.env.*
+!.env.example
+TELEGRAM_SESSION
+**/TELEGRAM_SESSION
+*.session
+*.session-journal
+
+# Local Node.js worker output and dependencies
+node_modules/
+dist/
+coverage/
+
+# Local signing stores and private key material
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Local diagnostic output
+*.log
