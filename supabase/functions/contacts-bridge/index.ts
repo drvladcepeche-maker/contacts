@@ -458,11 +458,18 @@ Deno.serve(async (req: Request) => {
         return json({ error: "A Telegram matching job is already queued or running", job_id: activeJobs[0].id }, 409);
       }
 
-      const { count: snapshotCount, error: countError } = await supabase
-        .from("contact_bridge_snapshots")
-        .select("local_contact_id", { count: "exact", head: true })
-        .eq("device_id", deviceId);
-      if (countError) return json({ error: countError.message }, 500);
+      const { data: manifest, error: manifestError } = await supabase
+        .from("contact_bridge_sync_manifests")
+        .select("local_contact_ids, contact_count, created_at")
+        .eq("device_id", deviceId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (manifestError) return json({ error: manifestError.message }, 500);
+      if (!manifest) {
+        return json({ error: "A complete contact sync manifest is required before Telegram matching", requires_full_sync: true }, 409);
+      }
+      const activeIds = new Set<string>((manifest.local_contact_ids ?? []).map((value: unknown) => String(value)));
       const snapshots: Array<{ local_contact_id: string; contact_data: unknown }> = [];
       for (let offset = 0; ; offset += 1000) {
         const { data: page, error: pageError } = await supabase
@@ -475,6 +482,8 @@ Deno.serve(async (req: Request) => {
         snapshots.push(...(page ?? []));
         if (!page || page.length < 1000) break;
       }
+      // Keep historical snapshots intact, but only feed currently present Android IDs to the resolver.
+      const currentSnapshots = snapshots.filter((row) => activeIds.has(String(row.local_contact_id)));
 
       const byPhone = new Map<string, {
         device_id: string;
@@ -483,7 +492,7 @@ Deno.serve(async (req: Request) => {
         name: string;
         phone: string;
       }>();
-      for (const row of snapshots ?? []) {
+      for (const row of currentSnapshots) {
         const localId = String(row.local_contact_id ?? "").trim();
         const data = row.contact_data && typeof row.contact_data === "object" && !Array.isArray(row.contact_data)
           ? row.contact_data as Record<string, unknown>
@@ -510,7 +519,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Telegram match job exceeds the 25000 unique-phone safety limit" }, 413);
       }
       if (!candidates.length) {
-        return json({ queued: false, contacts: (snapshots ?? []).length, unique_phone_count: 0 });
+        return json({ queued: false, contacts: currentSnapshots.length, stale_snapshot_count: snapshots.length - currentSnapshots.length, unique_phone_count: 0 });
       }
       const { data: job, error: insertError } = await supabase
         .from("telegram_match_jobs")
@@ -528,7 +537,8 @@ Deno.serve(async (req: Request) => {
       return json({
         queued: true,
         job_id: job.id,
-        contacts: (snapshots ?? []).length,
+        contacts: currentSnapshots.length,
+        stale_snapshot_count: snapshots.length - currentSnapshots.length,
         unique_phone_count: candidates.length,
       });
     }

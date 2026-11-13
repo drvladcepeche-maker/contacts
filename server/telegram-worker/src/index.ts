@@ -5,6 +5,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
 import { calculateBatchResumeAt } from "./rate-limit.js";
+import { filterActiveContactIds } from "./contact-manifest.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -205,6 +206,35 @@ async function processJob(job: Job) {
   const candidates = Array.isArray(job.phones) ? job.phones : [];
   const results: MatchResult[] = Array.isArray(job.results) ? job.results : [];
   let lastRequestAt = job.last_request_at ?? null;
+
+  // Load the last complete Android contact set once per device. Historical snapshots
+  // remain archived, but Telegram lookups and Contacts Provider writes must target
+  // only IDs that still exist on the phone.
+  const activeIdsByDevice = new Map<string, Set<string>>();
+  const deviceIds = Array.from(new Set(candidates
+    .map(candidate => String(candidate?.device_id ?? ""))
+    .filter(Boolean)));
+  for (const deviceId of deviceIds) {
+    const { data: manifest, error: manifestError } = await supabase
+      .from("contact_bridge_sync_manifests")
+      .select("local_contact_ids")
+      .eq("device_id", deviceId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (manifestError) throw manifestError;
+    if (!manifest) {
+      const resumeAt = new Date(Date.now() + 60 * 60_000).toISOString();
+      await updateJob(job.id, {
+        status: "queued", paused_until: resumeAt,
+        error_message: "Waiting for a complete Android contact sync manifest. Run a full contact sync before Telegram matching.",
+      });
+      console.warn(`Job ${job.id} paused: no full sync manifest for device ${deviceId}`);
+      return;
+    }
+    activeIdsByDevice.set(deviceId, new Set<string>((manifest.local_contact_ids ?? []).map((id: unknown) => String(id))));
+  }
+
   const startIndex = results.length;
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
@@ -237,18 +267,48 @@ async function processJob(job: Job) {
       continue;
     }
 
+    const activeIds = activeIdsByDevice.get(candidate.device_id) ?? new Set<string>();
+    const activeCandidateIds = filterActiveContactIds(candidate, activeIds);
+    if (!activeCandidateIds.length) {
+      // Count stale candidates as checked, but do not spend a Telegram request or
+      // write back to a contact that no longer exists on the Android device.
+      results.push({
+        device_id: candidate.device_id,
+        local_contact_id: candidate.local_contact_id,
+        phone,
+        telegram_id: null,
+        username: null,
+        status: "not_resolved",
+        error: "Skipped: contact ID is absent from the latest full sync manifest.",
+        checked_at: checkedAt,
+      });
+      await updateJob(job.id, {
+        results, checked: results.length,
+        matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
+        errors: results.filter(x => x.status === "error").length,
+        paused_until: null,
+        error_message: null,
+      });
+      continue;
+    }
+    const activeCandidate: PhoneCandidate = {
+      ...candidate,
+      local_contact_id: activeCandidateIds[0],
+      local_contact_ids: activeCandidateIds.slice(1),
+    };
+
     await waitForRateLimit(lastRequestAt);
     let result: MatchResult;
     try {
       const match = await resolvePhone(phone);
       result = match
         ? {
-            device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+            device_id: activeCandidate.device_id, local_contact_id: activeCandidate.local_contact_id, phone,
             telegram_id: match.id, username: match.username,
             status: match.username ? "matched" : "username_missing", checked_at: new Date().toISOString(),
           }
         : {
-            device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+            device_id: activeCandidate.device_id, local_contact_id: activeCandidate.local_contact_id, phone,
             telegram_id: null, username: null, status: "not_resolved", checked_at: new Date().toISOString(),
           };
     } catch (error) {
@@ -267,12 +327,12 @@ async function processJob(job: Job) {
       }
       if (rpcIsNotResolved(error)) {
         result = {
-          device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+          device_id: activeCandidate.device_id, local_contact_id: activeCandidate.local_contact_id, phone,
           telegram_id: null, username: null, status: "not_resolved", checked_at: new Date().toISOString(),
         };
       } else {
         result = {
-          device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+          device_id: activeCandidate.device_id, local_contact_id: activeCandidate.local_contact_id, phone,
           telegram_id: null, username: null, status: "error",
           error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
           checked_at: new Date().toISOString(),
@@ -281,12 +341,12 @@ async function processJob(job: Job) {
     }
     lastRequestAt = new Date().toISOString();
     const targetContactIds = Array.from(new Set([
-      candidate.local_contact_id,
-      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
+      activeCandidate.local_contact_id,
+      ...(Array.isArray(activeCandidate.local_contact_ids) ? activeCandidate.local_contact_ids : []),
     ].filter((value): value is string => typeof value === "string" && value.length > 0)));
     for (const localContactId of targetContactIds) {
       await saveContactResult(
-        { ...candidate, local_contact_id: localContactId },
+        { ...activeCandidate, local_contact_id: localContactId, local_contact_ids: [] },
         { ...result, local_contact_id: localContactId },
       );
     }
