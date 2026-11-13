@@ -9,8 +9,6 @@ import java.net.URL
 private class BridgeHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
 class ContactsBridge(context: Context) {
-    private val appContext = context.applicationContext
-
     companion object {
         const val BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
