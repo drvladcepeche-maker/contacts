@@ -235,9 +235,10 @@ async function processJob(job: Job) {
   const results: MatchResult[] = Array.isArray(job.results) ? job.results : [];
   let lastRequestAt = job.last_request_at ?? null;
   const startIndex = results.length;
+  let lookupsThisRun = 0;
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
-    if (index - startIndex >= maxCandidatesPerRun) {
+    if (lookupsThisRun >= maxCandidatesPerRun) {
       const resumeAt = calculateBatchResumeAt(lastRequestAt, Date.now(), batchCooldownMs);
       await updateJob(job.id, {
         status: "queued", results, checked: results.length,
@@ -246,7 +247,7 @@ async function processJob(job: Job) {
         last_request_at: lastRequestAt, paused_until: resumeAt,
         error_message: null,
       });
-      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; resume at ${resumeAt}`);
+      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates and ${lookupsThisRun} Telegram lookups; resume at ${resumeAt}`);
       return;
     }
     const candidate = candidates[index];
@@ -304,6 +305,7 @@ async function processJob(job: Job) {
     await waitForRateLimit(lastRequestAt);
     let result: MatchResult;
     try {
+      lookupsThisRun += 1;
       const match = await resolvePhone(phone);
       result = match
         ? {
