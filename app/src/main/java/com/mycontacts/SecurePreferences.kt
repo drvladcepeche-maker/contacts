@@ -40,6 +40,7 @@ object SecurePreferences {
         return store.getKey(KEY_ALIAS, null) as SecretKey
     }
 
+    // Bind ciphertext to its preference slot so encrypted values cannot be swapped between keys.
     private fun encrypt(value: String, associatedData: String): String {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
