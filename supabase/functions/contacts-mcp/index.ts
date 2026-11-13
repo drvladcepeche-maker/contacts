@@ -137,18 +137,31 @@ Deno.serve(async (req: Request) => {
       if (activeDeviceIds.length) {
         const { data: manifests, error: manifestCountError } = await db
           .from("contact_bridge_sync_manifests")
-          .select("device_id, contact_count, created_at")
+          .select("device_id, sync_id, contact_count, created_at")
           .in("device_id", activeDeviceIds)
           .order("created_at", { ascending: false });
         if (manifestCountError) throw manifestCountError;
-        const latestCountByDevice = new Map<string, number>();
+        const latestManifestByDevice = new Map<string, any>();
         for (const manifest of manifests ?? []) {
           const deviceId = String(manifest.device_id);
-          if (!latestCountByDevice.has(deviceId)) {
-            latestCountByDevice.set(deviceId, Math.max(0, Number(manifest.contact_count) || 0));
-          }
+          if (!latestManifestByDevice.has(deviceId)) latestManifestByDevice.set(deviceId, manifest);
         }
-        cachedContactCount = Array.from(latestCountByDevice.values()).reduce((sum, count) => sum + count, 0);
+        cachedContactCount = Array.from(latestManifestByDevice.values())
+          .reduce((sum, manifest) => sum + Math.max(0, Number(manifest.contact_count) || 0), 0);
+        const devicesWithSyncStatus = (devices ?? []).map((device: any) => {
+          const manifest = latestManifestByDevice.get(String(device.id));
+          const createdAt = manifest?.created_at ? Date.parse(String(manifest.created_at)) : NaN;
+          const ageMs = Date.now() - createdAt;
+          const manifestFresh = Number.isFinite(createdAt) && ageMs >= -5 * 60_000 && ageMs <= 24 * 60 * 60_000;
+          return {
+            ...device,
+            latest_manifest_sync_id: manifest?.sync_id ?? null,
+            latest_manifest_created_at: manifest?.created_at ?? null,
+            latest_manifest_count: manifest ? Math.max(0, Number(manifest.contact_count) || 0) : 0,
+            latest_manifest_fresh: manifestFresh,
+          };
+        });
+        return response(id, toolResult({ bridge: "online", devices: devicesWithSyncStatus, cached_contact_count: cachedContactCount }));
       }
       return response(id, toolResult({ bridge: "online", devices: devices ?? [], cached_contact_count: cachedContactCount }));
     }
