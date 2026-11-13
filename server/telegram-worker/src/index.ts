@@ -13,7 +13,7 @@ type PhoneCandidate = {
   name?: string;
   phone: string;
 };
-type MatchStatus = "matched" | "username_missing" | "not_resolved" | "error";
+type MatchStatus = "matched" | "username_missing" | "not_resolved" | "error" | "stale_contact";
 type MatchResult = {
   device_id: string;
   local_contact_id: string;
@@ -266,18 +266,53 @@ async function processJob(job: Job) {
       continue;
     }
 
+    const targetContactIds = Array.from(new Set([
+      candidate.local_contact_id,
+      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0)));
+    const currentContactIds: string[] = [];
+    for (const localContactId of targetContactIds) {
+      if (await isCurrentManifestContact(candidate.device_id, localContactId)) currentContactIds.push(localContactId);
+    }
+    if (currentContactIds.length === 0) {
+      const stale: MatchResult = {
+        device_id: candidate.device_id,
+        local_contact_id: candidate.local_contact_id,
+        phone,
+        telegram_id: null,
+        username: null,
+        status: "stale_contact",
+        error: "outside_latest_manifest",
+        checked_at: checkedAt,
+      };
+      results.push(stale);
+      await updateJob(job.id, {
+        results,
+        checked: results.length,
+        matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
+        errors: results.filter(x => x.status === "error").length,
+      });
+      console.warn("Skipping stale Telegram candidate before lookup.");
+      continue;
+    }
+    const currentCandidate: PhoneCandidate = {
+      ...candidate,
+      local_contact_id: currentContactIds[0],
+      local_contact_ids: currentContactIds.slice(1),
+    };
+
     await waitForRateLimit(lastRequestAt);
     let result: MatchResult;
     try {
       const match = await resolvePhone(phone);
       result = match
         ? {
-            device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+            device_id: currentCandidate.device_id, local_contact_id: currentCandidate.local_contact_id, phone,
             telegram_id: match.id, username: match.username,
             status: match.username ? "matched" : "username_missing", checked_at: new Date().toISOString(),
           }
         : {
-            device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+            device_id: currentCandidate.device_id, local_contact_id: currentCandidate.local_contact_id, phone,
             telegram_id: null, username: null, status: "not_resolved", checked_at: new Date().toISOString(),
           };
     } catch (error) {
@@ -296,12 +331,12 @@ async function processJob(job: Job) {
       }
       if (rpcIsNotResolved(error)) {
         result = {
-          device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+          device_id: currentCandidate.device_id, local_contact_id: currentCandidate.local_contact_id, phone,
           telegram_id: null, username: null, status: "not_resolved", checked_at: new Date().toISOString(),
         };
       } else {
         result = {
-          device_id: candidate.device_id, local_contact_id: candidate.local_contact_id, phone,
+          device_id: currentCandidate.device_id, local_contact_id: currentCandidate.local_contact_id, phone,
           telegram_id: null, username: null, status: "error",
           error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
           checked_at: new Date().toISOString(),
@@ -309,13 +344,9 @@ async function processJob(job: Job) {
       }
     }
     lastRequestAt = new Date().toISOString();
-    const targetContactIds = Array.from(new Set([
-      candidate.local_contact_id,
-      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0)));
-    for (const localContactId of targetContactIds) {
+    for (const localContactId of currentContactIds) {
       await saveContactResult(
-        { ...candidate, local_contact_id: localContactId },
+        { ...currentCandidate, local_contact_id: localContactId },
         { ...result, local_contact_id: localContactId },
       );
     }
