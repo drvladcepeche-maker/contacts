@@ -306,14 +306,30 @@ class MainActivity : Activity() {
     }
 
     private fun completeBridgeCommand(id: String, result: JSONObject? = null, error: String? = null) {
+        if (error != null) {
+            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=" + id + "; reason=" + error.take(500))
+            AppLog.flush(this, force = true)
+        }
+        // Persist the local result first. If this fails, the command must be
+        // handled again rather than acknowledged as complete.
         try {
             persistCommandOutcome(id, result, error)
+        } catch (e: Exception) {
+            synchronized(activeCommandIds) { activeCommandIds.remove(id) }
+            android.util.Log.e("MainActivity", "Could not persist command outcome " + id, e)
+            AppLog.error(this, "MainActivity", "Could not persist command outcome " + id, e)
+            throw e
+        }
+
+        // A network failure here must not overwrite a successful local operation
+        // with a failed result. Keep the persisted outcome and retry only the ACK.
+        try {
             bridge.complete(id, result, error)
             removeQueuedCommand(id)
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
-            throw e
+            android.util.Log.e("MainActivity", "Remote acknowledgement failed; persisted outcome retained for retry: " + id, e)
+            AppLog.error(this, "MainActivity", "Remote acknowledgement failed; persisted outcome retained for retry: " + id, e)
         }
     }
 
