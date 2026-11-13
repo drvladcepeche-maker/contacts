@@ -6,6 +6,7 @@ import { basename, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { TerminalSessions } from "./terminal-sessions.mjs";
+import { requiresLocalApproval } from "./command-policy.mjs";
 import { ShizukuFiles } from "./shizuku-files.mjs";
 
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SJMrOazzL4h91DQ2nQaeaQ_FRyGSP7Y";
@@ -472,23 +473,79 @@ async function uploadWorkspaceFile(args) {
   };
 }
 
-async function approveBuild(label) {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return false;
-  }
+async function approveLocalAction(label, timeoutMs = 60000) {
+  // Fail closed when the bridge is running without a visible local terminal.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let timeoutHandle;
   try {
-    const answer = await rl.question(
-      `\nCONFIRMATION REQUIRED: ${label}\nWorkspace: ${WORKSPACE}\nThis runs repository build scripts. Execute? Type YES: `
-    );
-    return answer.trim() === "YES";
+    const answer = await Promise.race([
+      rl.question(
+        `\nLOCAL APPROVAL REQUIRED\n${label}\nWorkspace: ${WORKSPACE}\nType YES within ${Math.round(timeoutMs / 1000)} seconds to continue: `
+      ),
+      new Promise<string>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(""), timeoutMs);
+      }),
+    ]);
+    return String(answer).trim() === "YES";
+  } catch {
+    return false;
   } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     rl.close();
   }
 }
 
+function approvalDescription(job) {
+  const args = job.args && typeof job.args === "object" ? job.args : {};
+  const preview = (value, max = 500) => String(value ?? "")
+    .replace(/\\b[a-f0-9]{64}\\b/gi, "[REDACTED]")
+    .replace(/Bearer\\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]")
+    .replace(/((?:password|token|secret|api[_-]?key)\\s*[=:]\\s*)[^\\s"'&]+/gi, "$1[REDACTED]")
+    .slice(0, max);
+  switch (job.command_type) {
+    case "terminal_run":
+      return "Execute remote Termux shell command:\\n" + preview(args.command) + "\\nWorking directory: " + preview(args.cwd || ".", 160);
+    case "terminal_start":
+      return "Start an interactive Termux shell session. Initial command: " + preview(args.command || "(empty shell)");
+    case "terminal_input":
+      return "Send " + String(args.input ?? "").length + " characters to interactive shell session " + preview(args.session_id, 80) + ". Input is hidden.";
+    case "install_apk":
+      return "Install/update APK from the approved folder: " + preview(args.file, 180);
+    case "file_upload":
+      return "Upload a file to private project storage: " + preview(args.path, 240);
+    case "shizuku_file_mkdir":
+      return "Create shared-storage directory: " + preview(args.path, 240);
+    case "shizuku_file_copy":
+      return "Copy shared-storage file: " + preview(args.source, 200) + " -> " + preview(args.destination, 200);
+    case "shizuku_file_move":
+      return "Move shared-storage file: " + preview(args.source, 200) + " -> " + preview(args.destination, 200);
+    case "shizuku_file_delete":
+      return "Delete shared-storage file: " + preview(args.path, 240);
+    case "brave_accessibility":
+      return "Perform Brave UI action: " + preview(args.action, 80) + (args.url ? " " + preview(args.url, 240) : "");
+    default:
+      return "Approve requested device operation: " + String(job.command_type || "unknown");
+  }
+}
+
+async function approveBuild(label) {
+  return await approveLocalAction("Run repository build scripts: " + label);
+}
+
 async function execute(job) {
   const args = job.args && typeof job.args === "object" ? job.args : {};
+  if (requiresLocalApproval(job.command_type, args)) {
+    const approved = await approveLocalAction(approvalDescription(job));
+    if (!approved) {
+      return {
+        exitCode: 125,
+        output: "",
+        errorText: "Blocked: local on-device approval was not provided within 60 seconds. No operation was executed.",
+      };
+    }
+    console.log("Local on-device approval granted for " + job.command_type + ".");
+  }
   switch (job.command_type) {
     case "pwd":
       return { exitCode: 0, output: WORKSPACE, errorText: "" };
