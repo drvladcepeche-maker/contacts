@@ -484,7 +484,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: manifest, error: manifestError } = await supabase
         .from("contact_bridge_sync_manifests")
-        .select("sync_id, local_contact_ids, contact_count")
+        .select("sync_id, local_contact_ids, contact_count, created_at")
         .eq("device_id", deviceId)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -492,6 +492,11 @@ Deno.serve(async (req: Request) => {
       if (manifestError) return json({ error: manifestError.message }, 500);
       if (!manifest) {
         return json({ error: "No completed full-sync manifest; sync contacts before starting Telegram matching" }, 409);
+      }
+      const manifestCreatedAt = Date.parse(String(manifest.created_at ?? ""));
+      const manifestAgeMs = Date.now() - manifestCreatedAt;
+      if (!Number.isFinite(manifestCreatedAt) || manifestAgeMs < -5 * 60_000 || manifestAgeMs > 24 * 60 * 60_000) {
+        return json({ error: "Latest completed contact sync manifest is stale; sync contacts before starting Telegram matching" }, 409);
       }
       const manifestIds = Array.isArray(manifest.local_contact_ids)
         ? Array.from(new Set(manifest.local_contact_ids
@@ -561,7 +566,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: "Telegram match job exceeds the 25000 unique-phone safety limit" }, 413);
       }
       if (!candidates.length) {
-        return json({ queued: false, contacts: snapshots.length, unique_phone_count: 0, source_manifest: manifest.sync_id });
+        return json({ queued: false, contacts: snapshots.length, unique_phone_count: 0, source_manifest: manifest.sync_id, source_manifest_created_at: manifest.created_at });
       }
       const { data: job, error: insertError } = await supabase
         .from("telegram_match_jobs")
