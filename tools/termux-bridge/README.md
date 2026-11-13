@@ -18,7 +18,7 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 
 ### Shizuku
 - shizuku_storage_check: fixed read-only check of the APK folder.
-- install_apk: PackageManager install/update for com.mycontacts, com.mycontacts.pairing2, or isolated recovery package com.mycontacts.bridgefix4; checks package metadata and signature compatibility; never uninstalls the old app.
+- install_apk: in-place update only for an already-installed allowlisted My Contacts package; checks package metadata and relies on Android PackageManager to enforce signing-certificate compatibility; first-time package installation is rejected.
 - shizuku_file_list, shizuku_file_mkdir, shizuku_file_copy, shizuku_file_move: paths are restricted to /sdcard/Download/TermuxBridge and /sdcard/Documents/TermuxBridge.
 - shizuku_file_delete: single-file deletion only; requires args.confirm=true; root folders cannot be deleted.
 
@@ -32,6 +32,8 @@ This is not root access. Shell commands run as the normal Termux app user; Shizu
 - Terminal commands are powerful and can access files available to the Termux user. Only a trusted authenticated controller should be allowed to queue them.
 - Commands do not run as root and do not automatically inherit environment variables whose names contain token, secret, password, credential, or private-key markers. The device token is not sent to Supabase Storage.
 - Shell commands are limited to 8192 characters; one-shot commands have a 15-minute maximum; interactive sessions are capped at three and expire after 15 minutes of inactivity.
+- Remote shell execution (terminal_run/start/input), APK installation, file uploads, Shizuku file mutations, and Brave click/input/open_url actions require a fresh local confirmation: the user must type exactly YES in the visible Termux terminal within 60 seconds. If the bridge has no interactive TTY or approval times out, the operation is rejected and is not executed.
+- Read-only diagnostics, file listing/inspection, terminal output reads, and Brave snapshot/back/scroll remain available without an approval prompt.
 - Interactive sessions use stdin/stdout pipes, not a PTY. Full-screen terminal programs such as vim, nano, and htop are not supported.
 - File uploads are limited to 50 MiB. Workspace paths are allowed; shared Downloads uploads must use @downloads/TermuxBridge/... or @downloads/PnS_APK/.... Sensitive filename patterns are blocked.
 - Shizuku file operations do not use arbitrary caller-supplied shell commands. Paths are limited to dedicated shared-storage folders. Delete is non-recursive and requires explicit confirmation.
@@ -86,8 +88,8 @@ The one-shot command queues exactly one approved action, polls the authenticated
 
 The status endpoint requires the same registered device token and filters by both the authenticated device ID and command type. It returns only the matching job's status, output, error, and exit code.
 
-## Build approval
+## Local approval
 
-gradle_test and gradle_assemble_debug still require typing exactly YES in an interactive Termux terminal because repository build scripts execute code. If no interactive terminal is attached, those tasks are rejected.
+All consequential operations listed above require typing exactly YES in the interactive Termux terminal. This is an independent on-device confirmation; possession of the server/device token alone is not sufficient to execute shell commands, mutate shared storage, upload files, install APKs, or perform consequential Brave UI actions. `gradle_test` and `gradle_assemble_debug` also require the same confirmation because repository build scripts execute code. If no interactive terminal is attached, these operations are rejected.
 
-The APK installer validates the APK package, checks that the target package is already installed, requires Shizuku to report uid=2000(shell), then runs only pm install -r --user 0. Android PackageManager enforces signing-key compatibility. No uninstall, downgrade, or signature-bypass flags are used.
+The APK installer validates the APK package, requires the target package to already be installed, requires Shizuku to report uid=2000(shell), then runs only `pm install -r --user 0`. Android PackageManager enforces signing-certificate compatibility for the in-place update. First-time installation, uninstall, downgrade, and signature-bypass flags are not supported.
