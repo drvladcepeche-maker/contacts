@@ -5,6 +5,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
 import { calculateBatchResumeAt } from "./rate-limit.js";
+import { filterActiveContactIds } from "./contact-manifest.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -267,11 +268,7 @@ async function processJob(job: Job) {
     }
 
     const activeIds = activeIdsByDevice.get(candidate.device_id) ?? new Set<string>();
-    const candidateIds = Array.from(new Set([
-      candidate.local_contact_id,
-      ...(Array.isArray(candidate.local_contact_ids) ? candidate.local_contact_ids : []),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0)));
-    const activeCandidateIds = candidateIds.filter(id => activeIds.has(id));
+    const activeCandidateIds = filterActiveContactIds(candidate, activeIds);
     if (!activeCandidateIds.length) {
       // Count stale candidates as checked, but do not spend a Telegram request or
       // write back to a contact that no longer exists on the Android device.

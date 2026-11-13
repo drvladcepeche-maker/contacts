@@ -9,7 +9,7 @@
     "dev": "tsx src/index.ts",
     "session": "tsx scripts/generate-session.ts",
     "generate-session": "tsx scripts/generate-session.ts",
-    "test": "tsx --test test/telegram-usernames.test.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "telegram": "^2.26.22",
