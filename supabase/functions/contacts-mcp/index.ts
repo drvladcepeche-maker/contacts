@@ -200,6 +200,11 @@ Deno.serve(async (req: Request) => {
         rows.push(...pages.flat());
       }
       rows.sort((a, b) => String(b.synced_at ?? "").localeCompare(String(a.synced_at ?? "")));
+      const returnedIds = new Set(rows.map((row: any) => String(row.local_contact_id)));
+      if (returnedIds.size !== manifestIds.length) {
+        const missingCount = manifestIds.length - returnedIds.size;
+        throw new Error(`Latest sync manifest references ${missingCount} contacts missing from server snapshots; refusing to return partial results.`);
+      }
       if (name === "contacts_search" || name === "contacts_search_v2") {
         const q = String(args.query ?? "").trim().toLocaleLowerCase();
         if (!q) return response(id, toolResult({ error: "query required" }, true));
