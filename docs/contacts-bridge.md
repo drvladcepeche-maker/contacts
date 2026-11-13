@@ -32,6 +32,8 @@ Transport: Streamable HTTP, JSON-RPC 2.0. Authenticate with an HTTP header:
 The MCP token is different from the Android device token. Keep it in the connector's protected authentication settings; never put it in this repository, an APK, or a public document.
 
 Available tools:
+- `contacts_request_diagnostics` queues a read-only live diagnostics request. It returns APK version/build, Android version/model, permission state, bridge foreground-service state, Telegram matching counters, recent app-owned logs and errors. Logs are truncated and redact phone numbers, email addresses and token-like values.
+- `contacts_command_status` retrieves the response by command ID.
 - `contacts_status`
 - `contacts_list`
 - `contacts_search`

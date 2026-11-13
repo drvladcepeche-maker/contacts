@@ -62,9 +62,93 @@ Deno.serve(async (req: Request) => {
 
   if (action === "heartbeat") return json({ ok: true, device_id: device.id });
 
+  if (action === "enqueue_brave") {
+    const braveAction = String(body.brave_action ?? "");
+    if (!["snapshot", "back", "open_url"].includes(braveAction)) {
+      return json({ error: "Unsupported Brave command" }, 400);
+    }
+
+    const args: Record<string, unknown> = { action: braveAction };
+    if (braveAction === "open_url") {
+      const targetUrl = String(body.url ?? "");
+      if (targetUrl !== "https://www.reg.ru/") {
+        return json({ error: "Only the approved public REG.RU URL is allowed" }, 400);
+      }
+      args.url = targetUrl;
+    } else if (body.url !== undefined) {
+      return json({ error: "URL is not allowed for this Brave command" }, 400);
+    }
+
+    const { data: job, error } = await supabase
+      .from("termux_bridge_jobs")
+      .insert({
+        device_id: device.id,
+        command_type: "brave_accessibility",
+        args,
+      })
+      .select("id")
+      .single();
+
+    if (error || !job) return json({ error: "Could not queue Brave command" }, 500);
+    return json({ job_id: job.id });
+  }
+
+
+  if (action === "create_upload_url") {
+    const filename = String(body.filename ?? "");
+    const size = Number(body.size);
+    const contentType = String(body.content_type ?? "application/octet-stream");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(filename) || filename === "." || filename === "..") {
+      return json({ error: "Invalid upload filename" }, 400);
+    }
+    if (!Number.isSafeInteger(size) || size < 1 || size > 50 * 1024 * 1024) {
+      return json({ error: "Upload size must be between 1 byte and 50 MiB" }, 400);
+    }
+    const contentTypeParts = contentType.split("/");
+    if (contentTypeParts.length !== 2 || contentTypeParts.some(part => !/^[A-Za-z0-9.+_-]+$/.test(part)) || contentType.length > 128) {
+      return json({ error: "Invalid content type" }, 400);
+    }
+    const objectPath = `${device.id}/${crypto.randomUUID()}-${filename}`;
+    const { data, error } = await supabase.storage
+      .from("termux-bridge-artifacts")
+      .createSignedUploadUrl(objectPath, { upsert: false });
+    if (error || !data?.signedUrl || !data?.token) {
+      return json({ error: "Could not create a private upload grant" }, 500);
+    }
+    return json({
+      path: objectPath,
+      token: data.token,
+      signed_url: data.signedUrl,
+      bucket: "termux-bridge-artifacts",
+      expires_in: 7200,
+    });
+  }
+
+  if (action === "brave_status") {
+    const id = String(body.job_id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Invalid job_id" }, 400);
+
+    const { data: job, error } = await supabase
+      .from("termux_bridge_jobs")
+      .select("id, status, output, error_text, exit_code, created_at, finished_at")
+      .eq("id", id)
+      .eq("device_id", device.id)
+      .eq("command_type", "brave_accessibility")
+      .maybeSingle();
+
+    if (error) return json({ error: "Could not read Brave command status" }, 500);
+    if (!job) return json({ error: "Brave command not found for this device" }, 404);
+    return json({ job });
+  }
+
   if (action === "claim") {
+    const claimToken = String(body.claim_token ?? "");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claimToken)) {
+      return json({ error: "Invalid claim_token" }, 400);
+    }
     const { data, error } = await supabase.rpc("claim_termux_bridge_job", {
       p_device_id: device.id,
+      p_claim_token: claimToken,
     });
     if (error) return json({ error: "Could not claim command" }, 500);
     const job = Array.isArray(data) ? (data[0] ?? null) : data;
@@ -94,8 +178,24 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (error) return json({ error: "Could not save command result" }, 500);
-    if (!data) return json({ error: "Command not found or not running for this device" }, 404);
-    return json({ ok: true });
+    if (data) return json({ ok: true });
+
+    // A previous completion may have committed even when its HTTP response was lost.
+    // Accept an exact replay, but never overwrite a terminal or conflicting result.
+    const { data: existing, error: readError } = await supabase
+      .from("termux_bridge_jobs")
+      .select("status, output, error_text, exit_code")
+      .eq("id", id)
+      .eq("device_id", device.id)
+      .maybeSingle();
+    if (readError) return json({ error: "Could not verify command completion" }, 500);
+    const sameResult = existing &&
+      existing.status === patch.status &&
+      (existing.output ?? "") === patch.output &&
+      (existing.error_text ?? null) === patch.error_text &&
+      existing.exit_code === patch.exit_code;
+    if (sameResult) return json({ ok: true, already_completed: true });
+    return json({ error: "Command not found, not running, or has a conflicting result" }, 409);
   }
 
   return json({ error: "Unsupported action" }, 400);

@@ -2,9 +2,15 @@ package com.mycontacts
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
+import java.util.UUID
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -13,6 +19,7 @@ import java.util.Locale
 /** App-owned diagnostics. Android system logcat is not accessible to ordinary apps without special privileges. */
 object AppLog {
     private const val FILE_NAME = "mycontacts.log"
+    private const val DIAGNOSTICS_FILE_NAME = "mycontacts-diagnostics.jsonl"
     private const val MAX_BYTES = 1024 * 1024
     private val lock = Any()
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -33,18 +40,18 @@ object AppLog {
 
     fun read(context: Context): String = synchronized(lock) {
         val file = File(context.filesDir, FILE_NAME)
-        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
-        val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
-        val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
-        val lastError = prefs.getString("last_upload_error", "").orEmpty()
-        body + buildString {
-            append("\n--- Отправка диагностики ---\n")
-            append("Ожидают отправки: ").append(pending).append("\n")
-            append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\n")
-            append("Последняя отправка: принято ").append(prefs.getInt("last_upload_received", 0))
-                .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\n")
-            if (lastError.isNotBlank()) append("Последняя ошибка отправки: ").append(redact(lastError)).append("\n")
-        }
+        if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
+    }
+
+    /** Recent app-owned logs only; redact contact identifiers and credentials before remote sharing. */
+    fun readForDiagnostics(context: Context, maxLines: Int = 160): String {
+        val recent = read(context).lineSequence().toList().takeLast(maxLines).joinToString("\n")
+        val redacted = recent
+            .replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~-]{12,}"), "Bearer [REDACTED]")
+            .replace(Regex("\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", RegexOption.IGNORE_CASE), "[EMAIL]")
+            .replace(Regex("(?<!\\w)\\+?\\d[\\d ()-]{7,}\\d(?!\\w)"), "[PHONE]")
+            .replace(Regex("\\b[0-9a-fA-F]{48,}\\b"), "[TOKEN]")
+        return redacted.takeLast(16000)
     }
 
     fun exportToDownloads(context: Context): String {
@@ -155,131 +162,147 @@ echo "Изменения APK собираются через GitHub Actions по
         return "Download/MyContacts/$name"
     }
 
-    private val uploadExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
-    @Volatile private var lastFlushScheduledAt = 0L
-
-    /** Retry persisted diagnostic events, throttled to avoid repeated network requests. */
-    fun flush(context: Context, force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (!force && now - lastFlushScheduledAt < 30_000L) return
-        lastFlushScheduledAt = now
-        val app = context.applicationContext
-        uploadExecutor.execute {
-            try {
-                val prefs = app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
-                val batch = synchronized(lock) {
-                    val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
-                    catch (_: Exception) { org.json.JSONArray() }
-                    org.json.JSONArray().also { out ->
-                        for (i in 0 until minOf(current.length(), 50)) {
-                            current.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
-                        }
-                    }
-                }
-                if (batch.length() == 0) return@execute
-                val response = ContactsBridge(app).request(
-                    org.json.JSONObject().put("action", "upload_diagnostics").put("entries", batch)
-                )
-                val received = response.optInt("received", -1)
-                if (received < 0) {
-                    val message = response.optString("error", "Сервер вернул некорректный ответ диагностики")
-                    prefs.edit().putString("last_upload_error", message).apply()
-                    android.util.Log.e("AppLog", "Diagnostic upload rejected: " + message)
-                    lastFlushScheduledAt = 0L
-                    return@execute
-                }
-                val sent = HashSet<String>()
-                for (i in 0 until batch.length()) sent.add(batch.optJSONObject(i)?.optString("event_id") ?: "")
-                synchronized(lock) {
-                    val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
-                    catch (_: Exception) { org.json.JSONArray() }
-                    val remaining = org.json.JSONArray()
-                    for (i in 0 until current.length()) {
-                        val item = current.optJSONObject(i) ?: continue
-                        if (!sent.contains(item.optString("event_id"))) remaining.put(item)
-                    }
-                    prefs.edit().putString("pending", remaining.toString()).commit()
-                }
-                prefs.edit()
-                    .putString("last_upload_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                        timeZone = java.util.TimeZone.getTimeZone("UTC")
-                    }.format(Date()))
-                    .putInt("last_upload_received", received)
-                    .putInt("last_upload_inserted", response.optInt("inserted", 0))
-                    .putString("last_upload_error", "")
-                    .apply()
-            } catch (e: Exception) {
-                // Keep the queue intact, expose the transport error in the exported log,
-                // and retry on the next flush.
-                val message = e.javaClass.simpleName + ": " + (e.message ?: "no message")
-                app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
-                    .edit().putString("last_upload_error", message).apply()
-                android.util.Log.e("AppLog", "Diagnostic upload failed", e)
-                lastFlushScheduledAt = 0L
-            }
-        }
-    }
-
-    private fun redact(value: String): String {
-        var safe = value
-        safe = safe.replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
-        safe = Regex("(?i)(token|password|secret|api[_-]?key)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
-            it.groupValues[1] + it.groupValues[2] + "[REDACTED]"
-        }
-        safe = safe.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), "[EMAIL]")
-        safe = safe.replace(Regex("\\+?\\d[\\d ()-]{7,}\\d"), "[PHONE]")
-        safe = safe.replace(Regex("\\b[A-Fa-f0-9]{32,}\\b"), "[TOKEN]")
-        return safe.take(12000)
-    }
-
-    private fun enqueueDiagnostic(context: Context, level: String, message: String, error: Throwable?) {
-        try {
-            val app = context.applicationContext
-            val stack = error?.let { android.util.Log.getStackTraceString(it) }
-            val event = org.json.JSONObject()
-                .put("event_id", java.util.UUID.randomUUID().toString())
-                .put("occurred_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.format(java.util.Date()))
-                .put("level", level)
-                .put("tag", redact(message.substringBefore(":").take(120)))
-                .put("message", redact(message.substringAfter(": ", message).take(2000)))
-                .put("stack_trace", stack?.let { redact(it) } ?: org.json.JSONObject.NULL)
-                .put("app_version", BuildConfig.VERSION_NAME)
-            val prefs = app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
-            synchronized(lock) {
-                val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
-                catch (_: Exception) { org.json.JSONArray() }
-                current.put(event)
-                val trimmed = org.json.JSONArray()
-                for (i in maxOf(0, current.length() - 200) until current.length()) trimmed.put(current.getJSONObject(i))
-                prefs.edit().putString("pending", trimmed.toString()).commit()
-            }
-            if (level != "INFO") flush(app, force = true)
-        } catch (_: Exception) {
-            // Diagnostics must never interrupt the application.
-        }
-    }
-
     private fun write(context: Context, level: String, message: String, error: Throwable?) {
+        val app = context.applicationContext
+        var shouldUpload = false
         synchronized(lock) {
             try {
-                val file = File(context.applicationContext.filesDir, FILE_NAME)
+                val file = File(app.filesDir, FILE_NAME)
                 if (file.exists() && file.length() > MAX_BYTES) {
-                    val backup = File(context.filesDir, "mycontacts-old.log")
+                    val backup = File(app.filesDir, "mycontacts-old.log")
                     backup.delete()
                     file.renameTo(backup)
                 }
+                val stack = error?.let { android.util.Log.getStackTraceString(it) }.orEmpty()
                 file.appendText(buildString {
                     append(formatter.format(Date())).append(" ").append(level).append(" ").append(message).append("\n")
-                    if (error != null) {
-                        append(android.util.Log.getStackTraceString(error)).append("\n")
-                    }
+                    if (stack.isNotBlank()) append(stack).append("\n")
                 }, Charsets.UTF_8)
+
+                // Keep a durable structured queue for remote diagnostics. INFO is included
+                // for updater stages; routine INFO messages from other components stay local.
+                val remote = level in setOf("WARN", "ERROR", "FATAL") ||
+                    (level == "INFO" && (
+                        message.startsWith("ApkUpdater:") ||
+                        message.startsWith("TelegramResolver:")
+                    ))
+                if (remote) {
+                    val diagnostics = File(app.filesDir, DIAGNOSTICS_FILE_NAME)
+                    if (diagnostics.exists() && diagnostics.length() > 2L * 1024L * 1024L) {
+                        val retained = diagnostics.readLines(Charsets.UTF_8).takeLast(400)
+                        diagnostics.writeText(retained.joinToString("\n", postfix = if (retained.isEmpty()) "" else "\n"), Charsets.UTF_8)
+                    }
+                    val packageInfo = try { app.packageManager.getPackageInfo(app.packageName, 0) } catch (_: Exception) { null }
+                    val safeMessage = sanitizeDiagnostic(message).take(2000)
+                    val safeStack = sanitizeDiagnostic(stack).take(12000)
+                    val event = JSONObject()
+                        .put("event_id", UUID.randomUUID().toString())
+                        .put("occurred_at", Instant.now().toString())
+                        .put("level", level)
+                        .put("tag", sanitizeDiagnostic(message.substringBefore(":")).take(120))
+                        .put("message", safeMessage)
+                        .put("stack_trace", safeStack.ifBlank { JSONObject.NULL })
+                        .put("app_version", packageInfo?.versionName ?: BuildConfig.VERSION_NAME)
+                    diagnostics.appendText(event.toString() + "\n", Charsets.UTF_8)
+                    shouldUpload = true
+                }
             } catch (_: Exception) {
                 // Logging must never crash the application.
             }
         }
-        enqueueDiagnostic(context, level, message, error)
+        if (shouldUpload) DiagnosticsSync.flush(app)
+    }
+
+    private fun sanitizeDiagnostic(value: String): String = value
+        .replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~-]{12,}"), "Bearer [REDACTED]")
+        .replace(Regex("(?i)(token|api[_-]?key|password)=([^&\\s]+)"), "\$1=[REDACTED]")
+        .replace(Regex("\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b", RegexOption.IGNORE_CASE), "[EMAIL]")
+        .replace(Regex("(?<!\\w)\\+?\\d[\\d ()-]{7,}\\d(?!\\w)"), "[PHONE]")
+        .replace(Regex("\\b[0-9a-fA-F]{48,}\\b"), "[TOKEN]")
+
+    fun pendingRemoteEntries(context: Context, limit: Int = 50): JSONArray = synchronized(lock) {
+        val file = File(context.applicationContext.filesDir, DIAGNOSTICS_FILE_NAME)
+        val result = JSONArray()
+        if (!file.exists()) return@synchronized result
+        file.readLines(Charsets.UTF_8).takeLast(500).forEach { line ->
+            if (result.length() >= limit) return@forEach
+            try { result.put(JSONObject(line)) } catch (_: Exception) { }
+        }
+        result
+    }
+
+    fun markRemoteUploaded(context: Context, eventIds: Set<String>) {
+        if (eventIds.isEmpty()) return
+        synchronized(lock) {
+            try {
+                val file = File(context.applicationContext.filesDir, DIAGNOSTICS_FILE_NAME)
+                if (!file.exists()) return
+                val remaining = file.readLines(Charsets.UTF_8).filter { line ->
+                    try { JSONObject(line).optString("event_id") !in eventIds } catch (_: Exception) { true }
+                }
+                val temp = File(context.applicationContext.filesDir, "$DIAGNOSTICS_FILE_NAME.tmp")
+                temp.writeText(remaining.joinToString("\n", postfix = if (remaining.isEmpty()) "" else "\n"), Charsets.UTF_8)
+                if (!temp.renameTo(file)) {
+                    file.writeText(remaining.joinToString("\n", postfix = if (remaining.isEmpty()) "" else "\n"), Charsets.UTF_8)
+                    temp.delete()
+                }
+            } catch (_: Exception) { }
+        }
+    }
+}
+
+object DiagnosticsSync {
+    private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    fun registerNetworkCallback(context: Context) {
+        if (networkCallback != null) return
+        val app = context.applicationContext
+        try {
+            val manager = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    flush(app)
+                }
+            }
+            synchronized(this) {
+                if (networkCallback == null) {
+                    manager.registerDefaultNetworkCallback(callback)
+                    networkCallback = callback
+                }
+            }
+        } catch (_: Exception) {
+            // Foreground retries still work if Android refuses callback registration.
+        }
+    }
+
+    fun flush(context: Context) {
+        if (!running.compareAndSet(false, true)) return
+        val app = context.applicationContext
+        executor.execute {
+            try {
+                val bridge = ContactsBridge(app)
+                if (bridge.token().isBlank()) return@execute
+                // Drain the bounded local queue in batches. Failed requests leave all
+                // entries on disk; the next resume or new error retries them.
+                while (true) {
+                    val entries = AppLog.pendingRemoteEntries(app, 50)
+                    if (entries.length() == 0) break
+                    val response = bridge.uploadDiagnostics(entries)
+                    if (response.optInt("rejected", 0) != 0 ||
+                        response.optInt("received", 0) < entries.length()) break
+                    val ids = (0 until entries.length()).mapNotNull { i ->
+                        entries.optJSONObject(i)?.optString("event_id")?.takeIf { it.isNotBlank() }
+                    }.toSet()
+                    if (ids.isEmpty()) break
+                    AppLog.markRemoteUploaded(app, ids)
+                }
+            } catch (_: Exception) {
+                // Keep the queue for the next foreground/resume or subsequent event.
+            } finally {
+                running.set(false)
+            }
+        }
     }
 }
