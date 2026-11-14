@@ -2,7 +2,7 @@ export function sanitizeDiagnostic(value: unknown, maxLength = 2000): string {
   let safe = String(value ?? "");
   safe = safe.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]");
   safe = safe.replace(
-    /\b(token|password|secret|api[_-]?key|authorization|access[_-]?token)\s*[:=]\s*[^\s,;]+/gi,
+    /\b(token|password|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*[^\s,;]+/gi,
     "$1=[REDACTED]",
   );
   safe = safe.replace(
