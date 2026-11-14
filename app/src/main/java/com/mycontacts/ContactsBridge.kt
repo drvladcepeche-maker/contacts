@@ -140,7 +140,7 @@ class ContactsBridge(context: Context) {
         } catch (e: Exception) {
             val message = "Sync failed at batch ${currentBatch}/${batches.size}; " +
                 "completed_batches=${currentBatch - 1}; completed_contacts=${completedContacts}; " +
-                "new_or_updated=${total}; error=${e.javaClass.simpleName}: ${e.message}"
+                "new_or_updated=${total}; error_type=${e.javaClass.simpleName}"
             AppLog.error(appContext, "ContactsSync", message, e)
             AppLog.flush(appContext, force = true)
             throw IllegalStateException(
