@@ -381,8 +381,10 @@ async function braveAccessibility(args) {
   let rishBin = process.env.RISH_BIN || resolve(WORKSPACE, "rish");
   try { await access(rishBin); } catch { rishBin = "rish"; }
   const identity = await run(rishBin, ["-c", "id"], 15000);
-  if (identity.exitCode !== 0 || !identity.output.includes("uid=2000(shell)")) {
-    throw new Error("Shizuku is unavailable or not authorized; expected Android shell uid=2000. " +
+  const isAndroidShell = identity.output.includes("uid=2000(shell)");
+  const isAuthorizedRoot = identity.output.includes("uid=0(root)");
+  if (identity.exitCode !== 0 || (!isAndroidShell && !isAuthorizedRoot)) {
+    throw new Error("Shizuku is unavailable or not authorized; expected Android shell uid=2000 or explicitly authorized root uid=0. " +
       (identity.errorText || identity.output || ""));
   }
 
