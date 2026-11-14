@@ -47,13 +47,25 @@ class BraveAccessibilityService : AccessibilityService() {
             .put("error", message)
 
         fun writeResponse(context: android.content.Context, result: JSONObject): String {
-            if (Build.VERSION.SDK_INT < 29) throw IllegalStateException("Shared Downloads response requires Android 10 or newer.")
             val requestId = result.optString("request_id")
             require(requestId.matches(Regex("^[a-fA-F0-9-]{36}$"))) { "Invalid response request_id." }
+            val fileName = "accessibility-result-" + requestId + ".json"
+            if (Build.VERSION.SDK_INT < 29) {
+                @Suppress("DEPRECATION")
+                val directory = java.io.File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "TermuxBridge"
+                )
+                if (!directory.exists() && !directory.mkdirs()) {
+                    throw IllegalStateException("Could not create the TermuxBridge Downloads directory.")
+                }
+                val target = java.io.File(directory, fileName)
+                target.writeText(result.toString(2), Charsets.UTF_8)
+                return "Download/TermuxBridge/" + fileName
+            }
             val resolver = context.contentResolver
             val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
             val relativePath = Environment.DIRECTORY_DOWNLOADS + "/TermuxBridge/"
-            val fileName = "accessibility-result-" + requestId + ".json"
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
