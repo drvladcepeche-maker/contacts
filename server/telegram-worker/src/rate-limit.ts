@@ -44,10 +44,10 @@ export function floodWaitSeconds(error: unknown): number | null {
       const message = String(value.message ?? value.errorMessage ?? "");
       const combined = `${name} ${message} ${String(value.errorMessage ?? "")}`;
 
-      const direct = combined.match(/FLOOD(?:_PREMIUM)?_WAIT_(\\d+)/i);
+      const direct = combined.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
       if (direct) return Number(direct[1]);
 
-      const natural = combined.match(/A wait of (\\d+) seconds is required/i);
+      const natural = combined.match(/A wait of (\d+) seconds is required/i);
       if (natural) return Number(natural[1]);
 
       const seconds = Number(value.seconds);
@@ -58,9 +58,9 @@ export function floodWaitSeconds(error: unknown): number | null {
       if (value.cause != null) pending.push(value.cause);
       if (value.originalError != null) pending.push(value.originalError);
     } else if (typeof current === "string") {
-      const direct = current.match(/FLOOD(?:_PREMIUM)?_WAIT_(\\d+)/i);
+      const direct = current.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
       if (direct) return Number(direct[1]);
-      const natural = current.match(/A wait of (\\d+) seconds is required/i);
+      const natural = current.match(/A wait of (\d+) seconds is required/i);
       if (natural) return Number(natural[1]);
     }
   }
