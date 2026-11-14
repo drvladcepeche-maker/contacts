@@ -167,13 +167,22 @@ class MainActivity : Activity() {
         val commandId = source.getStringExtra("notification_command_id").orEmpty()
         val decision = source.getStringExtra("notification_decision").orEmpty()
         if (commandId.isBlank() || decision !in setOf("approve", "reject")) return
+        val signature = source.getStringExtra("notification_decision_signature").orEmpty()
+        if (!NotificationActionSigner.verify(commandId, decision, signature)) {
+            source.removeExtra("notification_command_id")
+            source.removeExtra("notification_decision")
+            source.removeExtra("notification_decision_signature")
+            AppLog.warn(this, "NotificationAction", "Rejected an unauthenticated notification action intent")
+            return
+        }
         synchronized(activeCommandIds) {
             if (decision == "approve") notificationApprovedCommandIds.add(commandId)
             else notificationRejectedCommandIds.add(commandId)
         }
         source.removeExtra("notification_command_id")
         source.removeExtra("notification_decision")
-        AppLog.info(this, "NotificationAction", "User selected " + decision + " for command " + commandId)
+        source.removeExtra("notification_decision_signature")
+        AppLog.info(this, "NotificationAction", "User selected " + decision + " for a bridge command")
     }
 
     override fun onPause() {
@@ -189,7 +198,7 @@ class MainActivity : Activity() {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit().putString("last_service_start_error", "").apply()
         } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Failed to start bridge foreground service", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, "MainActivity", "Failed to start bridge foreground service", e)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit()
                 .putString("last_service_start_error", e.javaClass.simpleName + ": " + (e.message ?: "no message")).apply()
@@ -228,7 +237,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
         val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) }
             catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Could not read pending command queue", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
                 JSONArray()
             }
         for (i in 0 until pending.length()) {
@@ -241,8 +250,8 @@ class MainActivity : Activity() {
                 handleBridgeCommand(command)
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-                android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
-                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
+                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue", e)
             }
         }
     }
@@ -299,7 +308,7 @@ class MainActivity : Activity() {
         if (error == null) {
             AppLog.info(this, "BridgeCommand", "Local outcome completed; command_id=$id")
         } else {
-            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; reason=${error.take(500)}")
+            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; failure details withheld")
         }
         AppLog.flush(this, force = true)
         try {
@@ -308,8 +317,8 @@ class MainActivity : Activity() {
             removeQueuedCommand(id)
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
-            AppLog.error(this, "MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
+            AppLog.error(this, "MainActivity", "Could not complete command; retained for acknowledgement retry", e)
             throw e
         }
     }
@@ -425,7 +434,7 @@ class MainActivity : Activity() {
                 try {
                     completeBridgeCommand(id, savedResult, savedError)
                 } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "Acknowledgement retry failed for command " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
                 }
             }
             return
@@ -526,7 +535,7 @@ class MainActivity : Activity() {
                     } else emptyList()
                     val c = byId ?: fallbackMatches.singleOrNull()
                     if (byId == null && c != null) {
-                        AppLog.warn(this, "BridgeCommand", "Delete resolved stale local ID $contactId to current ID ${c.id} using exact name and phone")
+                        AppLog.warn(this, "BridgeCommand", "Delete resolved a stale local contact ID using exact name and phone")
                         AppLog.flush(this, force = true)
                     }
                     if (c == null) {
@@ -1175,7 +1184,7 @@ class MainActivity : Activity() {
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
-                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
+                AppLog.info(this, "TelegramResolver", "Queued cloud matching with $count unique phone numbers after syncing $synced contacts")
                 runOnUiThread {
                     showSyncResult(synced)
                     if (result.optBoolean("queued")) {
