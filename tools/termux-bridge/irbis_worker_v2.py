@@ -87,8 +87,6 @@ def capture_screen():
     if result.returncode != 0 or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
         err = result.stderr.decode("utf-8", "replace")[:1000]
         raise RuntimeError("screencap failed (exit=" + str(result.returncode) + ", bytes=" + str(len(result.stdout)) + ", prefix=" + repr(result.stdout[:16]) + "): " + err)
-        err = result.stderr.decode("utf-8", "replace")[:1000]
-        raise RuntimeError("screencap failed: " + err)
     png = result.stdout
     filename = "screen-" + str(uuid.uuid4()) + ".png"
     grant = api({"action": "create_upload_url", "filename": filename,
