@@ -1,0 +1,1 @@
+create index if not exists todoist_control_targets_created_by_idx on orchestrator.todoist_control_targets(created_by);
