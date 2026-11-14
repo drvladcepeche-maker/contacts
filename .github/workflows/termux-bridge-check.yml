@@ -37,8 +37,11 @@ jobs:
         run: |
           deno check supabase/functions/termux-bridge/index.ts
           deno check supabase/functions/contacts-bridge/index.ts
+          deno check supabase/functions/contacts-mcp/index.ts
       - name: Test contacts bridge diagnostic redaction
         run: deno test supabase/functions/contacts-bridge/tests/
+      - name: Test contacts MCP diagnostic redaction
+        run: deno test supabase/functions/contacts-mcp/tests/
       - name: Smoke-test contacts bridge authentication and CORS
         shell: bash
         run: |
