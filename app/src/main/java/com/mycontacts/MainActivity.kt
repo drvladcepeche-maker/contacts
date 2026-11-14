@@ -299,7 +299,7 @@ class MainActivity : Activity() {
         if (error == null) {
             AppLog.info(this, "BridgeCommand", "Local outcome completed; command_id=$id")
         } else {
-            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; reason=${error.take(500)}")
+            AppLog.error(this, "BridgeCommand", "Local outcome failed; command_id=$id; failure details withheld")
         }
         AppLog.flush(this, force = true)
         try {
