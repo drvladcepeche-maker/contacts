@@ -53,7 +53,7 @@ object AppLog {
                     "$timestamp $level ${redact(message)}"
                 }
             }.joinToString("\n").ifBlank { "Исторические подробности исключений скрыты.\n" } + "\n"
-        } else "Лог пока пуст.\\n"
+        } else "Лог пока пуст.\n"
         val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
         val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
         val lastError = prefs.getString("last_upload_error", "").orEmpty()
