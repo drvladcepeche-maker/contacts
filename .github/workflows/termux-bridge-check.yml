@@ -14,6 +14,7 @@ on:
       - "tools/termux-bridge/**"
       - "supabase/functions/termux-bridge/**"
       - "supabase/migrations/*termux*"
+      - ".github/workflows/termux-bridge-check.yml"
 
 permissions:
   contents: read
