@@ -33,7 +33,27 @@ object AppLog {
 
     fun read(context: Context): String = synchronized(lock) {
         val file = File(context.filesDir, FILE_NAME)
-        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
+        val body = if (file.exists()) {
+            val linePattern = Regex("""^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}) (INFO|WARN|ERROR|FATAL) (.*)$""")
+            file.readLines(Charsets.UTF_8).mapNotNull { line ->
+                val match = linePattern.matchEntire(line) ?: return@mapNotNull null
+                val timestamp = match.groupValues[1]
+                val level = match.groupValues[2]
+                val message = match.groupValues[3]
+                if (level == "ERROR" || level == "FATAL") {
+                    val tag = message.substringBefore(":").takeIf { it.length in 1..80 }?.let { redact(it) }
+                    val exceptionType = Regex("""\\[exception=([A-Za-z0-9_.$]+)\\]""").find(message)?.groupValues?.get(1)
+                    buildString {
+                        append(timestamp).append(" ").append(level).append(" ")
+                        if (!tag.isNullOrBlank()) append(tag).append(": ")
+                        append("historical error details omitted")
+                        if (!exceptionType.isNullOrBlank()) append(" [exception=").append(exceptionType).append("]")
+                    }
+                } else {
+                    "$timestamp $level ${redact(message)}"
+                }
+            }.joinToString("\\n").ifBlank { "Исторические подробности исключений скрыты.\\n" } + "\\n"
+        } else "Лог пока пуст.\\n"
         val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
         val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
         val lastError = prefs.getString("last_upload_error", "").orEmpty()
