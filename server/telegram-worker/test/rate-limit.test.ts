@@ -47,3 +47,8 @@ test("detects FloodWait in nested causes", () => {
 test("does not treat unrelated errors with a seconds field as FloodWait", () => {
   assert.equal(floodWaitSeconds({ name: "TimeoutError", seconds: 30 }), null);
 });
+
+test("ignores unsafe or non-finite FloodWait values", () => {
+  assert.equal(floodWaitSeconds(new Error("FLOOD_WAIT_999999999999999999999999999999")), null);
+  assert.equal(floodWaitSeconds({ name: "FloodWaitError", seconds: Number.POSITIVE_INFINITY }), null);
+});
