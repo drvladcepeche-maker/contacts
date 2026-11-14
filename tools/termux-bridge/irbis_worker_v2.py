@@ -84,7 +84,9 @@ def collect_device_info():
 
 def capture_screen():
     result = root_shell("screencap -p", timeout=25)
-    if result.returncode != 0 or not result.stdout.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+    if result.returncode != 0 or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+        err = result.stderr.decode("utf-8", "replace")[:1000]
+        raise RuntimeError("screencap failed (exit=" + str(result.returncode) + ", bytes=" + str(len(result.stdout)) + ", prefix=" + repr(result.stdout[:16]) + "): " + err)
         err = result.stderr.decode("utf-8", "replace")[:1000]
         raise RuntimeError("screencap failed: " + err)
     png = result.stdout
