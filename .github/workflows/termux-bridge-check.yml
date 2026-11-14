@@ -35,3 +35,32 @@ jobs:
           deno-version: v2.x
       - name: Type-check Supabase Edge Function
         run: deno check supabase/functions/termux-bridge/index.ts
+      - name: Smoke-test contacts bridge authentication and CORS
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-bridge"
+          PREFLIGHT_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X OPTIONS "$URL" \
+            -H 'Origin: https://smoke-test.invalid' \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,content-type')"
+          if [[ "$PREFLIGHT_STATUS" != "200" && "$PREFLIGHT_STATUS" != "204" ]]; then
+            echo "::error::contacts-bridge CORS preflight returned HTTP $PREFLIGHT_STATUS"
+            exit 1
+          fi
+          UNAUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$URL" \
+            -H 'Content-Type: application/json' \
+            --data '{"action":"poll_commands"}')"
+          if [[ "$UNAUTH_STATUS" != "401" ]]; then
+            echo "::error::contacts-bridge missing-token request returned HTTP $UNAUTH_STATUS, expected 401"
+            exit 1
+          fi
+          INVALID_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$URL" \
+            -H 'Content-Type: application/json' \
+            -H 'Authorization: Bearer invalid-smoke-test-token' \
+            --data '{"action":"poll_commands"}')"
+          if [[ "$INVALID_STATUS" != "401" ]]; then
+            echo "::error::contacts-bridge invalid-token request returned HTTP $INVALID_STATUS, expected 401"
+            exit 1
+          fi
+          echo "CORS preflight and unauthenticated/invalid-token rejection verified."
