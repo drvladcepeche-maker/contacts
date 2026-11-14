@@ -83,11 +83,19 @@ def collect_device_info():
     return "\n\n".join(result)
 
 def capture_screen():
-    result = root_shell("screencap -p", timeout=25)
-    if result.returncode != 0 or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+    local_path = "/data/local/tmp/osiris-screen-" + str(uuid.uuid4()) + ".png"
+    result = root_shell("screencap -p " + shlex.quote(local_path) + " && chmod 644 " + shlex.quote(local_path), timeout=25)
+    if result.returncode != 0:
         err = result.stderr.decode("utf-8", "replace")[:1000]
-        raise RuntimeError("screencap failed (exit=" + str(result.returncode) + ", bytes=" + str(len(result.stdout)) + ", prefix=" + repr(result.stdout[:16]) + "): " + err)
-    png = result.stdout
+        raise RuntimeError("screencap-to-file failed (exit=" + str(result.returncode) + "): " + err)
+    try:
+        png = Path(local_path).read_bytes()
+    except Exception as e:
+        raise RuntimeError("cannot read screenshot file: " + type(e).__name__ + ": " + str(e)[:500])
+    finally:
+        root_shell("rm -f " + shlex.quote(local_path), timeout=10)
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("invalid PNG file: bytes=" + str(len(png)) + ", prefix=" + repr(png[:16]))
     filename = "screen-" + str(uuid.uuid4()) + ".png"
     grant = api({"action": "create_upload_url", "filename": filename,
                  "size": len(png), "content_type": "image/png"})
