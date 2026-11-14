@@ -29,9 +29,8 @@ For the legacy Hostless Docker deployment, also set `SUPABASE_URL` and expose po
 
 Optional:
 - `POLL_INTERVAL_MS` (default 5000)
-- `MIN_REQUEST_INTERVAL_MS` (default 5000; values below 5000 are clamped to 5000)
+- `MIN_REQUEST_INTERVAL_MS` (default 60000; values below 60000 are clamped to 60000)
 - `REQUEST_JITTER_MS` (default 15000; additive random delay)
-- `MIN_REQUEST_INTERVAL_MS` (minimum 60000; the worker clamps lower values to 60000)
 - `MAX_CANDIDATES_PER_RUN` (runtime workflow default 5)
 - `BATCH_COOLDOWN_MS` (default 3600000)
 - `PORT` (default 8080)
