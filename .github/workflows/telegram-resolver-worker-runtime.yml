@@ -4,6 +4,18 @@ on:
     paths:
       - '.github/workflows/telegram-resolver-worker-runtime.yml'
       - 'server/telegram-worker/src/**'
+      - 'server/telegram-worker/test/**'
+      - 'server/telegram-worker/package.json'
+      - 'server/telegram-worker/tsconfig.json'
+      - 'supabase/functions/contacts-bridge/index.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/telegram-resolver-worker-runtime.yml'
+      - 'server/telegram-worker/src/**'
+      - 'server/telegram-worker/test/**'
+      - 'server/telegram-worker/package.json'
+      - 'server/telegram-worker/tsconfig.json'
+      - 'supabase/functions/contacts-bridge/index.ts'
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
@@ -14,15 +26,35 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 defaults:
   run:
     shell: bash
 
 jobs:
+  validate-worker:
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: server/telegram-worker
+        run: npm install
+      - name: Run worker tests
+        working-directory: server/telegram-worker
+        run: npm test
+      - name: Build worker
+        working-directory: server/telegram-worker
+        run: npm run build
+
   check-ready:
-    if: vars.TELEGRAM_RESOLVER_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.TELEGRAM_RESOLVER_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -67,8 +99,11 @@ jobs:
           fi
 
   process-queue:
+    permissions:
+      contents: read
+      issues: write
     needs: check-ready
-    if: vars.TELEGRAM_RESOLVER_ENABLED == 'true' && needs.check-ready.outputs.ready == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.TELEGRAM_RESOLVER_ENABLED == 'true' && needs.check-ready.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -98,39 +133,22 @@ jobs:
           MIN_REQUEST_INTERVAL_MS: "5000"
           REQUEST_JITTER_MS: "3000"
         run: node dist/index.js 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
-      - name: Publish failure log to issue
+      - name: Publish redacted failure notice to issue
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
         run: |
-          LOG="$RUNNER_TEMP/worker.log"
-          [ -f "$LOG" ] || echo "(log is empty)" > "$LOG"
-          tail -n 60 "$LOG" > "$RUNNER_TEMP/tail.log"
-          python3 - <<'PY'
-          import os, re
-          p = os.path.join(os.environ["RUNNER_TEMP"], "tail.log")
-          t = open(p, errors="replace").read()
-          for k in ("SUPABASE_SERVICE_ROLE_KEY", "TELEGRAM_SESSION", "TELEGRAM_API_HASH"):
-              v = os.environ.get(k, "").strip()
-              if v:
-                  t = t.replace(v, "***")
-          t = re.sub(r"prefix=\S+ suffix=\S+", "prefix=*** suffix=***", t)
-          open(p, "w").write(t)
-          PY
           {
+            echo "The Telegram resolver worker failed."
+            echo
             echo "Run: $RUN_URL"
             echo "Time (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
-            echo '```'
-            cat "$RUNNER_TEMP/tail.log"
-            echo '```'
+            echo "Raw worker output is intentionally not copied into this issue. Inspect the Actions run using an authorized account; do not paste credentials, phone numbers, Telegram IDs, device IDs, or contact data into public issues."
           } > "$RUNNER_TEMP/report.md"
-          TITLE="Telegram worker last failure log"
+          TITLE="Telegram worker failure notice"
           NUM=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
           if [ -n "$NUM" ]; then
             gh issue edit "$NUM" --body-file "$RUNNER_TEMP/report.md"
