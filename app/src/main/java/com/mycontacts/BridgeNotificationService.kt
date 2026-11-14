@@ -28,7 +28,7 @@ class BridgeNotificationService : Service() {
             createChannels()
             Log.i(TAG, "Service created; notification channels checked")
         } catch (e: Exception) {
-            Log.e(TAG, "Service initialization failed", e)
+            Log.e(TAG, "Service operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, TAG, "Service initialization failed", e)
             stopSelf()
         }
@@ -51,7 +51,7 @@ class BridgeNotificationService : Service() {
             }
             return START_STICKY
         } catch (e: Exception) {
-            Log.e(TAG, "Unable to start foreground service", e)
+            Log.e(TAG, "Service operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, TAG, "Unable to start foreground service", e)
             running = false
             stopSelf(startId)
@@ -92,7 +92,7 @@ class BridgeNotificationService : Service() {
                     recordDiagnostic("last_poll_at", System.currentTimeMillis().toString())
                     recordDiagnostic("last_poll_error", "")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Command polling or notification cycle failed", e)
+            Log.e(TAG, "Service operation failed: " + e.javaClass.simpleName)
                     AppLog.error(this@BridgeNotificationService, TAG, "Command polling or notification cycle failed", e)
                     recordDiagnostic("last_poll_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
                     if (bridge.token().isBlank()) {
@@ -127,7 +127,7 @@ class BridgeNotificationService : Service() {
             recordDiagnostic("last_notification_error", "")
             Log.i(TAG, "Pending-command notification posted; count=" + count)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to publish pending-command notification", e)
+            Log.e(TAG, "Service operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, TAG, "Failed to publish pending-command notification", e)
             recordDiagnostic("last_notification_error", e.javaClass.simpleName + ": " + (e.message ?: "no message"))
         }
@@ -160,7 +160,7 @@ class BridgeNotificationService : Service() {
 
     private fun readPending(value: String?): JSONArray =
         try { JSONArray(value ?: "[]") } catch (e: Exception) {
-            Log.e(TAG, "Pending queue JSON is corrupt; using an empty queue", e)
+            Log.e(TAG, "Service operation failed: " + e.javaClass.simpleName)
             JSONArray()
         }
 
