@@ -6,7 +6,7 @@ export function sanitizeDiagnostic(value: unknown, maxLength = 2000): string {
     "$1=[REDACTED]",
   );
   safe = safe.replace(
-    /\\b(command|job|device|contact|local)[_-]?id\\b(\\s*[:=]\\s*|\\s+)[^\\s,;]+/gi,
+    /\\b(command|job|device|contact|local)[_\\s-]?id\\b(\\s*[:=]\\s*|\\s+)[^\\s,;]+/gi,
     "$1_id=[REDACTED]",
   );
   safe = safe.replace(/\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b/gi, "[ID]");
