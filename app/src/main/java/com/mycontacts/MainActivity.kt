@@ -173,7 +173,7 @@ class MainActivity : Activity() {
         }
         source.removeExtra("notification_command_id")
         source.removeExtra("notification_decision")
-        AppLog.info(this, "NotificationAction", "User selected " + decision + " for command " + commandId)
+        AppLog.info(this, "NotificationAction", "User selected " + decision + " for a bridge command")
     }
 
     override fun onPause() {
@@ -242,7 +242,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
             android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
-                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
+                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue", e)
             }
         }
     }
@@ -309,7 +309,7 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
             android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
-            AppLog.error(this, "MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
+            AppLog.error(this, "MainActivity", "Could not complete command; retained for acknowledgement retry", e)
             throw e
         }
     }
@@ -526,7 +526,7 @@ class MainActivity : Activity() {
                     } else emptyList()
                     val c = byId ?: fallbackMatches.singleOrNull()
                     if (byId == null && c != null) {
-                        AppLog.warn(this, "BridgeCommand", "Delete resolved stale local ID $contactId to current ID ${c.id} using exact name and phone")
+                        AppLog.warn(this, "BridgeCommand", "Delete resolved a stale local contact ID using exact name and phone")
                         AppLog.flush(this, force = true)
                     }
                     if (c == null) {
@@ -1175,7 +1175,7 @@ class MainActivity : Activity() {
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
                 val jobId = result.optString("job_id")
-                AppLog.info(this, "TelegramResolver", "Queued cloud job $jobId with $count unique phone numbers after syncing $synced contacts")
+                AppLog.info(this, "TelegramResolver", "Queued cloud matching with $count unique phone numbers after syncing $synced contacts")
                 runOnUiThread {
                     showSyncResult(synced)
                     if (result.optBoolean("queued")) {
