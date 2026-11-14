@@ -63,7 +63,7 @@ object AppLog {
             append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\n")
             append("Последняя отправка: принято ").append(prefs.getInt("last_upload_received", 0))
                 .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\n")
-            if (lastError.isNotBlank()) append("Последняя ошибка отправки: исторические подробности скрыты.\\n")
+            if (lastError.isNotBlank()) append("Последняя ошибка отправки: исторические подробности скрыты.\n")
         }
     }
 
