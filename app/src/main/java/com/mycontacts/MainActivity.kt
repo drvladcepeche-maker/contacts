@@ -167,12 +167,21 @@ class MainActivity : Activity() {
         val commandId = source.getStringExtra("notification_command_id").orEmpty()
         val decision = source.getStringExtra("notification_decision").orEmpty()
         if (commandId.isBlank() || decision !in setOf("approve", "reject")) return
+        val signature = source.getStringExtra("notification_decision_signature").orEmpty()
+        if (!NotificationActionSigner.verify(commandId, decision, signature)) {
+            source.removeExtra("notification_command_id")
+            source.removeExtra("notification_decision")
+            source.removeExtra("notification_decision_signature")
+            AppLog.warn(this, "NotificationAction", "Rejected an unauthenticated notification action intent")
+            return
+        }
         synchronized(activeCommandIds) {
             if (decision == "approve") notificationApprovedCommandIds.add(commandId)
             else notificationRejectedCommandIds.add(commandId)
         }
         source.removeExtra("notification_command_id")
         source.removeExtra("notification_decision")
+        source.removeExtra("notification_decision_signature")
         AppLog.info(this, "NotificationAction", "User selected " + decision + " for a bridge command")
     }
 
