@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { sanitizeDiagnostic } from "./diagnostics.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -220,9 +221,11 @@ Deno.serve(async (req: Request) => {
           event_id: eventId,
           occurred_at: occurredAt.toISOString(),
           level,
-          tag: String(entry.tag ?? "Unknown").slice(0, 120),
-          message: String(entry.message ?? "").slice(0, 2000),
-          stack_trace: entry.stack_trace == null ? null : String(entry.stack_trace).slice(0, 12000),
+          tag: sanitizeDiagnostic(entry.tag ?? "Unknown", 120),
+          message: sanitizeDiagnostic(entry.message ?? "", 2000),
+          // Stack traces can contain arbitrary contact data, tokens, and request payloads.
+          // Keep only the redacted message and exception class from supported clients.
+          stack_trace: null,
           app_version: entry.app_version == null ? null : String(entry.app_version).slice(0, 40),
         }];
       });

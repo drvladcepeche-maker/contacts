@@ -6,6 +6,8 @@ on:
     paths:
       - "tools/termux-bridge/**"
       - "supabase/functions/termux-bridge/**"
+      - "supabase/functions/contacts-bridge/**"
+      - "supabase/functions/contacts-mcp/**"
       - "supabase/migrations/*termux*"
       - ".github/workflows/termux-bridge-check.yml"
   push:
@@ -34,8 +36,15 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Type-check Supabase Edge Function
-        run: deno check supabase/functions/termux-bridge/index.ts
+      - name: Type-check Supabase Edge Functions
+        run: |
+          deno check supabase/functions/termux-bridge/index.ts
+          deno check supabase/functions/contacts-bridge/index.ts
+          deno check supabase/functions/contacts-mcp/index.ts
+      - name: Test contacts bridge diagnostic redaction
+        run: deno test supabase/functions/contacts-bridge/tests/
+      - name: Test contacts MCP diagnostic redaction
+        run: deno test supabase/functions/contacts-mcp/tests/
       - name: Smoke-test contacts bridge authentication and CORS
         shell: bash
         run: |

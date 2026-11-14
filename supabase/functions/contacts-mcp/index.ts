@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { sanitizeDiagnostic } from "./diagnostics.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -105,10 +106,6 @@ Deno.serve(async (req: Request) => {
     if (name === "contacts_report_error") {
       const deviceId = String(args.device_id ?? "");
       if (!deviceId || !canAccessDevice(deviceId)) return denied(id);
-      const sanitize = (value: unknown, max: number) => String(value ?? "")
-        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
-        .replace(/\+?\d[\d\s().-]{7,}\d/g, "[phone]")
-        .slice(0, max);
       const level = String(args.level ?? "ERROR").toUpperCase();
       if (!["WARN", "ERROR", "FATAL"].includes(level)) return response(id, toolResult({ error: "Invalid diagnostic level" }, true));
       const { error } = await db.from("contact_bridge_diagnostics").insert({
@@ -116,10 +113,11 @@ Deno.serve(async (req: Request) => {
         event_id: crypto.randomUUID(),
         occurred_at: new Date().toISOString(),
         level,
-        tag: sanitize(args.tag || "web-ui", 120),
-        message: sanitize(args.message, 2000),
-        stack_trace: args.stack_trace ? sanitize(args.stack_trace, 12000) : null,
-        app_version: sanitize(args.app_version || "web-ui", 40),
+        tag: sanitizeDiagnostic(args.tag || "web-ui", 120),
+        message: sanitizeDiagnostic(args.message, 2000),
+        // Never persist arbitrary client stack traces; they may contain credentials and contact data.
+        stack_trace: null,
+        app_version: sanitizeDiagnostic(args.app_version || "web-ui", 40),
       });
       if (error) throw error;
       return response(id, toolResult({ accepted: true }));
