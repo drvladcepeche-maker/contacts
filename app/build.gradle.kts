@@ -32,7 +32,7 @@ android {
     buildTypes {
         getByName("debug") {
             // Keep the recovery build installable beside an older APK signed with a different key.
-            applicationIdSuffix = ".pairing2"
+            applicationIdSuffix = ".pairing3"
             if (stableSigningEnabled) signingConfig = signingConfigs.getByName("stable")
         }
         getByName("release") {
