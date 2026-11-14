@@ -126,10 +126,10 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           RUN_ONCE: "true"
-          MAX_CANDIDATES_PER_RUN: "20"
+          MAX_CANDIDATES_PER_RUN: "5"
           BATCH_COOLDOWN_MS: "3600000"
-          MIN_REQUEST_INTERVAL_MS: "5000"
-          REQUEST_JITTER_MS: "3000"
+          MIN_REQUEST_INTERVAL_MS: "60000"
+          REQUEST_JITTER_MS: "15000"
         run: node dist/index.js 2>&1 | tee -a "$RUNNER_TEMP/worker.log"
       - name: Publish failure log to issue
         if: failure()
