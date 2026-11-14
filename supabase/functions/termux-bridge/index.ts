@@ -124,6 +124,21 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  if (action === "create_download_url") {
+    const objectPath = String(body.path ?? "");
+    const prefix = `${device.id}/`;
+    if (!objectPath.startsWith(prefix) || objectPath.includes("..") || objectPath.includes("\\\\")) {
+      return json({ error: "Invalid artifact path for this device" }, 400);
+    }
+    const { data, error } = await supabase.storage
+      .from("termux-bridge-artifacts")
+      .createSignedUrl(objectPath, 3600);
+    if (error || !data?.signedUrl) {
+      return json({ error: "Could not create a private download grant" }, 500);
+    }
+    return json({ path: objectPath, signed_url: data.signedUrl, expires_in: 3600 });
+  }
+
   if (action === "brave_status") {
     const id = String(body.job_id ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Invalid job_id" }, 400);
