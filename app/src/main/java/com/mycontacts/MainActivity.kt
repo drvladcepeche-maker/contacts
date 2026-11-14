@@ -1073,7 +1073,7 @@ class MainActivity : Activity() {
         val q = EditText(this).apply { hint = "Вопрос или задача, например: найди контакты, которые похожи на дубликаты" }
         fun load() {
             key.hint = if (provider == Ai.CLAUDE) "Anthropic API-ключ" else "OpenAI API-ключ"
-            key.setText(prefs.getString(keyPref(provider), ""))
+            key.setText(SecurePreferences.get(this, "ai", keyPref(provider)))
             model.setText(prefs.getString(modelPref(provider), defModel(provider)))
             withData.text = "Отправить " + label(provider) + " список контактов (имена и номера, до 7000)"
         }
@@ -1092,7 +1092,8 @@ class MainActivity : Activity() {
                 val m = model.text.toString().trim().ifEmpty { defModel(pr) }
                 val question = q.text.toString().trim()
                 if (k.isEmpty() || question.isEmpty()) { toast("Нужны ключ и вопрос"); return@setPositiveButton }
-                prefs.edit().putString("provider", pr).putString(keyPref(pr), k).putString(modelPref(pr), m).apply()
+                prefs.edit().putString("provider", pr).putString(modelPref(pr), m).apply()
+                SecurePreferences.put(this, "ai", keyPref(pr), k)
                 val ctx = if (withData.isChecked)
                     "\n\nКонтакты:\n" + all.take(7000).joinToString("\n") { it.name + ": " + it.phones.joinToString(", ") }
                 else ""
@@ -1112,7 +1113,8 @@ class MainActivity : Activity() {
                 val k = key.text.toString().trim()
                 val m = model.text.toString().trim().ifEmpty { defModel(pr) }
                 if (k.isEmpty()) { toast("Нужен API-ключ"); return@setNeutralButton }
-                prefs.edit().putString("provider", pr).putString(keyPref(pr), k).putString(modelPref(pr), m).apply()
+                prefs.edit().putString("provider", pr).putString(modelPref(pr), m).apply()
+                SecurePreferences.put(this, "ai", keyPref(pr), k)
                 suggestEdits(k, m, q.text.toString().trim(), pr)
             }
             .setNegativeButton("Отмена", null).show()
