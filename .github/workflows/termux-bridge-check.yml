@@ -33,8 +33,12 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Type-check Supabase Edge Function
-        run: deno check supabase/functions/termux-bridge/index.ts
+      - name: Type-check Supabase Edge Functions
+        run: |
+          deno check supabase/functions/termux-bridge/index.ts
+          deno check supabase/functions/contacts-bridge/index.ts
+      - name: Test contacts bridge diagnostic redaction
+        run: deno test supabase/functions/contacts-bridge/tests/
       - name: Smoke-test contacts bridge authentication and CORS
         shell: bash
         run: |
