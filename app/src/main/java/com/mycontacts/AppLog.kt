@@ -236,7 +236,7 @@ echo "Изменения APK собираются через GitHub Actions по
     private fun redact(value: String): String {
         var safe = value
         safe = safe.replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
-        safe = Regex("(?i)(token|password|secret|api[_-]?key|authorization|access[_-]?token)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
+        safe = Regex("(?i)(token|password|secret|api[_-]?key|access[_-]?token)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
             it.groupValues[1] + it.groupValues[2] + "[REDACTED]"
         }
         safe = Regex("(?i)\\b(command|job|device|contact|local)[_-]?id\\b(\\s*[:=]\\s*|\\s+)[^\\s,;]+").replace(safe) {
