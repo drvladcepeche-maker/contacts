@@ -100,12 +100,6 @@ function resolvedUserId(resolved: any): string | null {
   const users = Array.isArray(resolved?.users) ? resolved.users : [];
   return users.length === 1 && users[0]?.id !== undefined ? String(users[0].id) : null;
 }
-function describeSession(value: string): string {
-  const length = value.length;
-  const hasWhitespace = /\s/.test(value);
-  const printable = /^[A-Za-z0-9+/=_-]+$/.test(value);
-  return `len=${length} whitespace=${hasWhitespace} charset_ok=${printable}`;
-}
 async function updateJob(jobId: string, patch: Record<string, unknown>) {
   const { error } = await supabase.from("telegram_match_jobs")
     .update({ ...patch, updated_at: new Date().toISOString() }).eq("id", jobId);
@@ -234,7 +228,7 @@ async function processJob(job: Job) {
         status: "queued", paused_until: resumeAt,
         error_message: "Waiting for a complete Android contact sync manifest. Run a full contact sync before Telegram matching.",
       });
-      console.warn(`Job ${job.id} paused: no full sync manifest for device ${deviceId}`);
+      console.warn("Job paused: waiting for a full Android sync manifest.");
       return;
     }
     activeIdsByDevice.set(deviceId, new Set<string>((manifest.local_contact_ids ?? []).map((id: unknown) => String(id))));
@@ -252,7 +246,7 @@ async function processJob(job: Job) {
         last_request_at: lastRequestAt, paused_until: resumeAt,
         error_message: null,
       });
-      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; resume at ${resumeAt}`);
+      console.log(`Job checkpointed: ${results.length}/${candidates.length} candidates; resume scheduled.`);
       return;
     }
     const candidate = candidates[index];
@@ -335,7 +329,6 @@ async function processJob(job: Job) {
         });
         console.warn(JSON.stringify({
           event: "telegram_flood_wait",
-          jobId: job.id,
           waitSeconds,
           floodWaitCount,
           resumeAt,
@@ -404,9 +397,9 @@ async function ensureTelegramConnected() {
   const apiId = Number(apiIdText);
   if (!Number.isInteger(apiId) || apiId <= 0) throw new Error("TELEGRAM_API_ID is missing or invalid");
   if (!apiHash || !sessionString) throw new Error("TELEGRAM_API_HASH or TELEGRAM_SESSION is missing");
-  console.log(`Telegram auth diagnostics: apiId=${apiId} apiHashLen=${apiHash.length} session(${describeSession(sessionString)})`);
+  console.log("Checking Telegram session authorization.");
   if (sessionString.length < 100) {
-    throw new Error(`TELEGRAM_SESSION looks too short (${sessionString.length} chars). Re-copy the full StringSession into the GitHub secret.`);
+    throw new Error("TELEGRAM_SESSION appears incomplete; verify the configured secret.");
   }
   telegram = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
     connectionRetries: 3,
@@ -421,26 +414,15 @@ async function ensureTelegramConnected() {
   try {
     const me: any = await telegram.getMe();
     authorized = !!me;
-    console.log("getMe OK, id:", String(me?.id));
+    console.log("Telegram authorization check succeeded.");
   } catch (e: any) {
-    // Log the actual exception metadata without logging request payloads or credentials.
-    const cause = e?.cause;
-    console.error("TG getMe failure diagnostics:", {
-      name: e?.name ?? null,
-      message: e?.message ?? String(e),
-      errorMessage: e?.errorMessage ?? null,
-      code: e?.code ?? null,
-      errorCode: e?.errorCode ?? null,
-      causeName: cause?.name ?? null,
-      causeMessage: cause?.message ?? (cause == null ? null : String(cause)),
-      stack: typeof e?.stack === "string" ? e.stack : null,
-    });
+    console.error("Telegram authorization check failed; sensitive diagnostics were suppressed.");
   }
   if (!authorized) {
     await telegram.disconnect().catch(() => {});
     telegram = undefined;
     throw new Error(
-      `Telegram getMe request failed; session authorization is unconfirmed (${describeSession(sessionString)}). See the preceding TG getMe failure diagnostics.`
+      "Telegram authorization check failed; session authorization is unconfirmed."
     );
   }
   ready = true;
@@ -463,11 +445,11 @@ async function main() {
           });
           throw error;
         }
-        console.log(`Claimed job ${job.id}; remaining candidates: ${Math.max(0, (job.phones?.length ?? 0) - (job.results?.length ?? 0))}`);
+        console.log(`A queue job was claimed; remaining candidates: ${Math.max(0, (job.phones?.length ?? 0) - (job.results?.length ?? 0))}.`);
         try { await processJob(job); }
         catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          console.error("Job processing failed", job.id, message);
+          console.error("Queue job processing failed; details were stored in the protected job record.");
           await updateJob(job.id, { status: "failed", error_message: message.slice(0, 500), completed_at: new Date().toISOString() });
         }
         if (runOnce) break;
@@ -476,7 +458,7 @@ async function main() {
         await sleep(pollMs);
       }
     } catch (error) {
-      console.error("Queue polling failed", error instanceof Error ? error.message : String(error));
+      console.error("Queue polling failed; sensitive error details were suppressed.");
       if (runOnce) throw error;
       await sleep(pollMs);
     }
@@ -491,4 +473,4 @@ async function main() {
 }
 process.on("SIGTERM", () => { stopping = true; server.close(); });
 process.on("SIGINT", () => { stopping = true; server.close(); });
-main().catch(error => { console.error("Worker startup failed", error); server.close(); process.exitCode = 1; });
+main().catch(() => { console.error("Worker startup failed; sensitive error details were suppressed."); server.close(); process.exitCode = 1; });

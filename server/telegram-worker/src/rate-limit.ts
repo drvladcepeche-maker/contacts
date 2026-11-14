@@ -45,23 +45,35 @@ export function floodWaitSeconds(error: unknown): number | null {
       const combined = `${name} ${message} ${String(value.errorMessage ?? "")}`;
 
       const direct = combined.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
-      if (direct) return Number(direct[1]);
+      if (direct) {
+        const parsed = Number(direct[1]);
+        if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+      }
 
       const natural = combined.match(/A wait of (\d+) seconds is required/i);
-      if (natural) return Number(natural[1]);
+      if (natural) {
+        const parsed = Number(natural[1]);
+        if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+      }
 
       const seconds = Number(value.seconds);
-      if (/FloodWait|FLOOD_WAIT|SLOWMODE_WAIT/i.test(combined) && Number.isFinite(seconds) && seconds > 0) {
-        return Math.floor(seconds);
+      if (/FloodWait|FLOOD_WAIT|SLOWMODE_WAIT/i.test(combined) && Number.isSafeInteger(seconds) && seconds > 0) {
+        return seconds;
       }
 
       if (value.cause != null) pending.push(value.cause);
       if (value.originalError != null) pending.push(value.originalError);
     } else if (typeof current === "string") {
       const direct = current.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
-      if (direct) return Number(direct[1]);
+      if (direct) {
+        const parsed = Number(direct[1]);
+        if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+      }
       const natural = current.match(/A wait of (\d+) seconds is required/i);
-      if (natural) return Number(natural[1]);
+      if (natural) {
+        const parsed = Number(natural[1]);
+        if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+      }
     }
   }
 
