@@ -15,7 +15,10 @@ on:
     paths:
       - "tools/termux-bridge/**"
       - "supabase/functions/termux-bridge/**"
+      - "supabase/functions/contacts-bridge/**"
+      - "supabase/functions/contacts-mcp/**"
       - "supabase/migrations/*termux*"
+      - ".github/workflows/termux-bridge-check.yml"
 
 permissions:
   contents: read
