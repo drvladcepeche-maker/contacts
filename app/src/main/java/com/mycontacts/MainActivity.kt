@@ -189,7 +189,7 @@ class MainActivity : Activity() {
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit().putString("last_service_start_error", "").apply()
         } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Failed to start bridge foreground service", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, "MainActivity", "Failed to start bridge foreground service", e)
             getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE).edit()
                 .putString("last_service_start_error", e.javaClass.simpleName + ": " + (e.message ?: "no message")).apply()
@@ -228,7 +228,7 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(BridgeNotificationService.PREFS, MODE_PRIVATE)
         val pending = try { JSONArray(prefs.getString(BridgeNotificationService.KEY_PENDING, "[]")) }
             catch (e: Exception) {
-                android.util.Log.e("MainActivity", "Could not read pending command queue", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
                 JSONArray()
             }
         for (i in 0 until pending.length()) {
@@ -241,7 +241,7 @@ class MainActivity : Activity() {
                 handleBridgeCommand(command)
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-                android.util.Log.e("MainActivity", "Command handling failed; command retained in queue: " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
                 AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
             }
         }
@@ -308,7 +308,7 @@ class MainActivity : Activity() {
             removeQueuedCommand(id)
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-            android.util.Log.e("MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
             AppLog.error(this, "MainActivity", "Could not complete command " + id + "; retained for acknowledgement retry", e)
             throw e
         }
@@ -425,7 +425,7 @@ class MainActivity : Activity() {
                 try {
                     completeBridgeCommand(id, savedResult, savedError)
                 } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "Acknowledgement retry failed for command " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
                 }
             }
             return
