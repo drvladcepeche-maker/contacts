@@ -4,7 +4,12 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
-import { calculateBatchResumeAt } from "./rate-limit.js";
+import {
+  adaptiveRequestIntervalMs,
+  calculateBatchResumeAt,
+  calculateFloodWaitResumeAt,
+  floodWaitSeconds,
+} from "./rate-limit.js";
 import { filterActiveContactIds } from "./contact-manifest.js";
 
 type PhoneCandidate = {
@@ -33,6 +38,9 @@ type Job = {
   matched?: number;
   errors?: number;
   last_request_at?: string | null;
+  flood_wait_count?: number;
+  last_flood_wait_seconds?: number | null;
+  last_flood_wait_at?: string | null;
 };
 
 const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
@@ -52,8 +60,8 @@ const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SE
   global: { fetch: fetchWithTimeout },
 });
 const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
-const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
-const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
+const minIntervalMs = Math.max(60_000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 60_000);
+const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 15_000);
 const port = Number(process.env.PORT) || 8080;
 const runOnce = process.env.RUN_ONCE === "true";
 const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
@@ -80,13 +88,6 @@ function normalizePhone(value: unknown): string | null {
   if (!raw.startsWith("+")) return null;
   const digits = raw.replace(/\D/g, "");
   return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
-}
-function floodWaitSeconds(error: unknown): number | null {
-  const message = error instanceof Error ? error.message : String(error);
-  const direct = message.match(/FLOOD(?:_PREMIUM)?_WAIT_(\d+)/i);
-  if (direct) return Number(direct[1]);
-  const natural = message.match(/A wait of (\d+) seconds is required/i);
-  return natural ? Number(natural[1]) : null;
 }
 function rpcIsNotResolved(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -193,13 +194,17 @@ async function resolvePhone(phone: string): Promise<{ id: string; username: stri
   const username = extractTelegramUsernames(user);
   return { id: userId, username };
 }
-async function waitForRateLimit(lastRequestAt?: string | null) {
-  if (lastRequestAt) {
-    const elapsed = Date.now() - new Date(lastRequestAt).getTime();
-    const remaining = minIntervalMs - elapsed;
-    if (remaining > 0) await sleep(remaining);
-  }
-  // The extra random delay is additive, never a substitute for the minimum interval.
+async function waitForRateLimit(lastRequestAt?: string | null, floodWaitCount = 0) {
+  const intervalMs = adaptiveRequestIntervalMs(minIntervalMs, floodWaitCount);
+  const lastRequestMs = lastRequestAt ? Date.parse(lastRequestAt) : Number.NaN;
+  // Even the first request in a fresh job observes the full interval. A missing
+  // timestamp must never turn into an immediate Telegram request.
+  const nextAllowedAt = Number.isFinite(lastRequestMs)
+    ? lastRequestMs + intervalMs
+    : Date.now() + intervalMs;
+  const remaining = nextAllowedAt - Date.now();
+  if (remaining > 0) await sleep(remaining);
+  // Jitter is additive and cannot reduce the configured minimum interval.
   if (jitterMs > 0) await sleep(Math.floor(Math.random() * (jitterMs + 1)));
 }
 async function processJob(job: Job) {
@@ -297,7 +302,7 @@ async function processJob(job: Job) {
       local_contact_ids: activeCandidateIds.slice(1),
     };
 
-    await waitForRateLimit(lastRequestAt);
+    await waitForRateLimit(lastRequestAt, job.flood_wait_count ?? 0);
     let result: MatchResult;
     try {
       const match = await resolvePhone(phone);
@@ -314,15 +319,28 @@ async function processJob(job: Job) {
     } catch (error) {
       const waitSeconds = floodWaitSeconds(error);
       if (waitSeconds !== null) {
-        const resumeAt = new Date(Date.now() + (waitSeconds + 5) * 1000).toISOString();
+        const floodWaitCount = (job.flood_wait_count ?? 0) + 1;
+        const resumeAt = calculateFloodWaitResumeAt(waitSeconds);
+        const floodWaitAt = new Date().toISOString();
+        const nextIntervalMs = adaptiveRequestIntervalMs(minIntervalMs, floodWaitCount);
         await updateJob(job.id, {
-          status: "queued", paused_until: resumeAt, last_request_at: new Date().toISOString(),
+          status: "queued", paused_until: resumeAt, last_request_at: floodWaitAt,
+          flood_wait_count: floodWaitCount,
+          last_flood_wait_seconds: waitSeconds,
+          last_flood_wait_at: floodWaitAt,
           results, checked: results.length,
           matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
           errors: results.filter(x => x.status === "error").length,
-          error_message: `Telegram FloodWait: paused for ${waitSeconds + 5} seconds.`,
+          error_message: `Telegram FloodWait #${floodWaitCount}: server requested ${waitSeconds}s; paused until ${resumeAt}; next request interval ${Math.round(nextIntervalMs / 1000)}s.`,
         });
-        console.warn(`FloodWait: job ${job.id} paused until ${resumeAt}`);
+        console.warn(JSON.stringify({
+          event: "telegram_flood_wait",
+          jobId: job.id,
+          waitSeconds,
+          floodWaitCount,
+          resumeAt,
+          nextRequestIntervalSeconds: Math.round(nextIntervalMs / 1000),
+        }));
         return;
       }
       if (rpcIsNotResolved(error)) {
@@ -391,7 +409,12 @@ async function ensureTelegramConnected() {
     throw new Error(`TELEGRAM_SESSION looks too short (${sessionString.length} chars). Re-copy the full StringSession into the GitHub secret.`);
   }
   telegram = new TelegramClient(new StringSession(sessionString), apiId, apiHash, {
-    connectionRetries: 3, autoReconnect: true, requestRetries: 3,
+    connectionRetries: 3,
+    autoReconnect: true,
+    requestRetries: 2,
+    // Surface every FloodWait to the durable queue state instead of allowing
+    // GramJS to sleep/retry invisibly inside the request.
+    floodSleepThreshold: 0,
   });
   await telegram.connect();
   let authorized = false;
