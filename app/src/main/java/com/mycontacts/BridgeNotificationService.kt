@@ -202,26 +202,34 @@ class BridgeNotificationService : Service() {
                 val action = command.optString("action")
                 if (action !in setOf("upsert_contact", "delete_contact", "merge_contacts", "update_telegram_fields", "move_contact")) continue
                 val id = command.optString("id")
-                val open = Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    putExtra("notification_command_id", id)
-                    putExtra("notification_decision", "approve")
+                val approveSignature = NotificationActionSigner.sign(id, "approve")
+                if (approveSignature != null) {
+                    val open = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("notification_command_id", id)
+                        putExtra("notification_decision", "approve")
+                        putExtra("notification_decision_signature", approveSignature)
+                    }
+                    val approveIntent = PendingIntent.getActivity(
+                        this, (id + ":approve").hashCode(), open,
+                        PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    )
+                    builder.addAction(android.R.drawable.ic_menu_save, "Подтвердить", approveIntent)
                 }
-                val approveIntent = PendingIntent.getActivity(
-                    this, (id + ":approve").hashCode(), open,
-                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                )
-                builder.addAction(android.R.drawable.ic_menu_save, "Подтвердить", approveIntent)
-                val reject = Intent(this, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    putExtra("notification_command_id", id)
-                    putExtra("notification_decision", "reject")
+                val rejectSignature = NotificationActionSigner.sign(id, "reject")
+                if (rejectSignature != null) {
+                    val reject = Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        putExtra("notification_command_id", id)
+                        putExtra("notification_decision", "reject")
+                        putExtra("notification_decision_signature", rejectSignature)
+                    }
+                    val rejectIntent = PendingIntent.getActivity(
+                        this, (id + ":reject").hashCode(), reject,
+                        PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    )
+                    builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Отклонить", rejectIntent)
                 }
-                val rejectIntent = PendingIntent.getActivity(
-                    this, (id + ":reject").hashCode(), reject,
-                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-                )
-                builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Отклонить", rejectIntent)
                 break
             }
         }
