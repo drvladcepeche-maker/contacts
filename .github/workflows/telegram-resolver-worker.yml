@@ -15,6 +15,9 @@ on:
       - "supabase/migrations/**"
       - ".github/workflows/telegram-resolver-worker.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
