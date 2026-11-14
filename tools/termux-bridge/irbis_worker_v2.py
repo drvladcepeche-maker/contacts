@@ -6,6 +6,7 @@ import shlex
 import urllib.request
 import urllib.error
 import subprocess
+import signal
 from pathlib import Path
 
 BASE_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/termux-bridge"
@@ -59,7 +60,29 @@ def run_fixed(args, timeout=12):
         return {"exit_code": 1, "output": type(e).__name__ + ": " + str(e)[:300]}
 
 def root_shell(command, timeout=15):
-    return subprocess.run([SU, "-c", command], capture_output=True, timeout=timeout)
+    proc = subprocess.Popen(
+        [SU, "-c", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except Exception:
+            stdout, stderr = b"", b""
+        raise TimeoutError("root command timed out after " + str(timeout) + " seconds")
+    return subprocess.CompletedProcess(
+        [SU, "-c", command], proc.returncode, stdout, stderr
+    )
 
 def collect_device_info():
     result = []
