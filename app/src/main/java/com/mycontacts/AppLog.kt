@@ -170,9 +170,22 @@ echo "Изменения APK собираются через GitHub Actions по
                 val batch = synchronized(lock) {
                     val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
                     catch (_: Exception) { org.json.JSONArray() }
+                    val sanitized = org.json.JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        sanitized.put(org.json.JSONObject()
+                            .put("event_id", item.optString("event_id"))
+                            .put("occurred_at", item.optString("occurred_at"))
+                            .put("level", item.optString("level", "ERROR"))
+                            .put("tag", redact(item.optString("tag")))
+                            .put("message", redact(item.optString("message")).take(1000))
+                            .put("stack_trace", org.json.JSONObject.NULL)
+                            .put("app_version", item.optString("app_version")))
+                    }
+                    prefs.edit().putString("pending", sanitized.toString()).commit()
                     org.json.JSONArray().also { out ->
-                        for (i in 0 until minOf(current.length(), 50)) {
-                            current.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
+                        for (i in 0 until minOf(sanitized.length(), 50)) {
+                            sanitized.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
                         }
                     }
                 }
@@ -209,8 +222,8 @@ echo "Изменения APK собираются через GitHub Actions по
                     .putString("last_upload_error", "")
                     .apply()
             } catch (e: Exception) {
-                // Keep the queue intact, expose the transport error in the exported log,
-                // and retry on the next flush.
+                // Keep the queue intact; only the exception class is retained for privacy.
+                // Retry on the next flush.
                 val message = "Diagnostics upload failed (${e.javaClass.simpleName})"
                 app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
                     .edit().putString("last_upload_error", message).apply()
