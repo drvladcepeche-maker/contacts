@@ -2,7 +2,6 @@ package com.mycontacts
 
 import android.content.Context
 import android.os.Build
-import android.util.Log
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -120,7 +119,7 @@ class TelegramTdlibSession(
         when (result) {
             is TdApi.UpdateAuthorizationState -> handleAuthState(result.authorizationState)
             is TdApi.Error -> onStatus("Telegram: ошибка ${result.code}: ${result.message}")
-            else -> Log.d("TelegramTDLib", result.toString())
+            else -> Unit
         }
     }
 
