@@ -198,7 +198,7 @@ export class AndroidControl {
     }
     if (action === "text") {
       const value = String(args.text ?? "");
-      if (!value || value.length > 120 || /[\\r\\n\\t\\x00-\\x1f]/.test(value)) {
+      if (!value || value.length > 120 || /[\r\n\t\x00-\x1f]/.test(value)) {
         throw new Error("text requires 1–120 printable characters and no control characters.");
       }
       const encoded = value.replace(/ /g, "%s");
