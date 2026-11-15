@@ -73,28 +73,39 @@ export class AndroidControl {
   }
 
   async packageInventory({ include_system = false } = {}) {
-    const flag = include_system === true ? "" : " -3";
-    const result = await this.command("pm list packages" + flag + " -f -i", 45000);
+    const args = ["list", "packages"];
+    if (include_system !== true) args.push("-3");
+    args.push("-f", "-i");
+    // Android Package Manager permits this read-only query from the Termux app UID;
+    // it does not require Shizuku or a foreground confirmation.
+    const result = await run("/system/bin/pm", args, 45000);
     return {
       ...result,
       output: result.output || "No packages returned by Android Package Manager.",
       inventory_scope: include_system === true ? "all installed packages" : "third-party packages only",
+      source: "Android Package Manager via Termux app UID",
     };
   }
 
   async packageInfo({ package_name }) {
     const name = validatePackage(package_name);
-    const command = [
-      "echo 'PACKAGE_PATH'",
-      "pm path " + name,
-      "echo 'LAUNCH_ACTIVITY'",
-      "cmd package resolve-activity --brief " + name,
-      "echo 'INSTALL_SOURCE'",
-      "pm list packages -i " + name,
-      "echo 'APP_OPS'",
-      "cmd appops get " + name,
-    ].join("; ");
-    return await this.command(command, 45000);
+    const path = await run("/system/bin/pm", ["path", name], 15000);
+    const activity = await run("/system/bin/cmd", ["package", "resolve-activity", "--brief", name], 15000);
+    const installer = await run("/system/bin/pm", ["list", "packages", "-i", name], 15000);
+    return {
+      exitCode: path.exitCode,
+      output: [
+        "PACKAGE: " + name,
+        "PACKAGE_PATH",
+        path.output.trim() || path.errorText,
+        "LAUNCH_ACTIVITY",
+        activity.output.trim() || activity.errorText,
+        "INSTALL_SOURCE",
+        installer.output.trim() || installer.errorText,
+      ].join("\\n"),
+      errorText: path.errorText || activity.errorText || installer.errorText,
+      source: "Android Package Manager via Termux app UID",
+    };
   }
 
   async appOps({ package_name }) {
@@ -103,13 +114,21 @@ export class AndroidControl {
   }
 
   async vpnStatus() {
-    const result = await this.command("dumpsys connectivity", 45000);
+    const result = await run("/system/bin/dumpsys", ["connectivity"], 45000);
     const lines = result.output.split(/\\r?\\n/);
     const matches = lines.filter(line => /vpn|tun[0-9]*|TRANSPORT_VPN|underlying.?network/i.test(line));
+    const alwaysOn = await run("/system/bin/settings", ["get", "secure", "always_on_vpn_app"], 10000);
+    const lockdown = await run("/system/bin/settings", ["get", "secure", "always_on_vpn_lockdown"], 10000);
     return {
       ...result,
-      output: matches.slice(0, 180).join("\\n") || "No VPN-related lines were found in dumpsys connectivity.",
+      output: [
+        "Always-on VPN package: " + (alwaysOn.output.trim() || "null"),
+        "VPN lockdown: " + (lockdown.output.trim() || "null"),
+        "Connectivity VPN lines:",
+        matches.slice(0, 180).join("\\n") || "No VPN-related lines were found in dumpsys connectivity.",
+      ].join("\\n"),
       total_matching_lines: matches.length,
+      source: "Android system diagnostics via Termux app UID",
     };
   }
 }
