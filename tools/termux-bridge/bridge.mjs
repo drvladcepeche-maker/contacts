@@ -22,7 +22,7 @@ const MAX_OUTPUT = 30000;
 let stopping = false;
 const terminal = new TerminalSessions({ workspace: WORKSPACE });
 const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: process.env.RISH_BIN || resolve(WORKSPACE, "rish") });
-const androidControl = new AndroidControl({ rishBin: process.env.RISH_BIN || "rish" });
+const androidControl = new AndroidControl({ rishBin: process.env.RISH_BIN || resolve(process.env.PREFIX || "/data/data/com.termux/files/usr", "bin/rish") });
 
 const token = (await readFile(TOKEN_PATH, "utf8")).trim();
 if (!/^[a-f0-9]{64}$/.test(token)) {
@@ -505,6 +505,8 @@ async function execute(job) {
       return await apkInventory();
     case "shizuku_storage_check":
       return await shizukuStorageCheck();
+    case "shizuku_status":
+      return await androidControl.status();
     case "android_package_inventory":
       return await androidControl.packageInventory(args);
     case "android_package_info":
