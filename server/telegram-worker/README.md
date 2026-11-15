@@ -28,7 +28,7 @@ Required runtime secrets:
 - `TELEGRAM_API_HASH`
 - `TELEGRAM_SESSION`
 
-For the legacy Hostless Docker deployment, also set `SUPABASE_URL` and expose port 8080.
+Set `SUPABASE_URL` and expose port 8080.
 
 Optional:
 - `POLL_INTERVAL_MS` (default 30000; minimum 10000)
@@ -94,7 +94,7 @@ The Telegram StringSession is equivalent to a login credential and can access th
 
 ## Health check
 
-For the persistent Docker worker, `GET /health` returns HTTP 200 after the MTProto session has been authorized.
+For the persistent Docker worker, `GET /health` returns HTTP 200 while the process is alive, including during idle periods. `GET /ready` returns HTTP 200 only after the MTProto session has been authorized for an active job.
 
 ## Result semantics
 
