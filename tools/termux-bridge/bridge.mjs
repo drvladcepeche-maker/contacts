@@ -509,6 +509,10 @@ async function execute(job) {
       return await androidControl.status();
     case "device_info":
       return await androidControl.deviceInfo();
+    case "screen_snapshot":
+      return await androidControl.uiSnapshot();
+    case "screen_action":
+      return await androidControl.uiAction(args);
     case "android_package_inventory":
       return await androidControl.packageInventory(args);
     case "android_package_info":
