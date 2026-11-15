@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 
 const MAX_OUTPUT = 30000;
 const PACKAGE_RE = /^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$/;
+const DEFAULT_RISH = resolve(process.env.PREFIX || "/data/data/com.termux/files/usr", "bin/rish");
 
 function run(program, args, timeoutMs = 30000) {
   return new Promise(resolveRun => {
@@ -44,15 +46,27 @@ function validatePackage(value) {
 }
 
 export class AndroidControl {
-  constructor({ rishBin = "rish" } = {}) {
+  constructor({ rishBin = DEFAULT_RISH } = {}) {
     this.rishBin = rishBin;
   }
 
-  async command(command, timeoutMs = 30000) {
+  async status() {
     const identity = await run(this.rishBin, ["-c", "id"], 15000);
-    if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identity.output)) {
-      throw new Error("Shizuku is unavailable or not authorized for Termux (expected uid=2000 shell). " +
-        (identity.errorText || identity.output).slice(0, 1000));
+    const ok = identity.exitCode === 0 && /uid=2000\\(shell\\)/.test(identity.output);
+    return {
+      exitCode: ok ? 0 : 3,
+      output: identity.output,
+      errorText: ok ? "" : "Shizuku did not return Android shell identity. " +
+        "rish exit=" + identity.exitCode + "; stderr=" + (identity.errorText || "(empty)") +
+        "; stdout=" + (identity.output || "(empty)") +
+        ". Verify that the Shizuku service is running and Termux is authorized.",
+    };
+  }
+
+  async command(command, timeoutMs = 30000) {
+    const identity = await this.status();
+    if (identity.exitCode !== 0) {
+      throw new Error(identity.errorText);
     }
     const result = await run(this.rishBin, ["-c", command], timeoutMs);
     return { ...result, shizuku: "uid=2000(shell)" };
