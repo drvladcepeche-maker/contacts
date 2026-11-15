@@ -166,4 +166,61 @@ export class AndroidControl {
       source: "Android system diagnostics via Shizuku",
     };
   }
+
+  async uiSnapshot() {
+    const path = "/data/local/tmp/osiris-bridge-window.xml";
+    const command = "uiautomator dump " + path + " >/dev/null 2>&1 && cat " + path +
+      "; result=$?; rm -f " + path + "; exit $result";
+    return await this.command(command, 45000);
+  }
+
+  async uiAction(args = {}) {
+    const action = String(args.action || "");
+    if (action === "launch") {
+      const name = validatePackage(args.package_name);
+      return await this.command("monkey -p " + name + " 1", 30000);
+    }
+    if (action === "tap") {
+      const x = Number(args.x), y = Number(args.y);
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 10000 || y > 10000) {
+        throw new Error("tap requires integer x/y coordinates from 0 to 10000.");
+      }
+      return await this.command("input tap " + x + " " + y, 15000);
+    }
+    if (action === "swipe") {
+      const x1 = Number(args.x1), y1 = Number(args.y1), x2 = Number(args.x2), y2 = Number(args.y2);
+      const duration = Number(args.duration_ms || 400);
+      if (![x1,y1,x2,y2].every(Number.isInteger) || [x1,y1,x2,y2].some(v => v < 0 || v > 10000) ||
+          !Number.isInteger(duration) || duration < 100 || duration > 3000) {
+        throw new Error("swipe requires integer coordinates from 0 to 10000 and duration_ms from 100 to 3000.");
+      }
+      return await this.command("input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " " + duration, 15000);
+    }
+    if (action === "text") {
+      const value = String(args.text ?? "");
+      if (!value || value.length > 120 || /[\\r\\n\\t\\x00-\\x1f]/.test(value)) {
+        throw new Error("text requires 1–120 printable characters and no control characters.");
+      }
+      const encoded = value.replace(/ /g, "%s");
+      const quoted = "'" + encoded.replace(/'/g, "'\\''") + "'";
+      return await this.command("input text " + quoted, 15000);
+    }
+    const keys = {
+      back: "KEYCODE_BACK",
+      home: "KEYCODE_HOME",
+      enter: "KEYCODE_ENTER",
+      tab: "KEYCODE_TAB",
+      up: "KEYCODE_DPAD_UP",
+      down: "KEYCODE_DPAD_DOWN",
+      left: "KEYCODE_DPAD_LEFT",
+      right: "KEYCODE_DPAD_RIGHT",
+      center: "KEYCODE_DPAD_CENTER",
+      menu: "KEYCODE_MENU",
+      escape: "KEYCODE_ESCAPE",
+    };
+    if (Object.hasOwn(keys, action)) {
+      return await this.command("input keyevent " + keys[action], 15000);
+    }
+    throw new Error("Unsupported UI action. Allowed: launch, tap, swipe, text, back, home, enter, tab, up, down, left, right, center, menu, escape.");
+  }
 }
