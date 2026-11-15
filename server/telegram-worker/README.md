@@ -1,12 +1,15 @@
 # Contacts Telegram Resolver Worker
 
-A standalone Node.js MTProto worker for Hostless. It resolves phone numbers already present in the Supabase contact snapshot without importing or adding them to the Telegram account's contacts.
+A standalone Node.js MTProto worker for a persistent Docker host. GitHub Actions remains available as a fallback runtime, but only one runtime should be enabled at a time. It resolves phone numbers already present in the Supabase contact snapshot without importing or adding them to the Telegram account's contacts.
 
 ## Behaviour
 
 - Calls `contacts.resolvePhone` one phone number at a time.
 - Reads GramJS `Api.User.usernames` entries, keeps active usernames, and also includes the legacy primary username; stores distinct values joined with comma + space.
 - Enforces a minimum 5-second interval between Telegram lookup requests, plus random additive jitter (default 0–3 seconds).
+- In persistent mode, polls Supabase every 30 seconds, handles at most 20 candidates per hourly batch by default, and backs off exponentially on queue/database errors.
+- Separates process liveness (`GET /health`) from Telegram readiness (`GET /ready`), so a healthy idle worker is not restarted while waiting for the next batch.
+- Pauses for 15 minutes after Telegram authorization failures rather than repeatedly retrying a broken session.
 - On Telegram FloodWait, stops processing the current job and re-queues it with `paused_until` set beyond the server-specified wait.
 - Persists each result and progress to Supabase immediately; a restarted worker resumes at the first unprocessed candidate.
 - Updates the corresponding `contact_bridge_snapshots.contact_data` record by `device_id + local_contact_id`.
@@ -17,7 +20,7 @@ Telegram rate limits are dynamic. A 5-second minimum interval is a conservative 
 
 ## Deployment requirements
 
-Working directory: `server/telegram-worker`; build from the included Dockerfile for a persistent worker, or use the GitHub Actions runtime workflow.
+Working directory: `server/telegram-worker`. The included Dockerfile is intended for a persistent container service with automatic restarts and exactly one replica. Do not set `RUN_ONCE=true` in persistent mode.
 
 Required runtime secrets:
 - `SUPABASE_SERVICE_ROLE_KEY`
@@ -28,10 +31,15 @@ Required runtime secrets:
 For the legacy Hostless Docker deployment, also set `SUPABASE_URL` and expose port 8080.
 
 Optional:
-- `POLL_INTERVAL_MS` (default 5000)
+- `POLL_INTERVAL_MS` (default 30000; minimum 10000)
 - `MIN_REQUEST_INTERVAL_MS` (default 5000; values below 5000 are clamped to 5000)
 - `REQUEST_JITTER_MS` (default 3000)
+- `MAX_CANDIDATES_PER_RUN` (default 20)
+- `BATCH_COOLDOWN_MS` (default 3600000; minimum 60000)
+- `AUTH_FAILURE_COOLDOWN_MS` (default 900000; minimum 60000)
 - `PORT` (default 8080)
+
+For a persistent deployment, use `POLL_INTERVAL_MS=30000`, `MAX_CANDIDATES_PER_RUN=20`, `BATCH_COOLDOWN_MS=3600000`, `AUTH_FAILURE_COOLDOWN_MS=900000`, `MIN_REQUEST_INTERVAL_MS=5000`, and `REQUEST_JITTER_MS=3000`. Set the platform health-check path to `/health`; `/ready` intentionally remains unavailable until Telegram is authorized for a queued job. Keep the service at one replica to avoid concurrent MTProto sessions sharing one account.
 
 Apply the SQL migration `telegram_resolver_rate_limit_resume` before starting the worker. The existing Android TDLib session is encrypted with Android Keystore and is not portable to this worker; generate a separate GramJS StringSession.
 
@@ -72,13 +80,15 @@ This workflow does not require a laptop. Use the official Termux app and keep th
    The directory and file are created with owner-only permissions (0700/0600). The session value is not printed. Do not delete this file until the GitHub secret is saved.
 6. In the GitHub repository open Settings → Secrets and variables → Actions → New repository secret. Name it exactly `TELEGRAM_SESSION`. Open the local file in Termux and copy its contents directly into that secret field. Never paste the value into ChatGPT, issues, commits, screenshots, or logs. Clear the Android clipboard after saving.
 
-## GitHub Actions runtime (no separate worker host)
+## GitHub Actions runtime (fallback)
 
 The scheduled workflow checks queue readiness every 10 minutes. A lightweight Supabase precheck avoids installing and building the worker unless a queued job is due or a stale `running` job needs recovery. Each worker run processes up to 20 phone candidates, saves progress, and sets `paused_until` to 60 minutes after the last Telegram lookup request. This cooldown is deliberately conservative: live `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a reported wait of about 58 minutes. The 10-minute checks resume the queue shortly after the cooldown expires. The run timeout is 20 minutes and overlapping runs are not cancelled.
 
 1. In repository Settings → Secrets and variables → Actions, add the four secrets listed above.
 2. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
 3. Run the workflow manually once from Actions to verify startup, then inspect its logs. The session and service-role key are injected as secrets and must never be echoed.
+
+When moving to a persistent container, disable the GitHub Actions runtime by setting repository variable `TELEGRAM_RESOLVER_ENABLED=false` before starting the container. Do not run both runtimes against the same Telegram account at the same time. To return to GitHub Actions, stop the persistent container first, then restore the variable to `true`.
 
 The Telegram StringSession is equivalent to a login credential and can access the Telegram account. Prefer a dedicated Telegram account. Never paste the session or service-role key into chat, source files, issues, or commits. The scheduled worker uses the Supabase service-role key only as a protected GitHub Actions secret.
 
