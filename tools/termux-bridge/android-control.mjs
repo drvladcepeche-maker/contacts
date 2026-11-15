@@ -108,27 +108,45 @@ export class AndroidControl {
     };
   }
 
+  async deviceInfo() {
+    const keys = [
+      "ro.product.manufacturer",
+      "ro.product.model",
+      "ro.product.device",
+      "ro.build.version.release",
+      "ro.build.version.sdk",
+      "ro.build.version.security_patch",
+    ];
+    const rows = [];
+    for (const key of keys) {
+      const value = await run("/system/bin/getprop", [key], 5000);
+      rows.push(key + "=" + value.output.trim());
+    }
+    return { exitCode: 0, output: rows.join("\\n"), source: "Android system properties" };
+  }
+
   async appOps({ package_name }) {
     const name = validatePackage(package_name);
     return await this.command("cmd appops get " + name, 30000);
   }
 
   async vpnStatus() {
-    const result = await run("/system/bin/dumpsys", ["connectivity"], 45000);
+    const identity = await this.status();
+    if (identity.exitCode !== 0) {
+      return {
+        exitCode: 3,
+        output: "VPN state requires Shizuku shell access. Basic package inventory remains available without it.",
+        errorText: identity.errorText,
+      };
+    }
+    const result = await this.command("dumpsys connectivity", 45000);
     const lines = result.output.split(/\\r?\\n/);
     const matches = lines.filter(line => /vpn|tun[0-9]*|TRANSPORT_VPN|underlying.?network/i.test(line));
-    const alwaysOn = await run("/system/bin/settings", ["get", "secure", "always_on_vpn_app"], 10000);
-    const lockdown = await run("/system/bin/settings", ["get", "secure", "always_on_vpn_lockdown"], 10000);
     return {
       ...result,
-      output: [
-        "Always-on VPN package: " + (alwaysOn.output.trim() || "null"),
-        "VPN lockdown: " + (lockdown.output.trim() || "null"),
-        "Connectivity VPN lines:",
-        matches.slice(0, 180).join("\\n") || "No VPN-related lines were found in dumpsys connectivity.",
-      ].join("\\n"),
+      output: matches.slice(0, 180).join("\\n") || "No VPN-related lines were found in dumpsys connectivity.",
       total_matching_lines: matches.length,
-      source: "Android system diagnostics via Termux app UID",
+      source: "Android system diagnostics via Shizuku",
     };
   }
 }
