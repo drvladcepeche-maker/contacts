@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { TerminalSessions } from "./terminal-sessions.mjs";
 import { ShizukuFiles } from "./shizuku-files.mjs";
+import { AndroidControl } from "./android-control.mjs";
 
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_SJMrOazzL4h91DQ2nQaeaQ_FRyGSP7Y";
 const API_URL = process.env.TERMUX_BRIDGE_URL ||
@@ -21,6 +22,7 @@ const MAX_OUTPUT = 30000;
 let stopping = false;
 const terminal = new TerminalSessions({ workspace: WORKSPACE });
 const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: process.env.RISH_BIN || resolve(WORKSPACE, "rish") });
+const androidControl = new AndroidControl({ rishBin: process.env.RISH_BIN || "rish" });
 
 const token = (await readFile(TOKEN_PATH, "utf8")).trim();
 if (!/^[a-f0-9]{64}$/.test(token)) {
@@ -503,6 +505,14 @@ async function execute(job) {
       return await apkInventory();
     case "shizuku_storage_check":
       return await shizukuStorageCheck();
+    case "android_package_inventory":
+      return await androidControl.packageInventory(args);
+    case "android_package_info":
+      return await androidControl.packageInfo(args);
+    case "android_appops_get":
+      return await androidControl.appOps(args);
+    case "android_vpn_status":
+      return await androidControl.vpnStatus();
     case "install_apk":
       return await installApk(args);
     case "terminal_run":
@@ -620,7 +630,7 @@ if (cliArgs[0] === "brave") {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: existing diagnostics; terminal_run/start/input/read/stop; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
+console.log("Automatic commands: diagnostics; Android package/app-op/VPN inventory via Shizuku; terminal sessions; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("Terminal commands run as the ordinary Termux app user inside WORKSPACE, with bounded runtime/output and filtered environment. No root or automatic Shizuku elevation is used.");
 
