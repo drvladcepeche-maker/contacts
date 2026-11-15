@@ -638,7 +638,7 @@ if (cliArgs[0] === "brave") {
 console.log("Termux bridge started.");
 console.log("Workspace:", WORKSPACE);
 console.log("Endpoint:", API_URL);
-console.log("Automatic commands: diagnostics; Android package/app-op/VPN inventory via Shizuku; terminal sessions; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
+console.log("Automatic commands: Android package inventory and device info; Shizuku AppOps/VPN diagnostics and UI automation; terminal sessions; scoped Shizuku file operations; private Storage uploads; APK inventory/install.");
 console.log("Gradle commands require typing YES in this terminal.");
 console.log("Terminal commands run as the ordinary Termux app user inside WORKSPACE, with bounded runtime/output and filtered environment. No root or automatic Shizuku elevation is used.");
 
