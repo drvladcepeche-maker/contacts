@@ -507,6 +507,8 @@ async function execute(job) {
       return await shizukuStorageCheck();
     case "shizuku_status":
       return await androidControl.status();
+    case "device_info":
+      return await androidControl.deviceInfo();
     case "android_package_inventory":
       return await androidControl.packageInventory(args);
     case "android_package_info":
