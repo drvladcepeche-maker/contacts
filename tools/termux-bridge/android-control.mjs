@@ -52,10 +52,13 @@ export class AndroidControl {
 
   async status() {
     const identity = await run(this.rishBin, ["-c", "id"], 15000);
-    const ok = identity.exitCode === 0 && /uid=2000\(shell\)/.test(identity.output);
+    // Shizuku's app_process may route shell command output through stderr.
+    // Validate the shell identity against both streams.
+    const combined = [identity.output, identity.errorText].filter(Boolean).join("\n").trim();
+    const ok = identity.exitCode === 0 && /uid=2000\(shell\)/.test(combined);
     return {
       exitCode: ok ? 0 : 3,
-      output: identity.output,
+      output: combined,
       errorText: ok ? "" : "Shizuku did not return Android shell identity. " +
         "rish exit=" + identity.exitCode + "; stderr=" + (identity.errorText || "(empty)") +
         "; stdout=" + (identity.output || "(empty)") +
@@ -69,7 +72,12 @@ export class AndroidControl {
       throw new Error(identity.errorText);
     }
     const result = await run(this.rishBin, ["-c", command], timeoutMs);
-    return { ...result, shizuku: "uid=2000(shell)" };
+    // Normalize Shizuku output because app_process may emit it on stderr.
+    return {
+      ...result,
+      output: [result.output, result.errorText].filter(Boolean).join("\n").trim(),
+      shizuku: "uid=2000(shell)",
+    };
   }
 
   async packageInventory({ include_system = false, user_id = 0 } = {}) {
