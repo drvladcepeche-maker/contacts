@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
 const MAX_OUTPUT = 30000;
-const PACKAGE_RE = /^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$/;
+const PACKAGE_RE = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/;
 const DEFAULT_RISH = resolve(process.env.PREFIX || "/data/data/com.termux/files/usr", "bin/rish");
 
 function run(program, args, timeoutMs = 30000) {
@@ -52,7 +52,7 @@ export class AndroidControl {
 
   async status() {
     const identity = await run(this.rishBin, ["-c", "id"], 15000);
-    const ok = identity.exitCode === 0 && /uid=2000\\(shell\\)/.test(identity.output);
+    const ok = identity.exitCode === 0 && /uid=2000\(shell\)/.test(identity.output);
     return {
       exitCode: ok ? 0 : 3,
       output: identity.output,
@@ -102,7 +102,7 @@ export class AndroidControl {
         activity.output.trim() || activity.errorText,
         "INSTALL_SOURCE",
         installer.output.trim() || installer.errorText,
-      ].join("\\n"),
+      ].join("\n"),
       errorText: path.errorText || activity.errorText || installer.errorText,
       source: "Android Package Manager via Termux app UID",
     };
@@ -122,7 +122,7 @@ export class AndroidControl {
       const value = await run("/system/bin/getprop", [key], 5000);
       rows.push(key + "=" + value.output.trim());
     }
-    return { exitCode: 0, output: rows.join("\\n"), source: "Android system properties" };
+    return { exitCode: 0, output: rows.join("\n"), source: "Android system properties" };
   }
 
   async appOps({ package_name }) {
@@ -140,11 +140,11 @@ export class AndroidControl {
       };
     }
     const result = await this.command("dumpsys connectivity", 45000);
-    const lines = result.output.split(/\\r?\\n/);
+    const lines = result.output.split(/\r?\n/);
     const matches = lines.filter(line => /vpn|tun[0-9]*|TRANSPORT_VPN|underlying.?network/i.test(line));
     return {
       ...result,
-      output: matches.slice(0, 180).join("\\n") || "No VPN-related lines were found in dumpsys connectivity.",
+      output: matches.slice(0, 180).join("\n") || "No VPN-related lines were found in dumpsys connectivity.",
       total_matching_lines: matches.length,
       source: "Android system diagnostics via Shizuku",
     };
