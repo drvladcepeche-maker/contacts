@@ -51,22 +51,32 @@ const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SE
   auth: { persistSession: false, autoRefreshToken: false },
   global: { fetch: fetchWithTimeout },
 });
-const pollMs = Math.max(3000, Number(process.env.POLL_INTERVAL_MS) || 5000);
-const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5000);
-const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
+const pollMs = Math.max(10_000, Number(process.env.POLL_INTERVAL_MS) || 30_000);
+const minIntervalMs = Math.max(5_000, Number(process.env.MIN_REQUEST_INTERVAL_MS) || 5_000);
+const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS ?? 3_000));
 const port = Number(process.env.PORT) || 8080;
 const runOnce = process.env.RUN_ONCE === "true";
-const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
+// The persistent worker follows the same conservative hourly budget as GitHub Actions.
+const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 20);
 const batchCooldownMs = Math.max(60_000, Number(process.env.BATCH_COOLDOWN_MS) || 60 * 60_000);
+const authFailureCooldownMs = Math.max(60_000, Number(process.env.AUTH_FAILURE_COOLDOWN_MS) || 15 * 60_000);
+let queueErrorBackoffMs = pollMs;
 
 let stopping = false;
 let ready = false;
 let telegram: TelegramClient | undefined;
 
 const server = createServer((req, res) => {
-  if (req.url === "/health" && req.method === "GET") {
+  if (req.method === "GET" && req.url === "/health") {
+    // Liveness: healthy while idle, even before Telegram is connected.
+    res.writeHead(stopping ? 503 : 200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: stopping ? "stopping" : "ok", telegramConnected: ready, runOnce }));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/ready") {
+    // Readiness: Telegram authorization is established only when there is work to do.
     res.writeHead(ready && !stopping ? 200 : 503, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: ready && !stopping ? "ok" : "starting", telegramConnected: ready }));
+    res.end(JSON.stringify({ status: ready && !stopping ? "ready" : "waiting", telegramConnected: ready }));
     return;
   }
   res.writeHead(404, { "content-type": "application/json" });
@@ -370,13 +380,18 @@ async function processJob(job: Job) {
 async function claimJob(): Promise<Job | null> {
   console.log("Queue poll: requesting claim_telegram_match_job RPC");
   const rpc = supabase.rpc("claim_telegram_match_job");
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")), 20000);
+    timer = setTimeout(() => reject(new Error("Timed out after 20s waiting for claim_telegram_match_job RPC")), 20000);
   });
-  const { data, error } = await Promise.race([rpc, timeout]);
-  if (error) throw error;
-  console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
-  return data ? data as Job : null;
+  try {
+    const { data, error } = await Promise.race([rpc, timeout]);
+    if (error) throw error;
+    console.log(data ? "Queue poll: job claimed" : "Queue poll: no queued job");
+    return data ? data as Job : null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 async function ensureTelegramConnected() {
   if (telegram && ready) return;
@@ -426,17 +441,22 @@ async function ensureTelegramConnected() {
 
 async function main() {
   console.log("Telegram resolver worker started; Telegram connects only when a queued job exists.");
+  console.log(`Runtime: runOnce=${runOnce} pollMs=${pollMs} maxCandidatesPerRun=${maxCandidatesPerRun} batchCooldownMs=${batchCooldownMs} authFailureCooldownMs=${authFailureCooldownMs}`);
   while (!stopping) {
     try {
       const job = await claimJob();
+      queueErrorBackoffMs = pollMs;
       if (job) {
         try {
           await ensureTelegramConnected();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          const resumeAt = new Date(Date.now() + authFailureCooldownMs).toISOString();
           await updateJob(job.id, {
-            status: "queued", claimed_at: null,
-            error_message: message.slice(0, 500),
+            status: "queued",
+            claimed_at: null,
+            paused_until: resumeAt,
+            error_message: `Telegram authorization failed; retry after ${resumeAt}. ${message}`.slice(0, 500),
           });
           throw error;
         }
@@ -455,17 +475,23 @@ async function main() {
     } catch (error) {
       console.error("Queue polling failed", error instanceof Error ? error.message : String(error));
       if (runOnce) throw error;
-      await sleep(pollMs);
+      await sleep(queueErrorBackoffMs);
+      queueErrorBackoffMs = Math.min(300_000, Math.max(pollMs, queueErrorBackoffMs * 2));
     }
   }
-  if (runOnce) {
-    ready = false;
-    stopping = true;
-    if (telegram) await telegram.disconnect().catch(() => {});
-    server.close();
-    console.log("One-shot resolver run finished.");
-  }
+  ready = false;
+  stopping = true;
+  if (telegram) await telegram.disconnect().catch(() => {});
+  server.close();
+  console.log(runOnce ? "One-shot resolver run finished." : "Telegram resolver worker stopped.");
 }
 process.on("SIGTERM", () => { stopping = true; server.close(); });
 process.on("SIGINT", () => { stopping = true; server.close(); });
-main().catch(error => { console.error("Worker startup failed", error); server.close(); process.exitCode = 1; });
+main().catch(async error => {
+  console.error("Worker startup failed", error);
+  ready = false;
+  stopping = true;
+  if (telegram) await telegram.disconnect().catch(() => {});
+  server.close();
+  process.exitCode = 1;
+});
