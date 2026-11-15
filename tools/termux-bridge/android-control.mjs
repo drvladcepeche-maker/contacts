@@ -72,26 +72,43 @@ export class AndroidControl {
     return { ...result, shizuku: "uid=2000(shell)" };
   }
 
-  async packageInventory({ include_system = false } = {}) {
-    const args = ["list", "packages"];
+  async packageInventory({ include_system = false, user_id = 0 } = {}) {
+    const user = Number(user_id);
+    if (![0, 999].includes(user)) throw new Error("Only Android users 0 and 999 are supported by this bridge.");
+    const args = ["list", "packages", "--user", String(user)];
     if (include_system !== true) args.push("-3");
     args.push("-f", "-i");
-    // Android Package Manager permits this read-only query from the Termux app UID;
-    // it does not require Shizuku or a foreground confirmation.
-    const result = await run("/system/bin/pm", args, 45000);
+    let result;
+    if (user === 0) {
+      // The Termux app belongs to Android user 0. Explicit user selection avoids
+      // MIUI's ambiguous default profile and needs no Shizuku permission.
+      result = await run("/system/bin/pm", args, 45000);
+    } else {
+      // MIUI XSpace (user 999) is a cross-user query and therefore requires Shizuku.
+      const command = "pm list packages --user 999" +
+        (include_system === true ? "" : " -3") + " -f -i";
+      result = await this.command(command, 45000);
+    }
     return {
       ...result,
       output: result.output || "No packages returned by Android Package Manager.",
       inventory_scope: include_system === true ? "all installed packages" : "third-party packages only",
-      source: "Android Package Manager via Termux app UID",
+      android_user_id: user,
+      source: user === 0 ? "Android Package Manager via Termux app UID" : "Android Package Manager via Shizuku",
     };
   }
 
-  async packageInfo({ package_name }) {
+  async packageInfo({ package_name, user_id = 0 }) {
     const name = validatePackage(package_name);
+    const user = Number(user_id);
+    if (![0, 999].includes(user)) throw new Error("Only Android users 0 and 999 are supported by this bridge.");
     const path = await run("/system/bin/pm", ["path", name], 15000);
-    const activity = await run("/system/bin/cmd", ["package", "resolve-activity", "--brief", name], 15000);
-    const installer = await run("/system/bin/pm", ["list", "packages", "-i", name], 15000);
+    const activity = user === 0
+      ? await run("/system/bin/cmd", ["package", "resolve-activity", "--brief", "--user", "0", name], 15000)
+      : await this.command("cmd package resolve-activity --brief --user 999 " + name, 15000);
+    const installer = user === 0
+      ? await run("/system/bin/pm", ["list", "packages", "--user", "0", "-i", name], 15000)
+      : await this.command("pm list packages --user 999 -i " + name, 15000);
     return {
       exitCode: path.exitCode,
       output: [
