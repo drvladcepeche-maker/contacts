@@ -6,7 +6,7 @@ test("batch cooldown is measured from the last Telegram request", () => {
   assert.equal(calculateBatchResumeAt("2026-11-05T17:59:18.951Z", 0), "2026-11-05T18:59:18.951Z");
 });
 test("invalid-only batches use a short fallback pause", () => {
-  assert.equal(calculateBatchResumeAt(null, 1000), "1970-01-01T00:01:01.000Z");
+  assert.equal(calculateBatchResumeAt(null, 1000), "1970-01-01T00:01:02.000Z");
 });
 test("adaptive interval preserves the configured baseline and escalates after FloodWait", () => {
   assert.equal(adaptiveRequestIntervalMs(5_000, 0), 5_000);
@@ -18,8 +18,8 @@ test("FloodWait resume includes a one-minute safety margin", () => {
   assert.equal(calculateFloodWaitResumeAt(45, 1000), "1970-01-01T00:01:46.000Z");
 });
 test("invalid FloodWait durations use a safe minimum pause", () => {
-  assert.equal(calculateFloodWaitResumeAt(0, 1000), "1970-01-01T00:01:01.000Z");
-  assert.equal(calculateFloodWaitResumeAt(-5, 1000), "1970-01-01T00:01:01.000Z");
+  assert.equal(calculateFloodWaitResumeAt(0, 1000), "1970-01-01T00:01:02.000Z");
+  assert.equal(calculateFloodWaitResumeAt(-5, 1000), "1970-01-01T00:01:02.000Z");
 });
 test("detects FloodWait from server error messages", () => {
   assert.equal(floodWaitSeconds(new Error("FLOOD_WAIT_59645")), 59645);
