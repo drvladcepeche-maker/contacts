@@ -87,9 +87,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/MyContacts-0.4-pairing2.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/MyContacts-pairing2.apk
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk
-          cp app/build/outputs/apk/release/app-release.apk dist/MyContacts-0.4-release.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/moi-kontakty.apk
+          sha256sum dist/moi-kontakty.apk | awk '{print $1}' > dist/moi-kontakty.apk.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: mycontacts-0.4-apks
