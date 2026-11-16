@@ -147,7 +147,7 @@ jobs:
             echo "Run: $RUN_URL"
             echo "Time (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
-            echo "Raw worker output is intentionally not copied into this issue. Inspect the Actions run using an authorized account; do not paste credentials, phone numbers, Telegram IDs, device IDs, or contact data into public issues."
+            echo "Raw worker output is intentionally not copied into this issue. Assume Actions logs may be visible to repository readers; never write credentials, phone numbers, Telegram IDs, device IDs, or contact data to worker logs."
           } > "$RUNNER_TEMP/report.md"
           TITLE="Telegram worker failure notice"
           NUM=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
