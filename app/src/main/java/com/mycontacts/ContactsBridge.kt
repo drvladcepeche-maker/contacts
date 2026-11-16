@@ -15,8 +15,6 @@ class ContactsBridge(context: Context) {
         const val MCP_URL = "https://xevqbgjtxuveeqaiacvm.supabase.co/functions/v1/contacts-mcp"
     }
 
-    private val appContext = context.applicationContext
-
     fun token(): String = SecurePreferences.get(appContext, "contacts_bridge", "device_token")
     fun saveToken(value: String) { SecurePreferences.put(appContext, "contacts_bridge", "device_token", value.trim()) }
     fun clearToken() { SecurePreferences.remove(appContext, "contacts_bridge", "device_token") }
