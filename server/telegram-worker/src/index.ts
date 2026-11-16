@@ -6,6 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { extractTelegramUsernames, mergeTelegramUsernames } from "./telegram-usernames.js";
 import { calculateBatchResumeAt } from "./rate-limit.js";
 import { filterActiveContactIds } from "./contact-manifest.js";
+import { createWorkerRunBudget } from "./run-budget.js";
 
 type PhoneCandidate = {
   device_id: string;
@@ -56,7 +57,8 @@ const minIntervalMs = Math.max(5000, Number(process.env.MIN_REQUEST_INTERVAL_MS)
 const jitterMs = Math.max(0, Number(process.env.REQUEST_JITTER_MS) || 3000);
 const port = Number(process.env.PORT) || 8080;
 const runOnce = process.env.RUN_ONCE === "true";
-const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 250);
+const maxCandidatesPerRun = Math.max(1, Number(process.env.MAX_CANDIDATES_PER_RUN) || 1000);
+const maxTelegramRequestsPerRun = Math.max(1, Number(process.env.MAX_TELEGRAM_REQUESTS_PER_RUN) || 20);
 const batchCooldownMs = Math.max(60_000, Number(process.env.BATCH_COOLDOWN_MS) || 60 * 60_000);
 
 let stopping = false;
@@ -206,6 +208,7 @@ async function processJob(job: Job) {
   const candidates = Array.isArray(job.phones) ? job.phones : [];
   const results: MatchResult[] = Array.isArray(job.results) ? job.results : [];
   let lastRequestAt = job.last_request_at ?? null;
+  const runBudget = createWorkerRunBudget(maxCandidatesPerRun, maxTelegramRequestsPerRun);
 
   // Load the last complete Android contact set once per device. Historical snapshots
   // remain archived, but Telegram lookups and Contacts Provider writes must target
@@ -238,7 +241,7 @@ async function processJob(job: Job) {
   const startIndex = results.length;
   for (let index = startIndex; index < candidates.length; index++) {
     if (stopping) return;
-    if (index - startIndex >= maxCandidatesPerRun) {
+    if (!runBudget.canProcessCandidate()) {
       const resumeAt = calculateBatchResumeAt(lastRequestAt, Date.now(), batchCooldownMs);
       await updateJob(job.id, {
         status: "queued", results, checked: results.length,
@@ -247,7 +250,7 @@ async function processJob(job: Job) {
         last_request_at: lastRequestAt, paused_until: resumeAt,
         error_message: null,
       });
-      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; resume at ${resumeAt}`);
+      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; run candidate budget ${maxCandidatesPerRun} reached after ${runBudget.telegramRequestsMade} Telegram requests; resume at ${resumeAt}`);
       return;
     }
     const candidate = candidates[index];
@@ -263,6 +266,7 @@ async function processJob(job: Job) {
         checked_at: checkedAt,
       };
       results.push(invalid);
+      runBudget.recordCandidate();
       await updateJob(job.id, { results, checked: results.length, matched: results.filter(x => x.status === "matched").length, errors: results.filter(x => x.status === "error").length });
       continue;
     }
@@ -282,6 +286,7 @@ async function processJob(job: Job) {
         error: "Skipped: contact ID is absent from the latest full sync manifest.",
         checked_at: checkedAt,
       });
+      runBudget.recordCandidate();
       await updateJob(job.id, {
         results, checked: results.length,
         matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
@@ -297,7 +302,21 @@ async function processJob(job: Job) {
       local_contact_ids: activeCandidateIds.slice(1),
     };
 
+    if (!runBudget.canMakeTelegramRequest()) {
+      const resumeAt = calculateBatchResumeAt(lastRequestAt, Date.now(), batchCooldownMs);
+      await updateJob(job.id, {
+        status: "queued", results, checked: results.length,
+        matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
+        errors: results.filter(x => x.status === "error").length,
+        last_request_at: lastRequestAt, paused_until: resumeAt,
+        error_message: null,
+      });
+      console.log(`Job ${job.id} checkpointed after ${results.length}/${candidates.length} candidates; Telegram request budget ${maxTelegramRequestsPerRun} reached; resume at ${resumeAt}`);
+      return;
+    }
+
     await waitForRateLimit(lastRequestAt);
+    runBudget.recordTelegramRequest();
     let result: MatchResult;
     try {
       const match = await resolvePhone(phone);
@@ -351,6 +370,7 @@ async function processJob(job: Job) {
       );
     }
     results.push(result);
+    runBudget.recordCandidate();
     await updateJob(job.id, {
       results, checked: results.length,
       matched: results.filter(x => x.status === "matched" || x.status === "username_missing").length,
