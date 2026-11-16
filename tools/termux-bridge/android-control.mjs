@@ -188,6 +188,18 @@ export class AndroidControl {
 
   async uiAction(args = {}) {
     const action = String(args.action || "");
+    if (action === "resolve_happ_link" || action === "open_happ_link") {
+      const url = String(args.url || "");
+      const match = /^happ:\/\/add\/(https:\/\/xevqbgjtxuveeqaiacvm\.supabase\.co\/functions\/v1\/happ-sub\/[a-f0-9]{64})$/.exec(url);
+      if (!match) {
+        throw new Error("Only the configured Happ subscription import link is allowed.");
+      }
+      const quoted = "'" + url.replace(/'/g, "'\\''") + "'";
+      if (action === "resolve_happ_link") {
+        return await this.command("cmd package query-activities --brief -a android.intent.action.VIEW -d " + quoted, 15000);
+      }
+      return await this.command("am start -a android.intent.action.VIEW -d " + quoted, 30000);
+    }
     if (action === "launch") {
       const name = validatePackage(args.package_name);
       return await this.command("monkey -p " + name + " 1", 30000);
