@@ -195,7 +195,7 @@ export class AndroidControl {
     if (action === "launch_component") {
       const name = validatePackage(args.package_name);
       const activity = String(args.activity || "");
-      if (!/^(?:[A-Za-z0-9_]+\\.)*[A-Za-z0-9_$]+$/.test(activity) || activity.length > 255) {
+      if (!/^[A-Za-z0-9_.$]+$/.test(activity) || activity.length > 255) {
         throw new Error("A valid fully qualified or relative Android activity name is required.");
       }
       const component = activity.startsWith(".") ? name + activity : activity;
