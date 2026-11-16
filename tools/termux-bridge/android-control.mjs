@@ -192,6 +192,18 @@ export class AndroidControl {
       const name = validatePackage(args.package_name);
       return await this.command("monkey -p " + name + " 1", 30000);
     }
+    if (action === "launch_component") {
+      const name = validatePackage(args.package_name);
+      const activity = String(args.activity || "");
+      if (!/^(?:[A-Za-z0-9_]+\\.)*[A-Za-z0-9_$]+$/.test(activity) || activity.length > 255) {
+        throw new Error("A valid fully qualified or relative Android activity name is required.");
+      }
+      const component = activity.startsWith(".") ? name + activity : activity;
+      if (!component.startsWith(name + ".")) {
+        throw new Error("The activity must belong to the supplied package.");
+      }
+      return await this.command("am start -n " + name + "/" + component, 30000);
+    }
     if (action === "tap") {
       const x = Number(args.x), y = Number(args.y);
       if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 10000 || y > 10000) {
