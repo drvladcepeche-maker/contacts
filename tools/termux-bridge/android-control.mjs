@@ -178,9 +178,10 @@ export class AndroidControl {
   }
 
   async uiSnapshot() {
-    const path = "/data/local/tmp/osiris-bridge-window.xml";
-    const command = "uiautomator dump " + path + "; result=$?; echo UIAUTOMATOR_EXIT:$result; " +
-      "if [ -s " + path + " ]; then cat " + path + "; else echo UI_XML_EMPTY_OR_MISSING; fi; " +
+    const path = "/sdcard/osiris-bridge-window.xml";
+    const command = "echo FOREGROUND_ACTIVITY; dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | tail -5; " +
+      "echo UIAUTOMATOR; uiautomator dump " + path + "; result=$?; echo UIAUTOMATOR_EXIT:$result; " +
+      "ls -l " + path + " 2>&1; if [ -s " + path + " ]; then cat " + path + "; else echo UI_XML_EMPTY_OR_MISSING; fi; " +
       "rm -f " + path + "; exit $result";
     return await this.command(command, 45000);
   }
