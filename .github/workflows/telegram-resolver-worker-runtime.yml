@@ -126,7 +126,8 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           RUN_ONCE: "true"
-          MAX_CANDIDATES_PER_RUN: "20"
+          MAX_CANDIDATES_PER_RUN: "1000"
+          MAX_TELEGRAM_REQUESTS_PER_RUN: "20"
           BATCH_COOLDOWN_MS: "3600000"
           MIN_REQUEST_INTERVAL_MS: "5000"
           REQUEST_JITTER_MS: "3000"
