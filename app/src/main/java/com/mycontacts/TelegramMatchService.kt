@@ -83,8 +83,8 @@ class TelegramMatchService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Could not prepare Telegram matching", e)
-                finishWithError("Не удалось подготовить контакты: ${e.message ?: e.javaClass.simpleName}")
+                Log.e(TAG, "Could not prepare Telegram matching: " + e.javaClass.simpleName)
+                finishWithError("Не удалось подготовить контакты: " + e.javaClass.simpleName)
             }
         }
         return START_NOT_STICKY
@@ -125,7 +125,7 @@ class TelegramMatchService : Service() {
                     checked += batch.size
                     errors += batch.size
                 }
-                updateNotification("Ошибка пачки: ${error ?: "нет результата"}", checked, candidates.size)
+                updateNotification("Ошибка пачки сопоставления", checked, candidates.size)
                 main.postDelayed({ processNextBatch() }, BATCH_DELAY_MS)
                 return@importPhoneBatch
             }
@@ -153,7 +153,7 @@ class TelegramMatchService : Service() {
                                     repo.updateTelegramLookup(contact.id, id.toString(), storedUsername)
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "Failed to save Telegram fields for contact ${candidate.contacts.firstOrNull()?.id}", e)
+                                Log.e(TAG, "Failed to save Telegram fields: " + e.javaClass.simpleName)
                                 synchronized(stateLock) { errors++ }
                             } finally {
                                 synchronized(stateLock) { pendingUsernameWrites-- }
