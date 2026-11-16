@@ -8,6 +8,7 @@ on:
       - "supabase/functions/termux-bridge/**"
       - "supabase/functions/contacts-bridge/**"
       - "supabase/functions/contacts-mcp/**"
+      - "supabase/functions/github-fork-mcp/**"
       - "supabase/migrations/*termux*"
       - ".github/workflows/termux-bridge-check.yml"
   push:
@@ -44,10 +45,13 @@ jobs:
           deno check supabase/functions/termux-bridge/index.ts
           deno check supabase/functions/contacts-bridge/index.ts
           deno check supabase/functions/contacts-mcp/index.ts
+          deno check supabase/functions/github-fork-mcp/index.ts
       - name: Test contacts bridge diagnostic redaction
         run: deno test supabase/functions/contacts-bridge/tests/
       - name: Test contacts MCP diagnostic redaction
         run: deno test supabase/functions/contacts-mcp/tests/
+      - name: Test GitHub fork MCP administrator allowlist
+        run: deno test supabase/functions/github-fork-mcp/auth_test.ts
       - name: Smoke-test contacts bridge authentication and CORS
         shell: bash
         run: |
