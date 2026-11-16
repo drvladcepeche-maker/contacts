@@ -97,9 +97,11 @@ export class AndroidControl {
         (include_system === true ? "" : " -3") + " -f -i";
       result = await this.command(command, 45000);
     }
+    const combinedOutput = [result.output, result.errorText].filter(Boolean).join("\n").trim();
     return {
       ...result,
-      output: result.output || "No packages returned by Android Package Manager.",
+      output: combinedOutput || "No packages returned by Android Package Manager.",
+      errorText: "",
       inventory_scope: include_system === true ? "all installed packages" : "third-party packages only",
       android_user_id: user,
       source: user === 0 ? "Android Package Manager via Termux app UID" : "Android Package Manager via Shizuku",
@@ -177,8 +179,9 @@ export class AndroidControl {
 
   async uiSnapshot() {
     const path = "/data/local/tmp/osiris-bridge-window.xml";
-    const command = "uiautomator dump " + path + " >/dev/null 2>&1 && cat " + path +
-      "; result=$?; rm -f " + path + "; exit $result";
+    const command = "uiautomator dump " + path + "; result=$?; echo UIAUTOMATOR_EXIT:$result; " +
+      "if [ -s " + path + " ]; then cat " + path + "; else echo UI_XML_EMPTY_OR_MISSING; fi; " +
+      "rm -f " + path + "; exit $result";
     return await this.command(command, 45000);
   }
 
