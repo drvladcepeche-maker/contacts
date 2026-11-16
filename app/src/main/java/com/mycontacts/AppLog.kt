@@ -33,7 +33,27 @@ object AppLog {
 
     fun read(context: Context): String = synchronized(lock) {
         val file = File(context.filesDir, FILE_NAME)
-        val body = if (file.exists()) file.readText(Charsets.UTF_8) else "Лог пока пуст.\n"
+        val body = if (file.exists()) {
+            val linePattern = Regex("""^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) (INFO|WARN|ERROR|FATAL) (.*)$""")
+            file.readLines(Charsets.UTF_8).mapNotNull { line ->
+                val match = linePattern.matchEntire(line) ?: return@mapNotNull null
+                val timestamp = match.groupValues[1]
+                val level = match.groupValues[2]
+                val message = match.groupValues[3]
+                if (level == "ERROR" || level == "FATAL") {
+                    val tag = message.substringBefore(":").takeIf { it.length in 1..80 }?.let { redact(it) }
+                    val exceptionType = Regex("""\[exception=([A-Za-z0-9_.$]+)\]""").find(message)?.groupValues?.get(1)
+                    buildString {
+                        append(timestamp).append(" ").append(level).append(" ")
+                        if (!tag.isNullOrBlank()) append(tag).append(": ")
+                        append("historical error details omitted")
+                        if (!exceptionType.isNullOrBlank()) append(" [exception=").append(exceptionType).append("]")
+                    }
+                } else {
+                    "$timestamp $level ${redact(message)}"
+                }
+            }.joinToString("\n").ifBlank { "Исторические подробности исключений скрыты.\n" } + "\n"
+        } else "Лог пока пуст.\n"
         val prefs = context.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
         val pending = try { org.json.JSONArray(prefs.getString("pending", "[]")).length() } catch (_: Exception) { -1 }
         val lastError = prefs.getString("last_upload_error", "").orEmpty()
@@ -43,7 +63,7 @@ object AppLog {
             append("Последняя успешная отправка: ").append(prefs.getString("last_upload_at", "нет")).append("\n")
             append("Последняя отправка: принято ").append(prefs.getInt("last_upload_received", 0))
                 .append(", записано ").append(prefs.getInt("last_upload_inserted", 0)).append("\n")
-            if (lastError.isNotBlank()) append("Последняя ошибка отправки: ").append(redact(lastError)).append("\n")
+            if (lastError.isNotBlank()) append("Последняя ошибка отправки: исторические подробности скрыты.\n")
         }
     }
 
@@ -170,9 +190,22 @@ echo "Изменения APK собираются через GitHub Actions по
                 val batch = synchronized(lock) {
                     val current = try { org.json.JSONArray(prefs.getString("pending", "[]")) }
                     catch (_: Exception) { org.json.JSONArray() }
+                    val sanitized = org.json.JSONArray()
+                    for (i in 0 until current.length()) {
+                        val item = current.optJSONObject(i) ?: continue
+                        sanitized.put(org.json.JSONObject()
+                            .put("event_id", item.optString("event_id"))
+                            .put("occurred_at", item.optString("occurred_at"))
+                            .put("level", item.optString("level", "ERROR"))
+                            .put("tag", redact(item.optString("tag")))
+                            .put("message", redact(item.optString("message")).take(1000))
+                            .put("stack_trace", org.json.JSONObject.NULL)
+                            .put("app_version", item.optString("app_version")))
+                    }
+                    prefs.edit().putString("pending", sanitized.toString()).commit()
                     org.json.JSONArray().also { out ->
-                        for (i in 0 until minOf(current.length(), 50)) {
-                            current.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
+                        for (i in 0 until minOf(sanitized.length(), 50)) {
+                            sanitized.optJSONObject(i)?.let { out.put(org.json.JSONObject(it.toString())) }
                         }
                     }
                 }
@@ -182,9 +215,9 @@ echo "Изменения APK собираются через GitHub Actions по
                 )
                 val received = response.optInt("received", -1)
                 if (received < 0) {
-                    val message = response.optString("error", "Сервер вернул некорректный ответ диагностики")
+                    val message = "Diagnostics upload rejected by server"
                     prefs.edit().putString("last_upload_error", message).apply()
-                    android.util.Log.e("AppLog", "Diagnostic upload rejected: " + message)
+                    android.util.Log.e("AppLog", message)
                     lastFlushScheduledAt = 0L
                     return@execute
                 }
@@ -209,12 +242,12 @@ echo "Изменения APK собираются через GitHub Actions по
                     .putString("last_upload_error", "")
                     .apply()
             } catch (e: Exception) {
-                // Keep the queue intact, expose the transport error in the exported log,
-                // and retry on the next flush.
-                val message = e.javaClass.simpleName + ": " + (e.message ?: "no message")
+                // Keep the queue intact; only the exception class is retained for privacy.
+                // Retry on the next flush.
+                val message = "Diagnostics upload failed (${e.javaClass.simpleName})"
                 app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
                     .edit().putString("last_upload_error", message).apply()
-                android.util.Log.e("AppLog", "Diagnostic upload failed", e)
+                android.util.Log.e("AppLog", message)
                 lastFlushScheduledAt = 0L
             }
         }
@@ -223,9 +256,13 @@ echo "Изменения APK собираются через GitHub Actions по
     private fun redact(value: String): String {
         var safe = value
         safe = safe.replace(Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer [REDACTED]")
-        safe = Regex("(?i)(token|password|secret|api[_-]?key)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
+        safe = Regex("(?i)(token|password|secret|api[_-]?key|access[_-]?token)(\\s*[:=]\\s*)[^\\s,;]+").replace(safe) {
             it.groupValues[1] + it.groupValues[2] + "[REDACTED]"
         }
+        safe = Regex("(?i)\\b(command|job|device|contact|local)[_-]?id\\b(\\s*[:=]\\s*|\\s+)[^\\s,;]+").replace(safe) {
+            it.groupValues[1] + "_id=[REDACTED]"
+        }
+        safe = safe.replace(Regex("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b"), "[ID]")
         safe = safe.replace(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), "[EMAIL]")
         safe = safe.replace(Regex("\\+?\\d[\\d ()-]{7,}\\d"), "[PHONE]")
         safe = safe.replace(Regex("\\b[A-Fa-f0-9]{32,}\\b"), "[TOKEN]")
@@ -235,7 +272,8 @@ echo "Изменения APK собираются через GitHub Actions по
     private fun enqueueDiagnostic(context: Context, level: String, message: String, error: Throwable?) {
         try {
             val app = context.applicationContext
-            val stack = error?.let { android.util.Log.getStackTraceString(it) }
+            val exceptionType = error?.javaClass?.simpleName
+            val diagnosticMessage = if (exceptionType.isNullOrBlank()) message else message + " [exception=" + exceptionType + "]"
             val event = org.json.JSONObject()
                 .put("event_id", java.util.UUID.randomUUID().toString())
                 .put("occurred_at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).apply {
@@ -243,8 +281,8 @@ echo "Изменения APK собираются через GitHub Actions по
                 }.format(java.util.Date()))
                 .put("level", level)
                 .put("tag", redact(message.substringBefore(":").take(120)))
-                .put("message", redact(message.substringAfter(": ", message).take(2000)))
-                .put("stack_trace", stack?.let { redact(it) } ?: org.json.JSONObject.NULL)
+                .put("message", redact(diagnosticMessage.substringAfter(": ", diagnosticMessage).take(1000)))
+                .put("stack_trace", org.json.JSONObject.NULL)
                 .put("app_version", BuildConfig.VERSION_NAME)
             val prefs = app.getSharedPreferences("mycontacts_diagnostics", Context.MODE_PRIVATE)
             synchronized(lock) {
@@ -270,16 +308,17 @@ echo "Изменения APK собираются через GitHub Actions по
                     backup.delete()
                     file.renameTo(backup)
                 }
+                val safeMessage = redact(message)
+                val exceptionType = error?.javaClass?.simpleName
                 file.appendText(buildString {
-                    append(formatter.format(Date())).append(" ").append(level).append(" ").append(message).append("\n")
-                    if (error != null) {
-                        append(android.util.Log.getStackTraceString(error)).append("\n")
-                    }
+                    append(formatter.format(Date())).append(" ").append(level).append(" ").append(safeMessage)
+                    if (!exceptionType.isNullOrBlank()) append(" [exception=").append(exceptionType).append("]")
+                    append("\n")
                 }, Charsets.UTF_8)
             } catch (_: Exception) {
                 // Logging must never crash the application.
             }
         }
-        enqueueDiagnostic(context, level, message, error)
+        enqueueDiagnostic(context, level, redact(message), error)
     }
 }
