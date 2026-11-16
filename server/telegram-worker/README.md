@@ -78,7 +78,7 @@ The scheduled workflow checks queue readiness every 10 minutes. A lightweight Su
 
 1. In repository Settings → Secrets and variables → Actions, add the four secrets listed above.
 2. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
-3. Run the workflow manually once from Actions to verify startup, then inspect its logs. The session and service-role key are injected as secrets and must never be echoed. Failure issues contain only a redacted notice and run link; raw worker logs remain inside the restricted Actions run.
+3. Run the workflow manually once from Actions to verify startup, then inspect its logs. The session and service-role key are injected as secrets and must never be echoed. Failure issues contain only a redacted notice and run link. Treat Actions logs as potentially public; worker output must not contain secrets or personal contact data.
 
 The resolver persists `flood_wait_count`, `last_flood_wait_seconds`, and `last_flood_wait_at` in `telegram_match_jobs` for operational visibility. Do not manually clear or shorten `paused_until` to force a retry.
 
