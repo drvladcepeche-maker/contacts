@@ -251,7 +251,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 synchronized(activeCommandIds) { activeCommandIds.remove(id) }
                 android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
-                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue: " + id, e)
+                AppLog.error(this, "MainActivity", "Command handling failed; command retained in queue", e)
             }
         }
     }
@@ -317,8 +317,8 @@ class MainActivity : Activity() {
             persistCommandOutcome(id, result, error)
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-            android.util.Log.e("MainActivity", "Could not persist command outcome " + id, e)
-            AppLog.error(this, "MainActivity", "Could not persist command outcome " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
+            AppLog.error(this, "MainActivity", "Could not persist command outcome", e)
             throw e
         }
 
@@ -329,8 +329,8 @@ class MainActivity : Activity() {
             removeQueuedCommand(id)
         } catch (e: Exception) {
             synchronized(activeCommandIds) { activeCommandIds.remove(id) }
-            android.util.Log.e("MainActivity", "Remote acknowledgement failed; persisted outcome retained for retry: " + id, e)
-            AppLog.error(this, "MainActivity", "Remote acknowledgement failed; persisted outcome retained for retry: " + id, e)
+            android.util.Log.e("MainActivity", "Operation failed: " + e.javaClass.simpleName)
+            AppLog.error(this, "MainActivity", "Remote acknowledgement failed; persisted outcome retained for retry", e)
         }
     }
 
@@ -1196,7 +1196,6 @@ class MainActivity : Activity() {
                 val synced = bridge.sync(contactsForSync())
                 val result = bridge.queueTelegramMatch()
                 val count = result.optInt("unique_phone_count")
-                val jobId = result.optString("job_id")
                 AppLog.info(this, "TelegramResolver", "Queued cloud matching with $count unique phone numbers after syncing $synced contacts")
                 runOnUiThread {
                     showSyncResult(synced)
