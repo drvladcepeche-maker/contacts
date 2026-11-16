@@ -7,13 +7,13 @@ A standalone Node.js MTProto worker for Hostless. It resolves phone numbers alre
 - Calls `contacts.resolvePhone` one phone number at a time.
 - Reads GramJS `Api.User.usernames` entries, keeps active usernames, and also includes the legacy primary username; stores distinct values joined with comma + space.
 - Enforces a minimum 5-second interval between Telegram lookup requests, plus random additive jitter (default 0–3 seconds).
-- On Telegram FloodWait, stops processing the current job and re-queues it with `paused_until` set beyond the server-specified wait.
+- On Telegram FloodWait, stops the current batch, persists the server-requested wait and FloodWait history, then resumes only after the wait plus a 60-second safety margin. The minimum request interval increases by 60 seconds per observed FloodWait, capped at five minutes.
 - Persists each result and progress to Supabase immediately; a restarted worker resumes at the first unprocessed candidate.
 - Updates the corresponding `contact_bridge_snapshots.contact_data` record by `device_id + local_contact_id`.
 - Stores the real username when present. If Telegram resolves a user but no username is returned, stores `СКРЫТ` in `telegram_username`. Unresolvable numbers are marked `not_resolved`, never `СКРЫТ`.
 - Does not import contacts, send messages, or change Telegram account contact lists.
 
-Telegram rate limits are dynamic. A 5-second minimum interval is a conservative throttle, not a guarantee against FloodWait or account restrictions. The worker obeys FloodWait and never retries the same lookup immediately.
+Telegram rate limits are dynamic. A 5-second minimum interval is a conservative baseline, not a guarantee against FloodWait or account restrictions. FloodWait responses are detected from GramJS error types, nested causes, and server messages; the worker never retries the same lookup immediately.
 
 ## Deployment requirements
 
@@ -74,11 +74,13 @@ This workflow does not require a laptop. Use the official Termux app and keep th
 
 ## GitHub Actions runtime (no separate worker host)
 
-The scheduled workflow checks queue readiness every 10 minutes. A lightweight Supabase precheck avoids installing and building the worker unless a queued job is due or a stale `running` job needs recovery. Each worker run processes up to 20 phone candidates, saves progress, and sets `paused_until` to 60 minutes after the last Telegram lookup request. This cooldown is deliberately conservative: live `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a reported wait of about 58 minutes. The 10-minute checks resume the queue shortly after the cooldown expires. The run timeout is 20 minutes and overlapping runs are not cancelled.
+The scheduled workflow checks queue readiness every 10 minutes. A lightweight Supabase precheck avoids installing and building the worker unless a queued job is due or a stale `running` job needs recovery. Each worker run scans up to 1,000 candidates and makes at most 20 actual Telegram API requests. Stale contacts consume the scan budget but do not consume the API-request budget. Progress is checkpointed, and `paused_until` is set to 60 minutes after the last Telegram lookup request. This cooldown is deliberately conservative: live `contacts.resolvePhone` calls reached a server FloodWait after 20 successful lookups, with a reported wait of about 58 minutes. The 10-minute checks resume the queue shortly after the cooldown expires. The run timeout is 20 minutes; GitHub Actions concurrency prevents overlapping worker runs.
 
 1. In repository Settings → Secrets and variables → Actions, add the four secrets listed above.
 2. Add repository variable `TELEGRAM_RESOLVER_ENABLED=true` only after all four secrets are saved.
-3. Run the workflow manually once from Actions to verify startup, then inspect its logs. The session and service-role key are injected as secrets and must never be echoed.
+3. Run the workflow manually once from Actions to verify startup, then inspect its logs. The session and service-role key are injected as secrets and must never be echoed. Failure issues contain only a redacted notice and run link; raw worker logs remain inside the restricted Actions run.
+
+The resolver persists `flood_wait_count`, `last_flood_wait_seconds`, and `last_flood_wait_at` in `telegram_match_jobs` for operational visibility. Do not manually clear or shorten `paused_until` to force a retry.
 
 The Telegram StringSession is equivalent to a login credential and can access the Telegram account. Prefer a dedicated Telegram account. Never paste the session or service-role key into chat, source files, issues, or commits. The scheduled worker uses the Supabase service-role key only as a protected GitHub Actions secret.
 
