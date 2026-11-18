@@ -8,6 +8,7 @@ SCRIPT="$BOOT_DIR/remote-watchdog.sh"
 WORKER="$HOME/osiris-bridge/worker_v3.py"
 WORKER_PID_FILE="$HOME/osiris-bridge/worker_v3.pid"
 WORKER_HEALTH="$BOOT_DIR/worker-v3.heartbeat"
+WORKER_STATE="$HOME/.config/osiris/bridge-state.json"
 HEARTBEAT="$BOOT_DIR/wifi-heartbeat.sh"
 HEARTBEAT_HEALTH="$HOME/osiris-network-diagnostics/wifi-heartbeat.heartbeat"
 DC_MAIN="$HOME/.npm/_npx/4b4c857f6efdfb61/node_modules/@wonderwhy-er/desktop-commander/dist/index.js"
@@ -95,6 +96,20 @@ except Exception:
     print('UNKNOWN')
 PYDC
 }
+
+worker_active_job(){
+  "$PREFIX/bin/python3" - "$WORKER_STATE" <<'PYJOB'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        state=json.load(f)
+    value=state.get("active_job_id")
+    if isinstance(value, str) and value:
+        print(value)
+except Exception:
+    pass
+PYJOB
+}
 vpn_iface(){
   local d
   for d in /sys/class/net/tun*; do
@@ -125,6 +140,7 @@ VPN_FAILS=0
 API_FAILS=0
 LAST_LX_RESTART=0
 LAST_WORKER_RESTART=0
+LAST_WORKER_DEFER_LOG=0
 LAST_DC_START=0
 LAST_HEARTBEAT_START=0
 while true; do
@@ -188,11 +204,26 @@ while true; do
         health_age=9999
       fi
       if [ "$health_age" -gt 45 ] && [ $((now - LAST_WORKER_RESTART)) -ge 30 ]; then
-        log "Worker heartbeat stale (${health_age}s); restarting PID=$worker_pid"
-        kill -TERM "$worker_pid" 2>/dev/null || true
-        sleep 2
-        LAST_WORKER_RESTART=$now
-        start_worker
+        active_job=$(worker_active_job || true)
+        if [ -n "$active_job" ]; then
+          state_age=$((now - $(stat -c %Y "$WORKER_STATE" 2>/dev/null || echo 0)))
+        else
+          state_age=9999
+        fi
+        # terminal_run permits up to 300s. Do not kill a healthy long-running
+        # command just because it cannot poll while executing; allow 360s total.
+        if [ -n "$active_job" ] && [ "$state_age" -lt 360 ]; then
+          if [ $((now - LAST_WORKER_DEFER_LOG)) -ge 60 ]; then
+            log "Worker API heartbeat stale (${health_age}s) but job $active_job is active (${state_age}s); deferring restart"
+            LAST_WORKER_DEFER_LOG=$now
+          fi
+        else
+          log "Worker heartbeat stale (${health_age}s); active_job=${active_job:-none} state_age=${state_age}s; restarting PID=$worker_pid"
+          kill -TERM "$worker_pid" 2>/dev/null || true
+          sleep 2
+          LAST_WORKER_RESTART=$now
+          start_worker
+        fi
       fi
     fi
   else
