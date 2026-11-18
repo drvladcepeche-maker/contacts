@@ -91,3 +91,18 @@ The status endpoint requires the same registered device token and filters by bot
 gradle_test and gradle_assemble_debug still require typing exactly YES in an interactive Termux terminal because repository build scripts execute code. If no interactive terminal is attached, those tasks are rejected.
 
 The APK installer validates the APK package, checks that the target package is already installed, requires Shizuku to report uid=2000(shell), then runs only pm install -r --user 0. Android PackageManager enforces signing-key compatibility. No uninstall, downgrade, or signature-bypass flags are used.
+
+## Persistent Worker v3 (Android 9 / Termux)
+
+The standalone worker_v3.py is the persistent queue worker used on the Lenovo/Android node. It is deliberately separate from the legacy irbis_worker_v2.py and uses the authenticated termux-bridge Edge Function contract (heartbeat, idempotent claim, complete, and signed artifact URL actions).
+
+Runtime requirements:
+
+- Python 3 in Termux, curl, and the existing device token at ~/.config/osiris/device-token (64 lowercase hexadecimal characters, mode 0600).
+- worker_v3.py is protected by an OS file lock; do not launch a second instance manually.
+- The worker retries transient API transport failures with IPv4/HTTP/1.1 curl fallback. The fallback stores its short-lived request/config files in a mode-0700 temporary directory and does not put the bearer token in process arguments.
+- Repeated failures use bounded exponential backoff with jitter. Claim tokens and the existing completion replay semantics are preserved.
+
+remote-watchdog.sh is the Termux-side supervisor. It tracks VPN-interface availability separately from API reachability: a live TUN interface with a failed API probe increments the API-failure counter and never triggers an LxBox restart. LxBox recovery is considered only after the TUN interface itself is absent for three consecutive checks, with a 180-second restart cooldown. The watchdog can verify local process state and Worker heartbeat freshness, but cannot independently prove that Desktop Commander's hosted Realtime channel is delivering remote tool calls.
+
+Do not run the watchdog manually if its singleton lock is already held. Termux:Boot starts it after Android boot initialization. Reboot recovery must be validated on the physical device; syntax checks alone do not establish reboot resilience.
