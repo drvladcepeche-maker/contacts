@@ -47,6 +47,9 @@ function makeHttpError(status, data) {
 function curlConfigQuote(value) {
   return '"' + String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n") + '"';
 }
+function sanitizePostgresText(value, maxLength) {
+  return String(value ?? "").replace(/\u0000/g, "\uFFFD").slice(0, maxLength);
+}
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
@@ -672,8 +675,8 @@ while (!stopping) {
     if (pending.phase === "result" && pending.result) {
       await request({
         action: "complete", job_id: pending.job.id,
-        output: String(pending.result.output || "").slice(0, MAX_OUTPUT),
-        error_text: String(pending.result.errorText || "").slice(0, 8000),
+        output: sanitizePostgresText(pending.result.output, MAX_OUTPUT),
+        error_text: sanitizePostgresText(pending.result.errorText, 8000),
         exit_code: Number.isInteger(pending.result.exitCode) ? pending.result.exitCode : 1,
       });
       console.log("Finished " + pending.job.id + " with exit code " + pending.result.exitCode);
