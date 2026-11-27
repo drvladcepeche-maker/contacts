@@ -25,4 +25,4 @@ console.log("The raw token was not printed.");
 console.log("\nCopy ONLY this hash into Supabase SQL Editor:");
 console.log(tokenHash);
 console.log("\nThen run this SQL, replacing HASH_VALUE with the hash above:");
-console.log("insert into public.termux_bridge_devices (label, token_hash, enabled) values ('${sqlLabel}', 'HASH_VALUE', true);");
+console.log(`insert into public.termux_bridge_devices (label, token_hash, enabled) values ('${sqlLabel}', 'HASH_VALUE', true);`);
