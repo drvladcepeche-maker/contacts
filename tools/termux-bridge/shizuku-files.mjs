@@ -56,10 +56,16 @@ export class ShizukuFiles {
       if (executable !== "rish") executable = "rish";
     }
     const identity = await run(executable, ["-c", "id"], 15000);
-    if (identity.exitCode !== 0 || !/uid=2000\(shell\)/.test(identity.output)) {
-      throw new Error("Shizuku is not authorized. Expected rish to run as Android shell uid=2000.");
+    const identityText = [identity.output, identity.errorText].filter(Boolean).join("\\n").trim();
+    if (identity.exitCode !== 0 || !/uid=2000\\(shell\\)/.test(identityText)) {
+      throw new Error("Shizuku is not authorized. Expected rish to run as Android shell uid=2000. " + identityText.slice(0, 1000));
     }
-    return await run(executable, ["-c", command], timeout);
+    const result = await run(executable, ["-c", command], timeout);
+    return {
+      ...result,
+      output: [result.output, result.errorText].filter(Boolean).join("\\n").trim(),
+      errorText: "",
+    };
   }
 
   async list({ path }) {
