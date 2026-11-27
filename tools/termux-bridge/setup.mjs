@@ -6,7 +6,7 @@ import { join } from "node:path";
 const dir = join(homedir(), ".config", "termux-bridge");
 const tokenPath = join(dir, "device-token");
 const label = process.argv.slice(2).join(" ").trim() || "Android Termux";
-if (label.length > 80 || /[\\r\\n\\0]/.test(label)) {
+if (label.length > 80 || /[\r\n\0]/.test(label)) {
   console.error("Device label must be 1–80 characters without line breaks.");
   process.exit(2);
 }
