@@ -21,8 +21,9 @@ const POLL_MS = Math.max(3000, Number(process.env.POLL_MS) || 5000);
 const MAX_OUTPUT = 30000;
 let stopping = false;
 const terminal = new TerminalSessions({ workspace: WORKSPACE });
-const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: process.env.RISH_BIN || resolve(WORKSPACE, "rish") });
-const androidControl = new AndroidControl({ rishBin: process.env.RISH_BIN || resolve(process.env.PREFIX || "/data/data/com.termux/files/usr", "bin/rish") });
+const RISH_BIN = process.env.RISH_BIN || resolve(process.env.PREFIX || "/data/data/com.termux/files/usr", "bin/rish");
+const shizukuFiles = new ShizukuFiles({ workspace: WORKSPACE, rishBin: RISH_BIN });
+const androidControl = new AndroidControl({ rishBin: RISH_BIN });
 
 const token = (await readFile(TOKEN_PATH, "utf8")).trim();
 if (!/^[a-f0-9]{64}$/.test(token)) {
