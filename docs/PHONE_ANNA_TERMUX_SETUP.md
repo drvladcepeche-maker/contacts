@@ -9,15 +9,21 @@ This profile uses the repository's existing Node.js Termux Worker and the existi
 - Independent random 256-bit bearer token stored locally at `~/.config/termux-bridge/device-token`
 - Device ID is assigned by Supabase and is resolved dynamically from the token; no Xiaomi device ID is copied.
 
-## Termux prerequisites
+## Termux prerequisites and automated bootstrap
 
-Run in Termux:
+1. Start Shizuku using Wireless debugging and confirm the Shizuku app says its service is running.
+2. In Shizuku, open **Use Shizuku in terminal apps** → **Export files**. Save both `rish` and `rish_shizuku.dex` together under shared storage, preferably Downloads.
+3. In Termux, run:
 
 ```sh
-pkg update
-pkg install nodejs git curl
-termux-setup-storage
+pkg install -y git
+git clone --single-branch --branch feature/osiris-phone-anna https://github.com/drvladcepeche-maker/contacts.git "$HOME/contacts"
+bash "$HOME/contacts/tools/termux-bridge/bootstrap-phone-anna.sh"
 ```
+
+The bootstrap installs prebuilt `nodejs-lts`, `git`, and `curl` Termux packages, locates the two exported Shizuku files, installs them under `$PREFIX/bin`, sets `RISH_APPLICATION_ID=com.termux`, verifies the Shizuku shell identity, and checks out this device profile. It does not create a device token or register anything in Supabase.
+
+If the bootstrap reports that Shizuku is not authorized, grant Termux access in Shizuku and rerun the bootstrap. If it cannot find the files, repeat the Shizuku export and choose a shared-storage folder.
 
 The device must have Node.js 20+ (Node.js 24 is preferred). No C/C++ build is part of this profile.
 
