@@ -184,32 +184,31 @@ export class AndroidControl {
     const path = "/sdcard/osiris-bridge-window-" + randomUUID() + ".xml";
     const command = "tmp='" + path + "'; " +
       "uiautomator dump \"$tmp\" >/dev/null 2>&1; rc=$?; " +
-      "bytes=0; nodes=0; " +
+      "ok=0; bytes=0; nodes=0; " +
       "if [ \"$rc\" -eq 0 ] && [ -s \"$tmp\" ]; then " +
-      "bytes=$(wc -c < \"$tmp\" | tr -d '[:space:]'); " +
+      "ok=1; bytes=$(wc -c < \"$tmp\" | tr -d '[:space:]'); " +
       "nodes=$(grep -o '<node ' \"$tmp\" 2>/dev/null | wc -l | tr -d '[:space:]'); " +
       "fi; " +
       "rm -f -- \"$tmp\" >/dev/null 2>&1; cleanup=$?; " +
       "printf 'snapshot_ok=%s\\nxml_bytes=%s\\nnode_count=%s\\ncleanup_ok=%s\\n' " +
-      "\"$([ \"$rc\" -eq 0 ] && [ -s \"$tmp\" ] && echo 1 || [ \"$rc\" -eq 0 ] && echo 1 || echo 0)\" " +
-      "\"$bytes\" \"$nodes\" \"$([ \"$cleanup\" -eq 0 ] && echo 1 || echo 0)\"; " +
+      "\"$ok\" \"$bytes\" \"$nodes\" \"$([ \"$cleanup\" -eq 0 ] && echo 1 || echo 0)\"; " +
       "if [ \"$rc\" -ne 0 ]; then exit \"$rc\"; fi; " +
       "exit \"$cleanup\"";
     const result = await this.command(command, 45000);
     const metrics = Object.fromEntries(
-      String(result.output || "").split(/\\r?\\n/)
+      String(result.output || "").split(/\r?\n/)
         .map(line => line.split("="))
         .filter(parts => parts.length === 2)
         .map(([key, value]) => [key, value])
     );
     const ok = result.exitCode === 0 && metrics.snapshot_ok === "1" &&
-      metrics.cleanup_ok === "1" && /^\\d+$/.test(metrics.xml_bytes || "") &&
-      /^\\d+$/.test(metrics.node_count || "");
+      metrics.cleanup_ok === "1" && /^\d+$/.test(metrics.xml_bytes || "") &&
+      /^\d+$/.test(metrics.node_count || "");
     return {
       exitCode: ok ? 0 : (result.exitCode || 1),
       output: ok
-        ? "snapshot_ok=1\\nxml_bytes=" + metrics.xml_bytes + "\\nnode_count=" + metrics.node_count + "\\ncleanup_ok=1\\nui_content=not_exported"
-        : "snapshot_ok=0\\ncleanup_ok=" + (metrics.cleanup_ok || "unknown") + "\\nui_content=not_exported",
+        ? "snapshot_ok=1\nxml_bytes=" + metrics.xml_bytes + "\nnode_count=" + metrics.node_count + "\ncleanup_ok=1\nui_content=not_exported"
+        : "snapshot_ok=0\ncleanup_ok=" + (metrics.cleanup_ok || "unknown") + "\nui_content=not_exported",
       errorText: ok ? "" : "UI snapshot metadata collection failed; raw UI content was not returned.",
       source: "uiautomator metadata only; XML content discarded locally",
     };
