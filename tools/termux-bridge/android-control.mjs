@@ -181,7 +181,7 @@ export class AndroidControl {
   async uiSnapshot() {
     // Never return or persist UI XML: it can contain private messages, account
     // names, notifications, and other on-screen content. Collect only counts.
-    const path = "/sdcard/osiris-bridge-window-" + randomUUID() + ".xml";
+    const path = "/data/local/tmp/osiris-bridge-window-" + randomUUID() + ".xml";
     const command = "tmp='" + path + "'; " +
       "uiautomator dump \"$tmp\" >/dev/null 2>&1; rc=$?; " +
       "ok=0; bytes=0; nodes=0; " +
