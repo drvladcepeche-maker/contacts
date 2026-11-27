@@ -40,7 +40,7 @@ while IFS= read -r candidate; do
     RISH_SOURCE="$dir"
     break
   fi
-done < <(find "$HOME/storage/shared" -maxdepth 6 -type f -name rish -print 2>/dev/null)
+done < <(find -L "$HOME/storage/shared" -maxdepth 6 -type f -name rish -print 2>/dev/null)
 
 if [ -z "$RISH_SOURCE" ]; then
   echo "ERROR: rish and rish_shizuku.dex were not found."
