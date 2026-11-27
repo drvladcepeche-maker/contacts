@@ -93,11 +93,9 @@ Shizuku is not root. Protected system dialogs, biometric checks, locked-device r
 
 ## Supabase migration
 
-Before queueing Android control jobs, apply:
+The production project `xevqbgjtxuveeqaiacvm` was inspected on 2026-11-27. Its existing `termux_bridge_jobs` constraint already includes the Android control types used by this profile, as well as the existing Worker 3/Linux command types. No production schema change is required to add this device.
 
-`supabase/migrations/20261127100000_expand_termux_bridge_android_control.sql`
-
-This expands the existing command-type CHECK constraint to include the Android control types implemented by the worker. It does not alter existing device records or queue contents.
+`supabase/migrations/20261127100000_expand_termux_bridge_android_control.sql` keeps the full current command allowlist represented in source control for a clean environment. It preserves the Worker 3/Linux command types. Do not apply it manually to the current production project unless its schema is first rechecked.
 
 ## No-runner policy
 
