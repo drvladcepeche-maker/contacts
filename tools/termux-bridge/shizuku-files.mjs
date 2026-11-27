@@ -21,7 +21,11 @@ function approvedPath(value) {
 
 function run(program, args, timeoutMs = 30000) {
   return new Promise(resolveRun => {
-    const child = spawn(program, args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(program, args, {
+      shell: false,
+      env: { ...process.env, RISH_APPLICATION_ID: process.env.RISH_APPLICATION_ID || "com.termux" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "", stderr = "", settled = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-MAX_OUTPUT); });
